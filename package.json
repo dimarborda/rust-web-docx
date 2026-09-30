@@ -1,0 +1,17 @@
+{
+  "name": "rust-web-docx",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "npx -y wasm-pack build --target web --out-dir pkg",
+    "dev": "vite",
+    "build": "npx -y wasm-pack build --target web --out-dir pkg && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.2.0",
+    "vite-plugin-wasm": "^3.4.1",
+    "vite-plugin-top-level-await": "^1.4.4"
+  }
+}
