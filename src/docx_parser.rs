@@ -1,3 +1,8 @@
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+use quick_xml::events::{BytesStart, BytesText, Event};
+use quick_xml::reader::Reader;
+use quick_xml::writer::Writer;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -5,13 +10,144 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+use crate::paragraph_edit::{
+    body_paragraph_ranges, edit_paragraph, parse_paragraph_fragment, table_cell_paragraph_ranges,
+    FormatTarget,
+};
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct BorderInfo {
+    pub val: String,   // "single", "dashed", etc.
+    pub color: String, // hex without '#' e.g. "1F6F6B"
+    pub sz_px: f64,    // border width converted to px
+    pub space: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ParagraphBorders {
+    pub top: Option<BorderInfo>,
+    pub bottom: Option<BorderInfo>,
+    pub left: Option<BorderInfo>,
+    pub right: Option<BorderInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct RunInfo {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub color: String,
+    pub font_size: Option<f64>,
+    pub font_family: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ParagraphInfo {
     pub index: usize,
     pub text: String,
     pub style: String,
     pub is_heading: bool,
     pub run_count: usize,
+    pub align: String, // "left", "center", "right", "both"
+    pub color: String, // hex without '#' e.g. "1E3A8A" or empty
+    pub bold: bool,
+    pub italic: bool,
+    pub font_size: Option<f64>,
+    pub font_family: Option<String>,
+    pub indent_left: f64,
+    pub indent_first_line: f64,
+    pub indent_right: f64,
+    pub space_before: f64,
+    pub space_after: f64,
+    pub line_spacing: Option<f64>,
+    pub borders: ParagraphBorders,
+    #[serde(default)]
+    pub runs: Vec<RunInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TableCellInfo {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TableCellData {
+    pub text: String,
+    pub bg_color: Option<String>,
+    pub color: String,
+    pub align: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub font_size: f64,
+    pub font_family: String,
+    pub border_color: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TableRowData {
+    pub cells: Vec<TableCellData>,
+    pub is_header: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TableInfo {
+    pub index: usize,
+    pub rows: Vec<Vec<String>>,
+    #[serde(default)]
+    pub rich_rows: Vec<TableRowData>,
+    #[serde(default)]
+    pub grid_cols: Vec<f64>,
+    pub header_row: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PageSetup {
+    pub width: f64,
+    pub height: f64,
+    pub orientation: String, // "portrait" or "landscape"
+    pub margin_top: f64,
+    pub margin_right: f64,
+    pub margin_bottom: f64,
+    pub margin_left: f64,
+    pub header_margin: f64,
+    pub footer_margin: f64,
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        PageSetup {
+            width: 800.0,
+            height: 1130.0,
+            orientation: "portrait".to_string(),
+            margin_top: 70.0,
+            margin_right: 65.0,
+            margin_bottom: 70.0,
+            margin_left: 65.0,
+            header_margin: 36.0,
+            footer_margin: 36.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct HeaderFooterInfo {
+    pub header_text: String,
+    pub footer_text: String,
+    pub has_header: bool,
+    pub has_footer: bool,
+    pub header_image_data_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type")]
+pub enum DocumentElement {
+    #[serde(rename = "paragraph")]
+    Paragraph(ParagraphInfo),
+    #[serde(rename = "table")]
+    Table(TableInfo),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -29,10 +165,16 @@ pub struct KeyValuePair {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocxStats {
     pub paragraph_count: usize,
+    pub table_count: usize,
     pub word_count: usize,
     pub char_count: usize,
     pub files_in_zip: Vec<String>,
     pub original_size_bytes: usize,
+    pub background_color: String,
+    pub has_background_image: bool,
+    pub page_setup: PageSetup,
+    pub header_footer: HeaderFooterInfo,
+    pub bg_image_data_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -42,10 +184,21 @@ pub struct ReplaceResult {
     pub message: String,
 }
 
+/// One paragraph edit: new text, optional per-character formatting and alignment
+struct ParagraphEdit<'a> {
+    index: usize,
+    text: &'a str,
+    formats: Option<Vec<FormatTarget>>,
+    align: Option<&'a str>,
+}
+
 pub struct DocxModifier {
     files: HashMap<String, Vec<u8>>,
     original_order: Vec<String>,
     original_size: usize,
+    background_color: String,
+    background_image: Option<Vec<u8>>,
+    background_image_ext: String,
 }
 
 impl DocxModifier {
@@ -81,33 +234,86 @@ impl DocxModifier {
             return Err("El archivo no es un documento DOCX válido (falta 'word/document.xml').".to_string());
         }
 
+        // Extract background color if present
+        let mut bg_color = "FFFFFF".to_string();
+        if let Some(doc_bytes) = files.get("word/document.xml") {
+            if let Ok(doc_str) = String::from_utf8(doc_bytes.clone()) {
+                bg_color = extract_bg_color_quick_xml(&doc_str);
+            }
+        }
+
+        // Custom background image set dynamically via API (None by default; DOCX embedded images are resolved via relationships)
+        let bg_image = None;
+        let bg_image_ext = "png".to_string();
+
         Ok(DocxModifier {
             files,
             original_order,
             original_size,
+            background_color: bg_color,
+            background_image: bg_image,
+            background_image_ext: bg_image_ext,
         })
+    }
+
+    /// Extracts list of document elements (paragraphs and tables) in sequential order
+    pub fn extract_elements(&self) -> Result<Vec<DocumentElement>, String> {
+        let doc_xml = self.get_file_string("word/document.xml")?;
+        let elements = parse_document_elements(&doc_xml);
+        Ok(elements)
     }
 
     /// Extracts list of paragraphs from word/document.xml
     pub fn extract_paragraphs(&self) -> Result<Vec<ParagraphInfo>, String> {
-        let doc_xml = self.get_file_string("word/document.xml")?;
-        let paragraphs = parse_paragraphs_from_xml(&doc_xml);
+        let elements = self.extract_elements()?;
+        let mut paragraphs = Vec::new();
+        for el in elements {
+            if let DocumentElement::Paragraph(p) = el {
+                paragraphs.push(p);
+            }
+        }
         Ok(paragraphs)
     }
 
-    /// Extracts full consolidated plain text from the document
-    pub fn extract_raw_text(&self) -> Result<String, String> {
-        let paragraphs = self.extract_paragraphs()?;
-        let full_text = paragraphs
-            .into_iter()
-            .map(|p| p.text)
-            .filter(|t| !t.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        Ok(full_text)
+    /// Extracts tables from word/document.xml
+    pub fn extract_tables(&self) -> Result<Vec<TableInfo>, String> {
+        let elements = self.extract_elements()?;
+        let mut tables = Vec::new();
+        for el in elements {
+            if let DocumentElement::Table(t) = el {
+                tables.push(t);
+            }
+        }
+        Ok(tables)
     }
 
-    /// Finds and replaces text across word/document.xml, headers, and footers
+    /// Extracts full consolidated plain text from the document (including tables)
+    pub fn extract_raw_text(&self) -> Result<String, String> {
+        let elements = self.extract_elements()?;
+        let mut text_parts = Vec::new();
+
+        for el in elements {
+            match el {
+                DocumentElement::Paragraph(p) => {
+                    if !p.text.trim().is_empty() {
+                        text_parts.push(p.text);
+                    }
+                }
+                DocumentElement::Table(t) => {
+                    for row in t.rows {
+                        let row_str = row.join(" | ");
+                        if !row_str.trim().is_empty() {
+                            text_parts.push(row_str);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(text_parts.join("\n\n"))
+    }
+
+    /// Finds and replaces text across word/document.xml, headers, footers and notes
     pub fn find_and_replace(
         &mut self,
         search: &str,
@@ -119,38 +325,8 @@ impl DocxModifier {
             return Err("El término de búsqueda no puede estar vacío.".to_string());
         }
 
-        let target_files: Vec<String> = self
-            .files
-            .keys()
-            .filter(|name| {
-                name.starts_with("word/")
-                    && (name.ends_with(".xml") || name.ends_with(".rels"))
-            })
-            .cloned()
-            .collect();
-
-        let mut total_replacements = 0;
-        let mut affected_files = Vec::new();
-
-        for filename in target_files {
-            if let Some(content_bytes) = self.files.get(&filename) {
-                if let Ok(xml_str) = String::from_utf8(content_bytes.clone()) {
-                    let (new_xml, count) = replace_in_docx_xml(
-                        &xml_str,
-                        search,
-                        replacement,
-                        match_case,
-                        use_regex,
-                    )?;
-
-                    if count > 0 {
-                        total_replacements += count;
-                        affected_files.push(filename.clone());
-                        self.files.insert(filename, new_xml.into_bytes());
-                    }
-                }
-            }
-        }
+        let rule = ReplaceRule::new(search, replacement, match_case, use_regex)?;
+        let (total_replacements, affected_files) = self.apply_replace_rules(&[rule])?;
 
         Ok(ReplaceResult {
             occurrences_replaced: total_replacements,
@@ -162,22 +338,14 @@ impl DocxModifier {
         })
     }
 
-    /// Replaces multiple key-value pairs (template variables)
+    /// Replaces multiple key-value pairs (template variables) in a single pass per file
     pub fn batch_replace(&mut self, pairs: &[KeyValuePair]) -> Result<ReplaceResult, String> {
-        let mut total_replacements = 0;
-        let mut affected = Vec::new();
-
-        for pair in pairs {
-            if !pair.key.trim().is_empty() {
-                let res = self.find_and_replace(&pair.key, &pair.value, true, false)?;
-                total_replacements += res.occurrences_replaced;
-                for f in res.affected_files {
-                    if !affected.contains(&f) {
-                        affected.push(f);
-                    }
-                }
-            }
-        }
+        let rules = pairs
+            .iter()
+            .filter(|pair| !pair.key.trim().is_empty())
+            .map(|pair| ReplaceRule::new(&pair.key, &pair.value, true, false))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (total_replacements, affected) = self.apply_replace_rules(&rules)?;
 
         Ok(ReplaceResult {
             occurrences_replaced: total_replacements,
@@ -189,36 +357,349 @@ impl DocxModifier {
         })
     }
 
-    /// Updates individual paragraphs in word/document.xml by index
+    /// Applies replace rules to every XML part under word/, returning (count, affected files)
+    fn apply_replace_rules(&mut self, rules: &[ReplaceRule]) -> Result<(usize, Vec<String>), String> {
+        let mut target_files: Vec<String> = self
+            .files
+            .keys()
+            .filter(|name| name.starts_with("word/") && name.ends_with(".xml"))
+            .cloned()
+            .collect();
+        target_files.sort();
+
+        let mut total_replacements = 0;
+        let mut affected_files = Vec::new();
+
+        for filename in target_files {
+            let Ok(xml_str) = self.get_file_string(&filename) else { continue };
+            let (new_xml, count) = replace_in_docx_xml(&xml_str, rules)?;
+            if count > 0 {
+                total_replacements += count;
+                affected_files.push(filename.clone());
+                self.files.insert(filename, new_xml.into_bytes());
+            }
+        }
+
+        Ok((total_replacements, affected_files))
+    }
+
+    /// Updates paragraph texts in word/document.xml by index, keeping their formatting
     pub fn update_paragraphs(&mut self, updates: &[ParagraphUpdate]) -> Result<usize, String> {
+        let edits: Vec<ParagraphEdit> = updates
+            .iter()
+            .map(|u| ParagraphEdit { index: u.index, text: &u.text, formats: None, align: None })
+            .collect();
+        self.edit_body_paragraphs(&edits)
+    }
+
+    /// Updates paragraph with individual styled text runs (bold, italic, color, underline per word/segment)
+    pub fn update_paragraph_runs(
+        &mut self,
+        index: usize,
+        runs: &[RunInfo],
+        align: Option<&str>,
+    ) -> Result<bool, String> {
+        let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+        let formats: Vec<FormatTarget> = runs
+            .iter()
+            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .collect();
+        self.edit_body_paragraphs(&[ParagraphEdit { index, text: &text, formats: Some(formats), align }])?;
+        Ok(true)
+    }
+
+    /// Updates paragraph formatting (alignment, color, bold, italic) and text
+    pub fn update_paragraph_rich(
+        &mut self,
+        index: usize,
+        text: &str,
+        align: &str,
+        color: &str,
+        bold: bool,
+        italic: bool,
+    ) -> Result<bool, String> {
+        let format = FormatTarget {
+            bold: Some(bold),
+            italic: Some(italic),
+            color: Some(color.to_string()),
+            ..Default::default()
+        };
+        let formats = vec![format; text.chars().count()];
+        self.edit_body_paragraphs(&[ParagraphEdit { index, text, formats: Some(formats), align: Some(align) }])?;
+        Ok(true)
+    }
+
+    /// Applies minimal edits to body paragraphs, preserving everything the editor doesn't model
+    fn edit_body_paragraphs(&mut self, edits: &[ParagraphEdit]) -> Result<usize, String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let ranges = body_paragraph_ranges(&xml)?;
+
+        // Splice from the end so earlier byte ranges stay valid
+        let mut ordered: Vec<&ParagraphEdit> = edits.iter().collect();
+        ordered.sort_by(|a, b| b.index.cmp(&a.index));
+        for edit in &ordered {
+            let range = ranges
+                .get(edit.index)
+                .cloned()
+                .ok_or_else(|| format!("No existe el párrafo {}.", edit.index))?;
+            let edited = edit_paragraph(&xml[range.clone()], edit.text, edit.formats.as_deref(), edit.align)?;
+            xml.replace_range(range, &edited);
+        }
+
+        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        Ok(ordered.len())
+    }
+
+    /// Updates a table cell's text, keeping its paragraphs' properties and run formatting.
+    /// Paragraph boundaries outside the edited region survive; new line breaks become `<w:br/>`.
+    pub fn update_table_cell(
+        &mut self,
+        table_index: usize,
+        row: usize,
+        col: usize,
+        new_text: &str,
+    ) -> Result<bool, String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let ranges = table_cell_paragraph_ranges(&xml, table_index, row, col)?;
+        let old_lens: Vec<usize> = ranges
+            .iter()
+            .map(|r| parse_paragraph_fragment(&xml[r.clone()]).text.chars().count())
+            .collect();
+        let old: Vec<char> = ranges
+            .iter()
+            .map(|r| parse_paragraph_fragment(&xml[r.clone()]).text)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .chars()
+            .collect();
+        let new: Vec<char> = new_text.chars().collect();
+
+        let mut prefix = 0;
+        while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+            prefix += 1;
+        }
+        let mut suffix = 0;
+        while suffix < old.len() - prefix
+            && suffix < new.len() - prefix
+            && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+        {
+            suffix += 1;
+        }
+
+        // (paragraph, start of its text in the new cell text)
+        let mut kept: Vec<(usize, usize)> = vec![(0, 0)];
+        let mut boundary = 0;
+        for p in 1..ranges.len() {
+            boundary += old_lens[p - 1];
+            if boundary < prefix {
+                kept.push((p, boundary + 1));
+            } else if boundary >= old.len() - suffix {
+                kept.push((p, boundary + 1 + new.len() - old.len()));
+            }
+            boundary += 1;
+        }
+
+        let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+        for (k, &(p, start)) in kept.iter().enumerate() {
+            let end = kept.get(k + 1).map(|&(_, s)| s - 1).unwrap_or(new.len());
+            let slice: String = new[start..end].iter().collect();
+            edits.push((ranges[p].clone(), edit_paragraph(&xml[ranges[p].clone()], &slice, None, None)?));
+        }
+        // Paragraphs whose boundary fell inside the edited region are merged into the previous one
+        for (p, range) in ranges.iter().enumerate() {
+            if !kept.iter().any(|&(kp, _)| kp == p) {
+                edits.push((range.clone(), String::new()));
+            }
+        }
+
+        edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+        for (range, replacement) in edits {
+            xml.replace_range(range, &replacement);
+        }
+        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        Ok(true)
+    }
+
+    /// Appends a new table to the document
+    pub fn add_table(&mut self, rows: usize, cols: usize, headers: &[String]) -> Result<bool, String> {
         let doc_xml = self.get_file_string("word/document.xml")?;
-        let (new_xml, updated_count) = update_paragraphs_in_xml(&doc_xml, updates)?;
+        let new_xml = insert_table_into_xml(&doc_xml, rows, cols, headers)?;
         self.files.insert("word/document.xml".to_string(), new_xml.into_bytes());
-        Ok(updated_count)
+        Ok(true)
+    }
+
+    /// Sets page background color (HEX)
+    pub fn set_background_color(&mut self, hex_color: &str) -> Result<(), String> {
+        let clean_hex = hex_color.trim_start_matches('#').to_uppercase();
+        self.background_color = clean_hex.clone();
+
+        let doc_xml = self.get_file_string("word/document.xml")?;
+        let new_xml = set_bg_color_in_xml(&doc_xml, &clean_hex);
+        self.files.insert("word/document.xml".to_string(), new_xml.into_bytes());
+        Ok(())
+    }
+
+    /// Sets background/watermark image bytes
+    pub fn set_background_image(&mut self, image_bytes: Vec<u8>, ext: &str) -> Result<(), String> {
+        let clean_ext = if ext.contains("jpg") || ext.contains("jpeg") { "jpeg" } else { "png" };
+        let image_filename = format!("word/media/background.{}", clean_ext);
+        
+        self.files.insert(image_filename.clone(), image_bytes);
+        if !self.original_order.contains(&image_filename) {
+            self.original_order.push(image_filename.clone());
+        }
+
+        self.background_image_ext = clean_ext.to_string();
+
+        // Update [Content_Types].xml if needed
+        if let Ok(mut types_xml) = self.get_file_string("[Content_Types].xml") {
+            let ext_tag = format!("Extension=\"{}\"", clean_ext);
+            if !types_xml.contains(&ext_tag) {
+                let mime = if clean_ext == "png" { "image/png" } else { "image/jpeg" };
+                let default_tag = format!("<Default Extension=\"{}\" ContentType=\"{}\"/>", clean_ext, mime);
+                if let Some(pos) = types_xml.find("</Types>") {
+                    types_xml.insert_str(pos, &default_tag);
+                    self.files.insert("[Content_Types].xml".to_string(), types_xml.into_bytes());
+                }
+            }
+        }
+
+        // Update word/_rels/document.xml.rels
+        let rels_path = "word/_rels/document.xml.rels";
+        let mut rels_xml = self.get_file_string(rels_path).unwrap_or_else(|_| {
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.to_string()
+        });
+
+        if !rels_xml.contains("media/background") {
+            let rel_id = "rIdBgImage";
+            let rel_entry = format!(
+                r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/background.{}"/>"#,
+                rel_id, clean_ext
+            );
+            if let Some(pos) = rels_xml.find("</Relationships>") {
+                rels_xml.insert_str(pos, &rel_entry);
+                self.files.insert(rels_path.to_string(), rels_xml.into_bytes());
+                if !self.original_order.contains(&rels_path.to_string()) {
+                    self.original_order.push(rels_path.to_string());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Retrieves document statistics
     pub fn get_statistics(&self) -> Result<DocxStats, String> {
-        let paragraphs = self.extract_paragraphs()?;
-        let paragraph_count = paragraphs.len();
-
+        let elements = self.extract_elements()?;
+        let mut paragraph_count = 0;
+        let mut table_count = 0;
         let mut word_count = 0;
         let mut char_count = 0;
 
-        for p in &paragraphs {
-            char_count += p.text.chars().count();
-            word_count += p.text.split_whitespace().count();
+        for el in elements {
+            match el {
+                DocumentElement::Paragraph(p) => {
+                    paragraph_count += 1;
+                    char_count += p.text.chars().count();
+                    word_count += p.text.split_whitespace().count();
+                }
+                DocumentElement::Table(t) => {
+                    table_count += 1;
+                    for row in t.rows {
+                        for cell in row {
+                            char_count += cell.chars().count();
+                            word_count += cell.split_whitespace().count();
+                        }
+                    }
+                }
+            }
         }
 
         let files_in_zip = self.original_order.clone();
+        let page_setup = self.get_page_setup();
+        let header_footer = self.get_header_footer();
+        let bg_image_data_url = self.get_bg_image_data_url();
 
         Ok(DocxStats {
             paragraph_count,
+            table_count,
             word_count,
             char_count,
             files_in_zip,
             original_size_bytes: self.original_size,
+            background_color: self.background_color.clone(),
+            has_background_image: self.background_image.is_some() || bg_image_data_url.is_some(),
+            page_setup,
+            header_footer,
+            bg_image_data_url,
         })
+    }
+
+    /// Gets parsed page setup (dimensions, margins, orientation) from word/document.xml
+    pub fn get_page_setup(&self) -> PageSetup {
+        if let Some(bytes) = self.files.get("word/document.xml") {
+            if let Ok(xml) = String::from_utf8(bytes.clone()) {
+                return extract_page_setup_quick_xml(&xml);
+            }
+        }
+        PageSetup::default()
+    }
+
+    /// Gets header and footer info (text, images) from header/footer XML files
+    pub fn get_header_footer(&self) -> HeaderFooterInfo {
+        extract_header_footer_quick_xml(&self.files)
+    }
+
+    /// Gets data URL for background image ONLY if referenced in word/document.xml or set explicitly
+    pub fn get_bg_image_data_url(&self) -> Option<String> {
+        // 1. If explicitly set via UI/API
+        if let Some(bytes) = &self.background_image {
+            let mime = if self.background_image_ext == "jpeg" || self.background_image_ext == "jpg" {
+                "image/jpeg"
+            } else {
+                "image/png"
+            };
+            return Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes)));
+        }
+
+        // 2. Check if word/document.xml has a drawing or background referencing an image in word/_rels/document.xml.rels
+        if let Some(doc_bytes) = self.files.get("word/document.xml") {
+            if let Ok(doc_xml) = String::from_utf8(doc_bytes.clone()) {
+                if let Some(rel_bytes) = self.files.get("word/_rels/document.xml.rels") {
+                    if let Ok(rel_xml) = String::from_utf8(rel_bytes.clone()) {
+                        let rels = parse_relationships_map(&rel_xml);
+                        let embed_ids = extract_drawing_embed_ids(&doc_xml);
+                        for eid in embed_ids {
+                            if let Some(target) = rels.get(&eid) {
+                                let clean_target = target.trim_start_matches("../").trim_start_matches('/');
+                                let img_path = if clean_target.starts_with("media/") {
+                                    format!("word/{}", clean_target)
+                                } else if clean_target.starts_with("word/") {
+                                    clean_target.to_string()
+                                } else {
+                                    format!("word/media/{}", clean_target)
+                                };
+
+                                if let Some(img_bytes) = self.files.get(&img_path) {
+                                    let mime = if img_path.ends_with(".jpg") || img_path.ends_with(".jpeg") {
+                                        "image/jpeg"
+                                    } else if img_path.ends_with(".png") {
+                                        "image/png"
+                                    } else if img_path.ends_with(".svg") {
+                                        "image/svg+xml"
+                                    } else {
+                                        "image/png"
+                                    };
+                                    return Some(format!("data:{};base64,{}", mime, BASE64.encode(img_bytes)));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Exports modified DOCX as bytes
@@ -254,7 +735,7 @@ impl DocxModifier {
         Ok(buffer.into_inner())
     }
 
-    fn get_file_string(&self, path: &str) -> Result<String, String> {
+    pub fn get_file_string(&self, path: &str) -> Result<String, String> {
         match self.files.get(path) {
             Some(bytes) => String::from_utf8(bytes.clone())
                 .map_err(|e| format!("El archivo '{}' no contiene UTF-8 válido: {}", path, e)),
@@ -263,341 +744,1190 @@ impl DocxModifier {
     }
 }
 
-// ---------------- Helper XML Functions ----------------
+// ---------------- Helper XML Functions using quick-xml ----------------
 
-/// Parses `<w:p>...</w:p>` blocks from document XML
-fn parse_paragraphs_from_xml(xml: &str) -> Vec<ParagraphInfo> {
-    let mut paragraphs = Vec::new();
-    let mut search_idx = 0;
-    let mut p_index = 0;
+pub fn parse_relationships_map(xml: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
 
-    while let Some(start_p) = xml[search_idx..].find("<w:p") {
-        let p_offset = search_idx + start_p;
-        // Find closing tag </w:p>
-        if let Some(end_p_rel) = xml[p_offset..].find("</w:p>") {
-            let p_end = p_offset + end_p_rel + 6;
-            let p_content = &xml[p_offset..p_end];
-
-            // Extract style
-            let style = extract_paragraph_style(p_content);
-            let is_heading = style.to_lowercase().contains("heading")
-                || style.to_lowercase().contains("title")
-                || style.to_lowercase().contains("encabezado")
-                || style.to_lowercase().contains("título");
-
-            // Extract consolidated text and count runs
-            let (text, run_count) = extract_text_and_runs_from_p(p_content);
-
-            paragraphs.push(ParagraphInfo {
-                index: p_index,
-                text,
-                style,
-                is_heading,
-                run_count,
-            });
-
-            p_index += 1;
-            search_idx = p_end;
-        } else {
-            break;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "Relationship") {
+                    let id_opt = get_attr_value(e, "Id");
+                    let target_opt = get_attr_value(e, "Target");
+                    if let (Some(id), Some(target)) = (id_opt, target_opt) {
+                        map.insert(id, target);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
         }
+        buf.clear();
     }
 
-    paragraphs
+    map
 }
 
-fn extract_paragraph_style(p_content: &str) -> String {
-    if let Some(style_tag_pos) = p_content.find("<w:pStyle ") {
-        let tag_slice = &p_content[style_tag_pos..];
-        if let Some(val_pos) = tag_slice.find("w:val=\"") {
-            let val_start = val_pos + 7;
-            if let Some(val_end) = tag_slice[val_start..].find('"') {
-                return tag_slice[val_start..val_start + val_end].to_string();
+pub fn extract_drawing_embed_ids(xml: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "blip") || tag_is(name.as_ref(), "imagedata") {
+                    if let Some(embed_id) = get_attr_value(e, "embed").or_else(|| get_attr_value(e, "id")) {
+                        ids.push(embed_id);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    ids
+}
+
+pub fn extract_page_setup_quick_xml(xml: &str) -> PageSetup {
+    let mut setup = PageSetup::default();
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "pgSz") {
+                    let w_opt = get_attr_i64(e, "w");
+                    let h_opt = get_attr_i64(e, "h");
+                    let orient_opt = get_attr_value(e, "orient");
+
+                    if let Some(orient) = orient_opt {
+                        setup.orientation = orient;
+                    }
+
+                    if let (Some(w), Some(h)) = (w_opt, h_opt) {
+                        let w_px = (w as f64) / 15.0;
+                        let h_px = (h as f64) / 15.0;
+
+                        if setup.orientation == "landscape" {
+                            setup.width = w_px.max(h_px);
+                            setup.height = w_px.min(h_px);
+                        } else {
+                            setup.width = w_px.min(h_px);
+                            setup.height = w_px.max(h_px);
+                        }
+                    } else if let Some(w) = w_opt {
+                        setup.width = (w as f64) / 15.0;
+                    } else if let Some(h) = h_opt {
+                        setup.height = (h as f64) / 15.0;
+                    }
+                } else if tag_is(name.as_ref(), "pgMar") {
+                    if let Some(top) = get_attr_i64(e, "top") {
+                        setup.margin_top = ((top as f64) / 15.0).max(20.0);
+                    }
+                    if let Some(right) = get_attr_i64(e, "right") {
+                        setup.margin_right = ((right as f64) / 15.0).max(20.0);
+                    }
+                    if let Some(bottom) = get_attr_i64(e, "bottom") {
+                        setup.margin_bottom = ((bottom as f64) / 15.0).max(20.0);
+                    }
+                    if let Some(left) = get_attr_i64(e, "left") {
+                        setup.margin_left = ((left as f64) / 15.0).max(20.0);
+                    }
+                    if let Some(header) = get_attr_i64(e, "header") {
+                        setup.header_margin = ((header as f64) / 15.0).max(10.0);
+                    }
+                    if let Some(footer) = get_attr_i64(e, "footer") {
+                        setup.footer_margin = ((footer as f64) / 15.0).max(10.0);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    setup
+}
+
+pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> HeaderFooterInfo {
+    let mut info = HeaderFooterInfo::default();
+
+    // Check headers
+    for h_name in &["word/header1.xml", "word/header2.xml", "word/header3.xml"] {
+        if let Some(bytes) = files.get(*h_name) {
+            if let Ok(xml) = String::from_utf8(bytes.clone()) {
+                info.has_header = true;
+                let text = extract_text_runs_quick_xml(&xml);
+                if !text.trim().is_empty() && info.header_text.is_empty() {
+                    info.header_text = text;
+                }
+
+                // Check header image via header rels
+                if info.header_image_data_url.is_none() {
+                    let rel_path = format!("word/_rels/{}.rels", h_name.trim_start_matches("word/"));
+                    if let Some(rel_bytes) = files.get(&rel_path) {
+                        if let Ok(rel_xml) = String::from_utf8(rel_bytes.clone()) {
+                            let rels = parse_relationships_map(&rel_xml);
+                            let embed_ids = extract_drawing_embed_ids(&xml);
+                            for eid in embed_ids {
+                                if let Some(target) = rels.get(&eid) {
+                                    let clean_target = target.trim_start_matches("../").trim_start_matches('/');
+                                    let img_path = if clean_target.starts_with("media/") {
+                                        format!("word/{}", clean_target)
+                                    } else if clean_target.starts_with("word/") {
+                                        clean_target.to_string()
+                                    } else {
+                                        format!("word/media/{}", clean_target)
+                                    };
+
+                                    if let Some(img_bytes) = files.get(&img_path) {
+                                        let mime = if img_path.ends_with(".jpg") || img_path.ends_with(".jpeg") {
+                                            "image/jpeg"
+                                        } else if img_path.ends_with(".png") {
+                                            "image/png"
+                                        } else if img_path.ends_with(".svg") {
+                                            "image/svg+xml"
+                                        } else {
+                                            "image/png"
+                                        };
+                                        let b64 = BASE64.encode(img_bytes);
+                                        info.header_image_data_url = Some(format!("data:{};base64,{}", mime, b64));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    "Normal".to_string()
-}
 
-fn extract_text_and_runs_from_p(p_content: &str) -> (String, usize) {
-    let mut combined_text = String::new();
-    let mut run_count = 0;
-    let mut search_idx = 0;
-
-    // We search for <w:t ...>text</w:t> or <w:t>text</w:t>
-    while let Some(t_open_rel) = p_content[search_idx..].find("<w:t") {
-        let t_open_abs = search_idx + t_open_rel;
-        run_count += 1;
-
-        // Find '>' of opening tag
-        if let Some(close_bracket) = p_content[t_open_abs..].find('>') {
-            let content_start = t_open_abs + close_bracket + 1;
-            if let Some(t_close_rel) = p_content[content_start..].find("</w:t>") {
-                let content_end = content_start + t_close_rel;
-                let raw_text = &p_content[content_start..content_end];
-                combined_text.push_str(&unescape_xml(raw_text));
-                search_idx = content_end + 6;
-            } else {
-                search_idx = content_start;
+    // Check footers
+    for f_name in &["word/footer1.xml", "word/footer2.xml", "word/footer3.xml"] {
+        if let Some(bytes) = files.get(*f_name) {
+            if let Ok(xml) = String::from_utf8(bytes.clone()) {
+                info.has_footer = true;
+                let text = extract_text_runs_quick_xml(&xml);
+                if !text.trim().is_empty() && info.footer_text.is_empty() {
+                    info.footer_text = text;
+                }
             }
-        } else {
-            search_idx = t_open_abs + 4;
         }
     }
 
-    (combined_text, run_count)
+    info
 }
 
-/// Replaces text inside XML `<w:t>` elements and handles split-run matches in paragraphs
-fn replace_in_docx_xml(
-    xml: &str,
-    search: &str,
-    replacement: &str,
-    match_case: bool,
-    use_regex: bool,
-) -> Result<(String, usize), String> {
-    let mut total_replacements = 0;
+fn extract_text_runs_quick_xml(xml: &str) -> String {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut text_parts = Vec::new();
+    let mut in_t = false;
 
-    // First, try simple direct text-node replacement
-    let mut result_xml = String::with_capacity(xml.len());
-    let mut last_idx = 0;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                if tag_is(e.name().as_ref(), "t") {
+                    in_t = true;
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_t {
+                    if let Ok(unescaped) = e.unescape() {
+                        text_parts.push(unescaped.to_string());
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if tag_is(e.name().as_ref(), "t") {
+                    in_t = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
 
-    let regex_matcher = if use_regex {
-        let pattern = if match_case {
-            search.to_string()
-        } else {
-            format!("(?i){}", search)
-        };
-        Some(Regex::new(&pattern).map_err(|e| format!("Expresión regular inválida: {}", e))?)
+    text_parts.join(" ")
+}
+
+pub(crate) fn tag_is(tag_bytes: &[u8], name: &str) -> bool {
+    if let Ok(s) = std::str::from_utf8(tag_bytes) {
+        s == name || s.ends_with(&format!(":{}", name))
     } else {
-        None
+        false
+    }
+}
+
+fn get_attr_value(e: &BytesStart, local_name: &str) -> Option<String> {
+    for attr in e.attributes().flatten() {
+        let key = attr.key.as_ref();
+        let key_str = std::str::from_utf8(key).unwrap_or("");
+        if key_str == local_name || key_str.ends_with(&format!(":{}", local_name)) {
+            return attr.unescape_value().ok().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+fn get_attr_i64(e: &BytesStart, local_name: &str) -> Option<i64> {
+    get_attr_value(e, local_name).and_then(|v| v.parse::<i64>().ok())
+}
+
+fn is_bool_element_true(e: &BytesStart) -> bool {
+    if let Some(val) = get_attr_value(e, "val") {
+        let v = val.to_lowercase();
+        !(v == "0" || v == "false" || v == "off" || v == "none")
+    } else {
+        true
+    }
+}
+
+fn extract_bg_color_quick_xml(xml: &str) -> String {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if tag_is(e.name().as_ref(), "background") {
+                    if let Some(col) = get_attr_value(e, "color") {
+                        return col;
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    "FFFFFF".to_string()
+}
+
+/// Parses `<w:body>` child elements (`<w:p>` and `<w:tbl>`) in sequential document order with quick-xml
+pub fn parse_document_elements(xml: &str) -> Vec<DocumentElement> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    let mut elements = Vec::new();
+    let mut buf = Vec::new();
+
+    let mut p_index = 0;
+    let mut tbl_index = 0;
+    let mut in_body = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "body") {
+                    in_body = true;
+                } else if in_body && tag_is(name.as_ref(), "p") {
+                    let p = parse_paragraph_from_reader(&mut reader, p_index);
+                    elements.push(DocumentElement::Paragraph(p));
+                    p_index += 1;
+                } else if in_body && tag_is(name.as_ref(), "tbl") {
+                    let tbl = parse_table_from_reader(&mut reader, tbl_index);
+                    elements.push(DocumentElement::Table(tbl));
+                    tbl_index += 1;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                if in_body && tag_is(e.name().as_ref(), "p") {
+                    elements.push(DocumentElement::Paragraph(ParagraphInfo {
+                        index: p_index,
+                        style: "Normal".to_string(),
+                        align: "left".to_string(),
+                        ..Default::default()
+                    }));
+                    p_index += 1;
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if tag_is(e.name().as_ref(), "body") {
+                    in_body = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    elements
+}
+
+pub fn parse_paragraph_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> ParagraphInfo {
+    let mut style = "Normal".to_string();
+    let mut align = "left".to_string();
+    let mut color = String::new();
+    let mut default_bold = false;
+    let mut default_italic = false;
+    let mut default_font_size: Option<f64> = None;
+    let mut default_font_family: Option<String> = None;
+    let mut indent_left = 0.0;
+    let mut indent_first_line = 0.0;
+    let mut indent_right = 0.0;
+    let mut space_before = 0.0;
+    let mut space_after = 0.0;
+    let mut line_spacing: Option<f64> = None;
+    let mut borders = ParagraphBorders::default();
+
+    let mut runs: Vec<RunInfo> = Vec::new();
+    let mut buf = Vec::new();
+
+    let mut in_ppr = false;
+    let mut in_pbdr = false;
+    let mut in_r = false;
+    let mut in_t = false;
+
+    let mut current_run_bold = false;
+    let mut current_run_italic = false;
+    let mut current_run_underline = false;
+    let mut current_run_color = String::new();
+    let mut current_run_font_size: Option<f64> = None;
+    let mut current_run_font_family: Option<String> = None;
+    let mut current_run_text = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                // Drawings, VML and embedded objects may contain text boxes with their own
+                // paragraphs; they are not part of this paragraph's text flow
+                if ["drawing", "pict", "object", "txbxContent"].iter().any(|t| tag_is(name.as_ref(), t)) {
+                    let end_name = name.as_ref().to_vec();
+                    let mut skip_buf = Vec::new();
+                    let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
+                    buf.clear();
+                    continue;
+                }
+                if tag_is(name.as_ref(), "pPr") {
+                    in_ppr = true;
+                } else if in_ppr && tag_is(name.as_ref(), "pBdr") {
+                    in_pbdr = true;
+                } else if in_pbdr {
+                    if tag_is(name.as_ref(), "left") {
+                        borders.left = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "bottom") {
+                        borders.bottom = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "top") {
+                        borders.top = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "right") {
+                        borders.right = parse_border_element(e);
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "pStyle") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        style = val;
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "jc") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        align = val;
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "ind") {
+                    parse_indents_from_attr(e, &mut indent_left, &mut indent_first_line, &mut indent_right);
+                } else if in_ppr && tag_is(name.as_ref(), "spacing") {
+                    parse_spacing_from_attr(e, &mut space_before, &mut space_after, &mut line_spacing);
+                } else if in_ppr && tag_is(name.as_ref(), "sz") {
+                    if let Some(sz_val) = get_attr_i64(e, "val") {
+                        default_font_size = Some((sz_val as f64) / 2.0);
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "rFonts") {
+                    default_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
+                } else if in_ppr && tag_is(name.as_ref(), "color") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        if val.to_lowercase() != "auto" {
+                            color = val;
+                        }
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "b") {
+                    default_bold = is_bool_element_true(e);
+                } else if in_ppr && tag_is(name.as_ref(), "i") {
+                    default_italic = is_bool_element_true(e);
+                } else if tag_is(name.as_ref(), "r") {
+                    in_r = true;
+                    current_run_bold = default_bold;
+                    current_run_italic = default_italic;
+                    current_run_underline = false;
+                    current_run_color = color.clone();
+                    current_run_font_size = default_font_size;
+                    current_run_font_family = default_font_family.clone();
+                    current_run_text.clear();
+                } else if in_r && tag_is(name.as_ref(), "b") {
+                    current_run_bold = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "i") {
+                    current_run_italic = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "u") {
+                    current_run_underline = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "sz") {
+                    if let Some(sz_val) = get_attr_i64(e, "val") {
+                        current_run_font_size = Some((sz_val as f64) / 2.0);
+                    }
+                } else if in_r && tag_is(name.as_ref(), "rFonts") {
+                    current_run_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
+                } else if in_r && tag_is(name.as_ref(), "color") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        if val.to_lowercase() != "auto" {
+                            current_run_color = val;
+                        }
+                    }
+                } else if in_r && tag_is(name.as_ref(), "t") {
+                    in_t = true;
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if in_pbdr {
+                    if tag_is(name.as_ref(), "left") {
+                        borders.left = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "bottom") {
+                        borders.bottom = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "top") {
+                        borders.top = parse_border_element(e);
+                    } else if tag_is(name.as_ref(), "right") {
+                        borders.right = parse_border_element(e);
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "pStyle") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        style = val;
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "jc") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        align = val;
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "ind") {
+                    parse_indents_from_attr(e, &mut indent_left, &mut indent_first_line, &mut indent_right);
+                } else if in_ppr && tag_is(name.as_ref(), "spacing") {
+                    parse_spacing_from_attr(e, &mut space_before, &mut space_after, &mut line_spacing);
+                } else if in_ppr && tag_is(name.as_ref(), "sz") {
+                    if let Some(sz_val) = get_attr_i64(e, "val") {
+                        default_font_size = Some((sz_val as f64) / 2.0);
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "rFonts") {
+                    default_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
+                } else if in_ppr && tag_is(name.as_ref(), "color") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        if val.to_lowercase() != "auto" {
+                            color = val;
+                        }
+                    }
+                } else if in_ppr && tag_is(name.as_ref(), "b") {
+                    default_bold = is_bool_element_true(e);
+                } else if in_ppr && tag_is(name.as_ref(), "i") {
+                    default_italic = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "b") {
+                    current_run_bold = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "i") {
+                    current_run_italic = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "u") {
+                    current_run_underline = is_bool_element_true(e);
+                } else if in_r && tag_is(name.as_ref(), "sz") {
+                    if let Some(sz_val) = get_attr_i64(e, "val") {
+                        current_run_font_size = Some((sz_val as f64) / 2.0);
+                    }
+                } else if in_r && tag_is(name.as_ref(), "rFonts") {
+                    current_run_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
+                } else if in_r && tag_is(name.as_ref(), "color") {
+                    if let Some(val) = get_attr_value(e, "val") {
+                        if val.to_lowercase() != "auto" {
+                            current_run_color = val;
+                        }
+                    }
+                } else if in_r && tag_is(name.as_ref(), "tab") {
+                    current_run_text.push('\t');
+                } else if in_r && (tag_is(name.as_ref(), "br") || tag_is(name.as_ref(), "cr")) {
+                    current_run_text.push('\n');
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_t {
+                    if let Ok(unescaped) = e.unescape() {
+                        current_run_text.push_str(&unescaped);
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "t") {
+                    in_t = false;
+                } else if tag_is(name.as_ref(), "r") {
+                    in_r = false;
+                    if !current_run_text.is_empty() {
+                        runs.push(RunInfo {
+                            text: current_run_text.clone(),
+                            bold: current_run_bold,
+                            italic: current_run_italic,
+                            underline: current_run_underline,
+                            color: current_run_color.clone(),
+                            font_size: current_run_font_size,
+                            font_family: current_run_font_family.clone(),
+                        });
+                        current_run_text.clear();
+                    }
+                } else if tag_is(name.as_ref(), "pBdr") {
+                    in_pbdr = false;
+                } else if tag_is(name.as_ref(), "pPr") {
+                    in_ppr = false;
+                } else if tag_is(name.as_ref(), "p") {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let is_heading = style.to_lowercase().contains("heading")
+        || style.to_lowercase().contains("title")
+        || style.to_lowercase().contains("encabezado")
+        || style.to_lowercase().contains("título");
+
+    let mut full_text = String::new();
+    for r in &runs {
+        full_text.push_str(&r.text);
+    }
+
+    let non_empty_runs: Vec<&RunInfo> = runs.iter().filter(|r| !r.text.trim().is_empty()).collect();
+    let bold = if is_heading {
+        true
+    } else if !non_empty_runs.is_empty() {
+        non_empty_runs.iter().all(|r| r.bold)
+    } else {
+        default_bold
     };
 
-    while let Some(t_open_rel) = xml[last_idx..].find("<w:t") {
-        let t_open_abs = last_idx + t_open_rel;
-        result_xml.push_str(&xml[last_idx..t_open_abs]);
+    let italic = if !non_empty_runs.is_empty() {
+        non_empty_runs.iter().all(|r| r.italic)
+    } else {
+        default_italic
+    };
 
-        if let Some(close_bracket) = xml[t_open_abs..].find('>') {
-            let tag_header_end = t_open_abs + close_bracket + 1;
-            let tag_header = &xml[t_open_abs..tag_header_end];
-            result_xml.push_str(tag_header);
+    let run_count = runs.len();
 
-            if let Some(t_close_rel) = xml[tag_header_end..].find("</w:t>") {
-                let content_end = tag_header_end + t_close_rel;
-                let raw_node_text = &xml[tag_header_end..content_end];
-                let unescaped = unescape_xml(raw_node_text);
+    ParagraphInfo {
+        index,
+        text: full_text,
+        style,
+        is_heading,
+        run_count,
+        align,
+        color,
+        bold,
+        italic,
+        font_size: default_font_size,
+        font_family: default_font_family,
+        indent_left,
+        indent_first_line,
+        indent_right,
+        space_before,
+        space_after,
+        line_spacing,
+        borders,
+        runs,
+    }
+}
 
-                let (modified_unescaped, count) = if let Some(ref re) = regex_matcher {
-                    let mut c = 0;
-                    for _ in re.find_iter(&unescaped) {
-                        c += 1;
-                    }
-                    let replaced = re.replace_all(&unescaped, replacement).to_string();
-                    (replaced, c)
-                } else if match_case {
-                    let c = unescaped.matches(search).count();
-                    let replaced = unescaped.replace(search, replacement);
-                    (replaced, c)
-                } else {
-                    let (replaced, c) = replace_case_insensitive(&unescaped, search, replacement);
-                    (replaced, c)
-                };
+fn parse_border_element(e: &BytesStart) -> Option<BorderInfo> {
+    let val = get_attr_value(e, "val").unwrap_or_default().to_lowercase();
+    if val.is_empty() || val == "none" || val == "nil" || val == "off" || val == "0" {
+        return None;
+    }
+    let color = get_attr_value(e, "color").unwrap_or_default();
+    let sz_raw = get_attr_i64(e, "sz").unwrap_or(4) as f64;
+    let sz_px = ((sz_raw / 8.0) * 1.3333).clamp(0.75, 8.0);
+    let space = get_attr_i64(e, "space").unwrap_or(0) as f64;
+    Some(BorderInfo {
+        val,
+        color,
+        sz_px,
+        space,
+    })
+}
 
-                total_replacements += count;
-                result_xml.push_str(&escape_xml(&modified_unescaped));
-                last_idx = content_end;
-            } else {
-                last_idx = tag_header_end;
-            }
+fn parse_spacing_from_attr(
+    e: &BytesStart,
+    space_before: &mut f64,
+    space_after: &mut f64,
+    line_spacing: &mut Option<f64>,
+) {
+    if let Some(before) = get_attr_i64(e, "before") {
+        *space_before = (before as f64) / 20.0;
+    }
+    if let Some(after) = get_attr_i64(e, "after") {
+        *space_after = (after as f64) / 20.0;
+    }
+    if let Some(line) = get_attr_i64(e, "line") {
+        *line_spacing = Some((line as f64) / 240.0);
+    }
+}
+
+fn parse_indents_from_attr(
+    e: &BytesStart,
+    indent_left: &mut f64,
+    indent_first_line: &mut f64,
+    indent_right: &mut f64,
+) {
+    if let Some(left) = get_attr_i64(e, "left").or_else(|| get_attr_i64(e, "start")) {
+        *indent_left = (left as f64) / 15.0;
+    }
+    if let Some(right) = get_attr_i64(e, "right").or_else(|| get_attr_i64(e, "end")) {
+        *indent_right = (right as f64) / 15.0;
+    }
+    if let Some(first_line) = get_attr_i64(e, "firstLine") {
+        *indent_first_line = (first_line as f64) / 15.0;
+    } else if let Some(hanging) = get_attr_i64(e, "hanging") {
+        let hanging_px = (hanging as f64) / 15.0;
+        if *indent_left == 0.0 {
+            *indent_left = hanging_px;
+            *indent_first_line = -hanging_px;
         } else {
-            result_xml.push_str("<w:t");
-            last_idx = t_open_abs + 4;
+            *indent_first_line = -hanging_px;
+        }
+    }
+}
+
+pub fn is_dark_hex_str(hex: &str) -> bool {
+    let clean = hex.trim_start_matches('#');
+    if clean.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&clean[0..2], 16),
+            u8::from_str_radix(&clean[2..4], 16),
+            u8::from_str_radix(&clean[4..6], 16),
+        ) {
+            let lum = 0.299 * (r as f64) + 0.587 * (g as f64) + 0.114 * (b as f64);
+            return lum < 140.0;
+        }
+    }
+    false
+}
+
+pub fn parse_table_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> TableInfo {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut rich_rows: Vec<TableRowData> = Vec::new();
+    let mut grid_cols: Vec<f64> = Vec::new();
+
+    let mut current_row_strings: Vec<String> = Vec::new();
+    let mut current_rich_cells: Vec<TableCellData> = Vec::new();
+    let mut current_cell_paragraphs: Vec<ParagraphInfo> = Vec::new();
+
+    let mut table_border_color: Option<String> = None;
+    let mut current_cell_bg: Option<String> = None;
+    let mut current_cell_border: Option<String> = None;
+    let mut current_row_is_header = false;
+
+    let mut in_tbl_pr = false;
+    let mut in_tbl_borders = false;
+    let mut in_tbl_grid = false;
+    let mut in_tr = false;
+    let mut in_tr_pr = false;
+    let mut in_tc = false;
+    let mut in_tc_pr = false;
+    let mut in_tc_borders = false;
+    let mut dummy_p_idx = 0;
+    let mut row_idx = 0;
+
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "tblPr") {
+                    in_tbl_pr = true;
+                } else if in_tbl_pr && tag_is(name.as_ref(), "tblBorders") {
+                    in_tbl_borders = true;
+                } else if in_tbl_borders {
+                    if let Some(col) = get_attr_value(e, "color") {
+                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                            table_border_color = Some(col);
+                        }
+                    }
+                } else if tag_is(name.as_ref(), "tblGrid") {
+                    in_tbl_grid = true;
+                } else if tag_is(name.as_ref(), "tr") {
+                    in_tr = true;
+                    current_row_strings = Vec::new();
+                    current_rich_cells = Vec::new();
+                    current_row_is_header = row_idx == 0;
+                } else if in_tr && tag_is(name.as_ref(), "trPr") {
+                    in_tr_pr = true;
+                } else if in_tr && tag_is(name.as_ref(), "tc") {
+                    in_tc = true;
+                    current_cell_paragraphs = Vec::new();
+                    current_cell_bg = None;
+                    current_cell_border = None;
+                } else if in_tc && tag_is(name.as_ref(), "tcPr") {
+                    in_tc_pr = true;
+                } else if in_tc_pr && tag_is(name.as_ref(), "tcBorders") {
+                    in_tc_borders = true;
+                } else if in_tc_borders {
+                    if let Some(col) = get_attr_value(e, "color") {
+                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                            current_cell_border = Some(col);
+                        }
+                    }
+                } else if in_tc && tag_is(name.as_ref(), "p") {
+                    let p = parse_paragraph_from_reader(reader, dummy_p_idx);
+                    dummy_p_idx += 1;
+                    current_cell_paragraphs.push(p);
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if in_tbl_borders {
+                    if let Some(col) = get_attr_value(e, "color") {
+                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                            table_border_color = Some(col);
+                        }
+                    }
+                } else if in_tbl_grid && tag_is(name.as_ref(), "gridCol") {
+                    if let Some(w) = get_attr_i64(e, "w") {
+                        grid_cols.push(w as f64);
+                    }
+                } else if in_tr_pr && tag_is(name.as_ref(), "tblHeader") {
+                    current_row_is_header = true;
+                } else if in_tc_pr && tag_is(name.as_ref(), "shd") {
+                    if let Some(fill) = get_attr_value(e, "fill") {
+                        let f_low = fill.to_lowercase();
+                        if !f_low.is_empty() && f_low != "auto" && f_low != "clear" && f_low != "none" && f_low != "ffffff" {
+                            current_cell_bg = Some(fill);
+                        }
+                    }
+                } else if in_tc_borders {
+                    if let Some(col) = get_attr_value(e, "color") {
+                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                            current_cell_border = Some(col);
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "tblBorders") {
+                    in_tbl_borders = false;
+                } else if tag_is(name.as_ref(), "tblPr") {
+                    in_tbl_pr = false;
+                } else if tag_is(name.as_ref(), "tblGrid") {
+                    in_tbl_grid = false;
+                } else if tag_is(name.as_ref(), "trPr") {
+                    in_tr_pr = false;
+                } else if tag_is(name.as_ref(), "tcBorders") {
+                    in_tc_borders = false;
+                } else if tag_is(name.as_ref(), "tcPr") {
+                    in_tc_pr = false;
+                } else if in_tc && tag_is(name.as_ref(), "tc") {
+                    in_tc = false;
+                    let full_text = current_cell_paragraphs
+                        .iter()
+                        .map(|p| p.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let first_p = current_cell_paragraphs.first();
+                    let align = first_p.map(|p| p.align.clone()).unwrap_or_else(|| "left".to_string());
+
+                    // Check explicit text color from runs or paragraph
+                    let explicit_color = first_p
+                        .and_then(|p| p.runs.iter().find(|r| !r.color.is_empty()).map(|r| r.color.clone()))
+                        .or_else(|| first_p.map(|p| p.color.clone()).filter(|c| !c.is_empty()));
+
+                    let is_dark_bg = current_cell_bg.as_deref().map(is_dark_hex_str).unwrap_or(false);
+                    let color = if let Some(c) = explicit_color {
+                        c
+                    } else if is_dark_bg {
+                        "FAF7F0".to_string()
+                    } else if current_row_is_header && current_cell_bg.is_some() {
+                        "FAF7F0".to_string()
+                    } else {
+                        "1B1F1E".to_string()
+                    };
+
+                    let bold = first_p
+                        .map(|p| p.bold || p.runs.iter().any(|r| r.bold))
+                        .unwrap_or(current_row_is_header);
+                    let italic = first_p
+                        .map(|p| p.italic || p.runs.iter().any(|r| r.italic))
+                        .unwrap_or(false);
+                    let font_size = first_p
+                        .and_then(|p| p.font_size.or_else(|| p.runs.first().and_then(|r| r.font_size)))
+                        .unwrap_or(if current_row_is_header { 10.0 } else { 9.5 });
+                    let font_family = first_p
+                        .and_then(|p| p.font_family.clone().or_else(|| p.runs.first().and_then(|r| r.font_family.clone())))
+                        .unwrap_or_else(|| "Calibri, Inter, sans-serif".to_string());
+
+                    let border_color = current_cell_border
+                        .clone()
+                        .or_else(|| table_border_color.clone())
+                        .unwrap_or_else(|| "DDD5C2".to_string());
+
+                    current_row_strings.push(full_text.clone());
+                    current_rich_cells.push(TableCellData {
+                        text: full_text,
+                        bg_color: current_cell_bg.clone(),
+                        color,
+                        align,
+                        bold,
+                        italic,
+                        font_size,
+                        font_family,
+                        border_color,
+                    });
+                } else if in_tr && tag_is(name.as_ref(), "tr") {
+                    in_tr = false;
+                    rows.push(current_row_strings.clone());
+                    rich_rows.push(TableRowData {
+                        cells: current_rich_cells.clone(),
+                        is_header: current_row_is_header,
+                    });
+                    row_idx += 1;
+                } else if tag_is(name.as_ref(), "tbl") {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    TableInfo {
+        index,
+        rows,
+        rich_rows,
+        grid_cols,
+        header_row: true,
+    }
+}
+
+/// A search pattern plus its replacement, applied to the logical text of a paragraph.
+pub struct ReplaceRule {
+    regex: Regex,
+    replacement: String,
+    /// Regex mode: expand `$1`/`${name}` capture references in the replacement
+    expand: bool,
+}
+
+impl ReplaceRule {
+    pub fn new(search: &str, replacement: &str, match_case: bool, use_regex: bool) -> Result<Self, String> {
+        let body = if use_regex { search.to_string() } else { regex::escape(search) };
+        let pattern = if match_case { body } else { format!("(?i){}", body) };
+        let regex = Regex::new(&pattern).map_err(|e| format!("Expresión regular inválida: {}", e))?;
+        Ok(ReplaceRule {
+            regex,
+            replacement: replacement.to_string(),
+            expand: use_regex,
+        })
+    }
+
+    /// Returns (start, end, replacement) for every non-overlapping match in `text`
+    fn find_matches(&self, text: &str) -> Vec<(usize, usize, String)> {
+        if self.expand {
+            self.regex
+                .captures_iter(text)
+                .map(|caps| {
+                    let m = caps.get(0).unwrap();
+                    let mut out = String::new();
+                    caps.expand(&self.replacement, &mut out);
+                    (m.start(), m.end(), out)
+                })
+                .collect()
+        } else {
+            self.regex
+                .find_iter(text)
+                .map(|m| (m.start(), m.end(), self.replacement.clone()))
+                .collect()
+        }
+    }
+}
+
+/// A `<w:t>` element: event indices of its Start/End tags and its current text
+struct TextNode {
+    start: usize,
+    end: usize,
+    text: String,
+    modified: bool,
+}
+
+/// Elements that interrupt the visible text flow: a match may never span across them
+const TEXT_FLOW_BREAKS: &[&str] = &[
+    "p", "tab", "ptab", "br", "cr", "drawing", "pict", "object", "sym", "fldChar",
+    "instrText", "footnoteReference", "endnoteReference", "commentReference",
+    "noBreakHyphen", "softHyphen", "delText", "txbxContent", "tc",
+];
+
+fn is_text_flow_break(tag: &[u8]) -> bool {
+    TEXT_FLOW_BREAKS.iter().any(|name| tag_is(tag, name))
+}
+
+/// Replaces text across run boundaries. Word frequently splits a placeholder like
+/// `{name}` into several runs (`{` | `name` | `}`), so matching is done on the joined
+/// text of each contiguous `<w:t>` sequence. The replacement goes into the run where
+/// the match starts (keeping its formatting) and the matched remainder is removed
+/// from the following runs.
+fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usize), String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    let mut events: Vec<Event> = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(ev) => events.push(ev),
+            Err(e) => return Err(format!("XML error: {:?}", e)),
         }
     }
 
-    result_xml.push_str(&xml[last_idx..]);
+    // 1. Collect <w:t> nodes, grouped into contiguous text sequences
+    let mut nodes: Vec<TextNode> = Vec::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut current_group: Vec<usize> = Vec::new();
+    let mut open_t: Option<(usize, String)> = None;
 
-    // If no replacement was found via single-node, check for cross-run split text in paragraphs!
-    if total_replacements == 0 && !use_regex {
-        let (cross_xml, cross_count) = replace_cross_run_text(&result_xml, search, replacement, match_case);
-        if cross_count > 0 {
-            return Ok((cross_xml, cross_count));
+    for (i, ev) in events.iter().enumerate() {
+        match ev {
+            Event::Start(e) if open_t.is_none() && tag_is(e.name().as_ref(), "t") => {
+                open_t = Some((i, String::new()));
+            }
+            Event::Text(t) => {
+                if let Some((_, ref mut text)) = open_t {
+                    text.push_str(&t.unescape().map_err(|e| e.to_string())?);
+                }
+            }
+            Event::CData(c) => {
+                if let Some((_, ref mut text)) = open_t {
+                    text.push_str(&String::from_utf8_lossy(c));
+                }
+            }
+            Event::End(e) if open_t.is_some() && tag_is(e.name().as_ref(), "t") => {
+                let (start, text) = open_t.take().unwrap();
+                current_group.push(nodes.len());
+                nodes.push(TextNode { start, end: i, text, modified: false });
+            }
+            Event::Start(e) | Event::Empty(e) if is_text_flow_break(e.name().as_ref()) => {
+                if !current_group.is_empty() {
+                    groups.push(std::mem::take(&mut current_group));
+                }
+            }
+            Event::End(e) if is_text_flow_break(e.name().as_ref()) => {
+                if !current_group.is_empty() {
+                    groups.push(std::mem::take(&mut current_group));
+                }
+            }
+            _ => {}
         }
     }
-
-    Ok((result_xml, total_replacements))
-}
-
-/// Case insensitive string replacement
-fn replace_case_insensitive(text: &str, search: &str, replacement: &str) -> (String, usize) {
-    if search.is_empty() {
-        return (text.to_string(), 0);
+    if !current_group.is_empty() {
+        groups.push(current_group);
     }
-    let lower_text = text.to_lowercase();
-    let lower_search = search.to_lowercase();
 
-    let mut count = 0;
-    let mut result = String::new();
-    let mut last_idx = 0;
+    // 2. Apply every rule to the joined text of each group and redistribute
+    let mut total_replacements = 0;
+    for group in &groups {
+        for rule in rules {
+            let mut full = String::new();
+            let mut bounds = Vec::with_capacity(group.len());
+            for &n in group {
+                let a = full.len();
+                full.push_str(&nodes[n].text);
+                bounds.push((a, full.len()));
+            }
 
-    while let Some(found_idx) = lower_text[last_idx..].find(&lower_search) {
-        let abs_idx = last_idx + found_idx;
-        result.push_str(&text[last_idx..abs_idx]);
-        result.push_str(replacement);
-        count += 1;
-        last_idx = abs_idx + search.len();
-    }
-    result.push_str(&text[last_idx..]);
+            let matches = rule.find_matches(&full);
+            if matches.is_empty() {
+                continue;
+            }
+            total_replacements += matches.len();
 
-    (result, count)
-}
-
-/// Replaces text when word split the phrase across adjacent `<w:r><w:t>` runs in `<w:p>`
-fn replace_cross_run_text(
-    xml: &str,
-    search: &str,
-    replacement: &str,
-    match_case: bool,
-) -> (String, usize) {
-    let mut result = String::with_capacity(xml.len());
-    let mut search_idx = 0;
-    let mut count = 0;
-
-    while let Some(p_start_rel) = xml[search_idx..].find("<w:p") {
-        let p_start_abs = search_idx + p_start_rel;
-        result.push_str(&xml[search_idx..p_start_abs]);
-
-        if let Some(p_end_rel) = xml[p_start_abs..].find("</w:p>") {
-            let p_end_abs = p_start_abs + p_end_rel + 6;
-            let p_content = &xml[p_start_abs..p_end_abs];
-
-            let (full_text, _) = extract_text_and_runs_from_p(p_content);
-            let contains = if match_case {
-                full_text.contains(search)
-            } else {
-                full_text.to_lowercase().contains(&search.to_lowercase())
+            let mut new_texts = vec![String::new(); group.len()];
+            let copy_range = |from: usize, to: usize, out: &mut Vec<String>| {
+                for (k, &(a, b)) in bounds.iter().enumerate() {
+                    let (lo, hi) = (a.max(from), b.min(to));
+                    if lo < hi {
+                        out[k].push_str(&full[lo..hi]);
+                    }
+                }
             };
 
-            if contains {
-                // Modify this paragraph's runs
-                let (new_full_text, c) = if match_case {
-                    let cnt = full_text.matches(search).count();
-                    (full_text.replace(search, replacement), cnt)
-                } else {
-                    replace_case_insensitive(&full_text, search, replacement)
-                };
-
-                let updated_p = set_paragraph_consolidated_text(p_content, &new_full_text);
-                result.push_str(&updated_p);
-                count += c;
-            } else {
-                result.push_str(p_content);
+            let mut pos = 0;
+            for (start, end, replacement) in &matches {
+                copy_range(pos, *start, &mut new_texts);
+                let owner = bounds
+                    .iter()
+                    .position(|&(a, b)| *start >= a && *start < b)
+                    .unwrap_or(bounds.len() - 1);
+                new_texts[owner].push_str(replacement);
+                pos = *end;
             }
+            copy_range(pos, full.len(), &mut new_texts);
 
-            search_idx = p_end_abs;
-        } else {
-            result.push_str(&xml[p_start_abs..]);
-            search_idx = xml.len();
-            break;
-        }
-    }
-
-    result.push_str(&xml[search_idx..]);
-    (result, count)
-}
-
-/// Sets the consolidated text of a paragraph by writing to the first <w:t> and clearing remaining <w:t>
-fn set_paragraph_consolidated_text(p_xml: &str, new_text: &str) -> String {
-    let mut result = String::with_capacity(p_xml.len() + new_text.len());
-    let mut search_idx = 0;
-    let mut first_t_written = false;
-
-    while let Some(t_open_rel) = p_xml[search_idx..].find("<w:t") {
-        let t_open_abs = search_idx + t_open_rel;
-        result.push_str(&p_xml[search_idx..t_open_abs]);
-
-        if let Some(close_bracket) = p_xml[t_open_abs..].find('>') {
-            let tag_header_end = t_open_abs + close_bracket + 1;
-            // Ensure xml:space="preserve" is in header
-            result.push_str("<w:t xml:space=\"preserve\">");
-
-            if let Some(t_close_rel) = p_xml[tag_header_end..].find("</w:t>") {
-                let content_end = tag_header_end + t_close_rel;
-                if !first_t_written {
-                    result.push_str(&escape_xml(new_text));
-                    first_t_written = true;
+            for (k, &n) in group.iter().enumerate() {
+                if nodes[n].text != new_texts[k] {
+                    nodes[n].text = std::mem::take(&mut new_texts[k]);
+                    nodes[n].modified = true;
                 }
-                result.push_str("</w:t>");
-                search_idx = content_end + 6;
-            } else {
-                search_idx = tag_header_end;
             }
-        } else {
-            result.push_str("<w:t");
-            search_idx = t_open_abs + 4;
         }
     }
 
-    result.push_str(&p_xml[search_idx..]);
-
-    // If paragraph had no <w:t> tags at all, insert a run inside the paragraph
-    if !first_t_written {
-        if let Some(closing_pos) = result.rfind("</w:p>") {
-            let (before, after) = result.split_at(closing_pos);
-            return format!(
-                "{}<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>{}",
-                before,
-                escape_xml(new_text),
-                after
-            );
-        }
+    if total_replacements == 0 {
+        return Ok((xml.to_string(), 0));
     }
 
-    result
+    // 3. Write events back, rewriting modified <w:t> nodes
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let modified: HashMap<usize, &TextNode> =
+        nodes.iter().filter(|n| n.modified).map(|n| (n.start, n)).collect();
+
+    let mut i = 0;
+    while i < events.len() {
+        if let (Some(node), Event::Start(e)) = (modified.get(&i), &events[i]) {
+            let mut t_start = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() != b"xml:space" {
+                    t_start.push_attribute(attr);
+                }
+            }
+            t_start.push_attribute(("xml:space", "preserve"));
+            writer.write_event(Event::Start(t_start)).map_err(|e| e.to_string())?;
+            if !node.text.is_empty() {
+                writer.write_event(Event::Text(BytesText::new(&node.text))).map_err(|e| e.to_string())?;
+            }
+            writer.write_event(events[node.end].clone()).map_err(|e| e.to_string())?;
+            i = node.end + 1;
+            continue;
+        }
+        writer.write_event(events[i].clone()).map_err(|e| e.to_string())?;
+        i += 1;
+    }
+
+    let bytes = writer.into_inner().into_inner();
+    let result_str = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    Ok((result_str, total_replacements))
 }
 
-/// Updates specific paragraphs in word/document.xml by index
-fn update_paragraphs_in_xml(
-    xml: &str,
-    updates: &[ParagraphUpdate],
-) -> Result<(String, usize), String> {
-    let update_map: HashMap<usize, &str> = updates
-        .iter()
-        .map(|u| (u.index, u.text.as_str()))
-        .collect();
+/// Sets `<w:background>` color in document XML
+fn set_bg_color_in_xml(xml: &str, hex: &str) -> String {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
 
-    let mut result = String::with_capacity(xml.len());
-    let mut search_idx = 0;
-    let mut p_index = 0;
-    let mut updated_count = 0;
-
-    while let Some(p_start_rel) = xml[search_idx..].find("<w:p") {
-        let p_start_abs = search_idx + p_start_rel;
-        result.push_str(&xml[search_idx..p_start_abs]);
-
-        if let Some(p_end_rel) = xml[p_start_abs..].find("</w:p>") {
-            let p_end_abs = p_start_abs + p_end_rel + 6;
-            let p_content = &xml[p_start_abs..p_end_abs];
-
-            if let Some(new_text) = update_map.get(&p_index) {
-                let updated_p = set_paragraph_consolidated_text(p_content, new_text);
-                result.push_str(&updated_p);
-                updated_count += 1;
-            } else {
-                result.push_str(p_content);
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "background") {
+                    let mut new_bg = BytesStart::new("w:background");
+                    new_bg.push_attribute(("w:color", hex));
+                    let _ = writer.write_event(Event::Empty(new_bg));
+                    buf.clear();
+                    continue;
+                } else if tag_is(name.as_ref(), "document") {
+                    let _ = writer.write_event(Event::Start(e.clone()));
+                    if !xml.contains("<w:background") {
+                        let mut new_bg = BytesStart::new("w:background");
+                        new_bg.push_attribute(("w:color", hex));
+                        let _ = writer.write_event(Event::Empty(new_bg));
+                    }
+                    buf.clear();
+                    continue;
+                }
+                let _ = writer.write_event(Event::Start(e.clone()));
             }
-
-            p_index += 1;
-            search_idx = p_end_abs;
-        } else {
-            result.push_str(&xml[p_start_abs..]);
-            search_idx = xml.len();
-            break;
+            Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if tag_is(name.as_ref(), "background") {
+                    let mut new_bg = BytesStart::new("w:background");
+                    new_bg.push_attribute(("w:color", hex));
+                    let _ = writer.write_event(Event::Empty(new_bg));
+                    buf.clear();
+                    continue;
+                }
+                let _ = writer.write_event(Event::Empty(e.clone()));
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => {
+                let _ = writer.write_event(event);
+            }
+            Err(_) => break,
         }
+        buf.clear();
     }
 
-    result.push_str(&xml[search_idx..]);
-    Ok((result, updated_count))
+    let bytes = writer.into_inner().into_inner();
+    String::from_utf8(bytes).unwrap_or_else(|_| xml.to_string())
+}
+
+/// Inserts a new table into document XML
+fn insert_table_into_xml(
+    xml: &str,
+    rows_count: usize,
+    cols_count: usize,
+    headers: &[String],
+) -> Result<String, String> {
+    let mut table_xml = String::new();
+    table_xml.push_str("<w:tbl>");
+    table_xml.push_str(r#"<w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="CBD5E1"/><w:left w:val="none"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="94A3B8"/><w:right w:val="none"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/><w:insideV w:val="none"/></w:tblBorders></w:tblPr>"#);
+
+    for r in 0..rows_count {
+        table_xml.push_str("<w:tr>");
+        for c in 0..cols_count {
+            let is_header = r == 0;
+            let val = if is_header && c < headers.len() {
+                &headers[c]
+            } else if is_header {
+                "Columna"
+            } else {
+                "Dato"
+            };
+
+            table_xml.push_str("<w:tc><w:p>");
+            if is_header {
+                table_xml.push_str("<w:r><w:rPr><w:b/><w:color w:val=\"1E3A8A\"/></w:rPr>");
+            } else {
+                table_xml.push_str("<w:r>");
+            }
+            table_xml.push_str(&format!("<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p></w:tc>", escape_xml(val)));
+        }
+        table_xml.push_str("</w:tr>");
+    }
+
+    table_xml.push_str("</w:tbl>");
+
+    if let Some(pos) = xml.rfind("</w:body>") {
+        let (before, after) = xml.split_at(pos);
+        Ok(format!("{}{}{}", before, table_xml, after))
+    } else {
+        Ok(format!("{}{}", xml, table_xml))
+    }
 }
 
 fn escape_xml(input: &str) -> String {
@@ -609,55 +1939,166 @@ fn escape_xml(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn unescape_xml(input: &str) -> String {
-    input
-        .replace("&apos;", "'")
-        .replace("&quot;", "\"")
-        .replace("&gt;", ">")
-        .replace("&lt;", "<")
-        .replace("&amp;", "&")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sample_generator::generate_sample_docx;
 
     #[test]
-    fn test_sample_docx_parsing_and_modification() {
+    fn test_sample_rich_docx_parsing_and_elements() {
         let sample_bytes = generate_sample_docx().expect("Should generate sample docx");
         let mut modifier = DocxModifier::from_bytes(&sample_bytes).expect("Should parse docx");
 
-        let paragraphs = modifier.extract_paragraphs().expect("Should extract paragraphs");
-        assert!(paragraphs.len() >= 5);
-        assert!(paragraphs[0].text.contains("Acuerdo"));
+        let elements = modifier.extract_elements().expect("Should extract elements");
+        assert!(elements.len() >= 5);
 
-        // Test Find and Replace
-        let rep_res = modifier
-            .find_and_replace("{{NOMBRE_CLIENTE}}", "Empresa Ejemplo S.A.S.", true, false)
-            .expect("Should replace");
-        assert_eq!(rep_res.occurrences_replaced, 1);
+        // Verify tables exist in sample
+        let tables = modifier.extract_tables().expect("Should extract tables");
+        assert!(!tables.is_empty(), "Sample docx should have tables");
+        assert_eq!(tables[0].rows[0][0], "Hito / Fase");
 
-        // Test Batch Replace
-        let pairs = vec![
-            KeyValuePair {
-                key: "{{FECHA_CONTRATO}}".to_string(),
-                value: "30 de Septiembre de 2026".to_string(),
-            },
-            KeyValuePair {
-                key: "{{VALOR_PROYECTO}}".to_string(),
-                value: "$25,000,000 COP".to_string(),
-            },
-        ];
-        let batch_res = modifier.batch_replace(&pairs).expect("Should batch replace");
-        assert_eq!(batch_res.occurrences_replaced, 2);
+        // Test Table cell update with multiline text
+        modifier.update_table_cell(0, 1, 0, "Fase 1: Nueva Arquitectura\n(Detalle Técnico)").expect("Should update cell");
+
+        // Test Paragraph rich update (alignment and color)
+        modifier.update_paragraph_rich(0, "CONTRATO MODIFICADO", "center", "DC2626", true, false)
+            .expect("Should update paragraph formatting");
+
+        // Test Page background
+        modifier.set_background_color("F0F9FF").expect("Should set background");
 
         // Export bytes and re-parse
         let exported_bytes = modifier.to_bytes().expect("Should export bytes");
         let reloaded = DocxModifier::from_bytes(&exported_bytes).expect("Should reload docx");
         let raw_text = reloaded.extract_raw_text().expect("Should get raw text");
-        assert!(raw_text.contains("Empresa Ejemplo S.A.S."));
-        assert!(raw_text.contains("30 de Septiembre de 2026"));
-        assert!(raw_text.contains("$25,000,000 COP"));
+        assert!(raw_text.contains("CONTRATO MODIFICADO"));
+        assert!(raw_text.contains("Fase 1: Nueva Arquitectura"));
+
+        let reloaded_tables = reloaded.extract_tables().expect("Should reload tables");
+        assert!(reloaded_tables[0].rows[1][0].contains("\n(Detalle Técnico)"));
+    }
+
+    #[test]
+    fn test_bold_bleeding_fix() {
+        let xml = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>1. OBJETO:</w:t></w:r><w:r><w:t> El presente contrato regula los servicios.</w:t></w:r></w:p>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(false);
+        let p = parse_paragraph_from_reader(&mut reader, 0);
+
+        assert!(!p.bold, "Paragraph should NOT be marked bold if only first run is bold");
+        assert_eq!(p.runs.len(), 2);
+        assert!(p.runs[0].bold, "First run should be bold");
+        assert!(!p.runs[1].bold, "Second run should NOT be bold");
+        assert_eq!(p.text, "1. OBJETO: El presente contrato regula los servicios.");
+    }
+
+    #[test]
+    fn test_indents_and_tabs_parsing() {
+        let xml = r#"<w:p><w:pPr><w:ind w:left="1440" w:firstLine="720"/></w:pPr><w:r><w:t>Primer run</w:t><w:tab/><w:t>Segundo run</w:t></w:r></w:p>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(false);
+        let p = parse_paragraph_from_reader(&mut reader, 0);
+
+        assert!((p.indent_left - 96.0).abs() < 0.01);
+        assert!((p.indent_first_line - 48.0).abs() < 0.01);
+        assert!(p.text.contains('\t'), "Text should contain tab character");
+        assert_eq!(p.text, "Primer run\tSegundo run");
+    }
+
+    #[test]
+    fn test_multiline_table_cell_parsing() {
+        let tbl_xml = r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Línea 1</w:t></w:r></w:p><w:p><w:r><w:t>Línea 2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let mut reader = Reader::from_str(tbl_xml);
+        reader.config_mut().trim_text(false);
+        let tbl = parse_table_from_reader(&mut reader, 0);
+        assert_eq!(tbl.rows.len(), 1);
+        assert_eq!(tbl.rows[0].len(), 1);
+        assert_eq!(tbl.rows[0][0], "Línea 1\nLínea 2");
+    }
+
+    fn wrap_body(inner: &str) -> String {
+        format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}</w:body></w:document>"#,
+            inner
+        )
+    }
+
+    fn literal(search: &str, replacement: &str) -> ReplaceRule {
+        ReplaceRule::new(search, replacement, true, false).unwrap()
+    }
+
+    #[test]
+    fn test_replace_placeholder_split_across_runs() {
+        let xml = wrap_body(
+            r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hola {</w:t></w:r><w:r><w:t>name</w:t></w:r><w:r><w:t>}!</w:t></w:r></w:p>"#,
+        );
+        let (out, count) = replace_in_docx_xml(&xml, &[literal("{name}", "Ana")]).unwrap();
+        assert_eq!(count, 1);
+        // Replacement lands in the run where the match starts, keeping its formatting
+        assert!(out.contains(r#"<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hola Ana</w:t>"#), "{}", out);
+        assert!(out.contains(r#"<w:t xml:space="preserve"></w:t>"#), "{}", out);
+        assert!(out.contains(r#"<w:t xml:space="preserve">!</w:t>"#), "{}", out);
+        let p = &parse_document_elements(&out)[0];
+        match p {
+            DocumentElement::Paragraph(p) => assert_eq!(p.text, "Hola Ana!"),
+            _ => panic!("expected paragraph"),
+        }
+    }
+
+    #[test]
+    fn test_replace_multiple_placeholders_in_one_paragraph() {
+        let xml = wrap_body(
+            r#"<w:p><w:r><w:t>{</w:t></w:r><w:r><w:t>a</w:t></w:r><w:r><w:t>}-{b</w:t></w:r><w:r><w:t>}</w:t></w:r></w:p>"#,
+        );
+        let (out, count) =
+            replace_in_docx_xml(&xml, &[literal("{a}", "1"), literal("{b}", "2")]).unwrap();
+        assert_eq!(count, 2);
+        match &parse_document_elements(&out)[0] {
+            DocumentElement::Paragraph(p) => assert_eq!(p.text, "1-2"),
+            _ => panic!("expected paragraph"),
+        }
+    }
+
+    #[test]
+    fn test_replace_does_not_cross_paragraphs_or_tabs() {
+        let xml = wrap_body(
+            r#"<w:p><w:r><w:t>{na</w:t></w:r></w:p><w:p><w:r><w:t>me}</w:t></w:r></w:p><w:p><w:r><w:t>{na</w:t><w:tab/><w:t>me}</w:t></w:r></w:p>"#,
+        );
+        let (out, count) = replace_in_docx_xml(&xml, &[literal("{name}", "X")]).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(out, xml);
+    }
+
+    #[test]
+    fn test_replace_case_insensitive_and_unicode_safe() {
+        let xml = wrap_body(r#"<w:p><w:r><w:t>İstanbul NOMBRE nombre</w:t></w:r></w:p>"#);
+        let rule = ReplaceRule::new("nombre", "Ñandú", false, false).unwrap();
+        let (out, count) = replace_in_docx_xml(&xml, &[rule]).unwrap();
+        assert_eq!(count, 2);
+        assert!(out.contains("İstanbul Ñandú Ñandú"), "{}", out);
+    }
+
+    #[test]
+    fn test_replace_literal_dollar_and_regex_captures() {
+        let xml = wrap_body(r#"<w:p><w:r><w:t>{precio} 2026-10-05</w:t></w:r></w:p>"#);
+        let (out, _) = replace_in_docx_xml(&xml, &[literal("{precio}", "$1 USD")]).unwrap();
+        assert!(out.contains("$1 USD"), "{}", out);
+
+        let rule = ReplaceRule::new(r"(\d{4})-(\d{2})-(\d{2})", "$3/$2/$1", true, true).unwrap();
+        let (out, count) = replace_in_docx_xml(&xml, &[rule]).unwrap();
+        assert_eq!(count, 1);
+        assert!(out.contains("05/10/2026"), "{}", out);
+    }
+
+    #[test]
+    fn test_replace_escapes_xml_special_chars() {
+        let xml = wrap_body(r#"<w:p><w:r><w:t>{empresa}</w:t></w:r></w:p>"#);
+        let (out, _) = replace_in_docx_xml(&xml, &[literal("{empresa}", "A&B <S.A.>")]).unwrap();
+        assert!(out.contains("A&amp;B &lt;S.A.&gt;"), "{}", out);
+        match &parse_document_elements(&out)[0] {
+            DocumentElement::Paragraph(p) => assert_eq!(p.text, "A&B <S.A.>"),
+            _ => panic!("expected paragraph"),
+        }
     }
 }
+

@@ -6,28 +6,24 @@ Una aplicación web moderna y de ultra alto rendimiento que permite **modificar 
 
 ## 🚀 Características Principales
 
+- **🎨 Motor de Renderizado en Canvas 2D Acelerado por GPU (Opción Google Docs / Figma)**:
+  - Rust + WebAssembly calcula la geometría de fuentes, márgenes, tablas, saltos de página y dibuja directamente en lienzos `<canvas>` de alta definición (Retina DPI).
+  - **Cero sobrecarga de DOM (*Zero DOM Bloat*)**: Renderizado continuo a 60 FPS sin importar si el documento tiene 5 o 500 páginas.
+  - **Paginación Física A4 Multipage**: Simulación exacta de hojas físicas (`Página 1 de N`, `Página 2 de N`).
+  - **Selector de Motor Dual**: Conmutador instantáneo entre **Motor Canvas 2D** y **Modo Vista HTML**.
+  - **Zoom Vectorial**: Ajuste de escala al 75%, 100%, 125% y 150% con renderizado ultra nítido.
 - **⚡ 100% Client-Side con Rust + WebAssembly**:
-  - Todo el procesamiento de desempaquetado ZIP, análisis de OpenXML (`word/document.xml`, encabezados, pies de página), sustitución de texto y re-empaquetado ZIP se realiza en memoria en el navegador con Rust compilado a WASM.
+  - Todo el procesamiento de desempaquetado ZIP, análisis de OpenXML (`word/document.xml`), sustitución de texto y re-empaquetado ZIP se realiza en memoria en el navegador.
   - **Máxima privacidad y seguridad**: Ningún byte o documento sale del dispositivo del usuario.
-- **🔍 Búsqueda y Reemplazo Global**:
-  - Reemplazo exacto o insensitivo a mayúsculas/minúsculas.
-  - Soporte de expresiones regulares (**Regex**).
-  - Manejo inteligente de *split runs* (cuando Microsoft Word divide una palabra o frase en múltiples etiquetas `<w:r><w:t>`).
-  - Preserva intactos todos los estilos, tablas, imágenes, fuentes, encabezados y formato original.
-- **📝 Editor de Párrafos Individuales**:
-  - Extrae y lista todos los párrafos y encabezados con su índice y estilo.
-  - Permite editar cualquier párrafo directamente con guardado individual o por lote.
-  - Filtro de búsqueda en tiempo real de párrafos.
-- **🏷️ Sustitución de Variables y Plantillas (Batch Mode)**:
-  - Detección automática de variables estilo `{{NOMBRE_CLIENTE}}`, `{{FECHA}}`, `{{VALOR}}`.
-  - Tabla dinámica de variables para aplicar múltiples reemplazos en lote con un solo clic.
-- **📑 Vista Previa de Texto Completo**:
-  - Visualización del texto plano consolidado del documento con botón de copiado rápido al portapapeles.
-- **📦 Inspector de Estructura OpenXML**:
-  - Muestra todos los archivos internos dentro del contenedor ZIP (`word/document.xml`, `[Content_Types].xml`, `_rels`, etc.).
-- **🧪 Generador de Documento de Demostración (1-Click Demo)**:
-  - Generador de contratos `.docx` válido en memoria desde Rust para probar la aplicación inmediatamente sin necesidad de buscar un archivo local.
-- **💾 Exportación Instantánea**:
+- **📊 Soporte Completo de Tablas OpenXML**:
+  - Renderizado fiel de tablas con bordes, cabeceras y celdas interactivas editables en vivo.
+- **📐 Formato Enriquecido**:
+  - Alineaciones (Izquierda, Centro, Derecha, Justificado), colores de texto (`<w:color>`), negrita y cursiva.
+- **🖼️ Imágenes de Fondo y Marcas de Agua**:
+  - Soporte de color de página y marcas de agua de texto (*CONFIDENCIAL*, *BORRADOR*) o imágenes personalizadas con control de opacidad.
+- **🧪 Generador de Documento Demo (1-Click)**:
+  - Generador de contratos `.docx` válido en memoria desde Rust para probar la aplicación al instante.
+- **💾 Exportación Instantánea (`⌘S` / `Ctrl+S`)**:
   - Descarga directa del archivo `.docx` modificado listo para abrirse en Microsoft Word, Google Docs o LibreOffice.
 
 ---

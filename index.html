@@ -3,355 +3,459 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rust WebAssembly DOCX Text Modifier</title>
-  <meta name="description" content="Modificador de texto para documentos DOCX en el navegador usando Rust y WebAssembly. 100% privado, rápido y sin dependencias del servidor." />
+  <title>Rust WebAssembly DOCX High-Fidelity Visual Editor</title>
+  <meta name="description" content="Editor visual de alta fidelidad multi-página para documentos DOCX con renderizado GPU / Canvas 2D y edición por bloques de párrafos en WebAssembly." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=Caladea:ital,wght@0,400;0,700;1,400;1,700&family=Arimo:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&family=Tinos:ital,wght@0,400;0,700;1,400;1,700&family=Cousine:ital,wght@0,400;0,700;1,400;1,700&family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,600&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src_web/style.css" />
 </head>
 <body>
-  <div class="app-container">
-    <!-- Top Navigation / Header -->
-    <header class="app-header">
-      <div class="header-brand">
-        <div class="brand-logo">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="16" y1="13" x2="8" y2="13"></line>
-            <line x1="16" y1="17" x2="8" y2="17"></line>
-            <polyline points="10 9 9 9 8 9"></polyline>
-          </svg>
+  <div class="app-layout">
+    
+    <!-- Top Navigation Bar -->
+    <header class="navbar">
+      <div class="navbar-left">
+        <div class="brand">
+          <div class="brand-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-title">Rust DOCX <span class="badge-wasm">GPU / WASM</span></span>
+          </div>
         </div>
-        <div class="brand-info">
-          <h1>Rust DOCX <span class="badge-wasm">WASM</span></h1>
-          <p class="brand-subtitle">Modificación de texto DOCX directa en el navegador</p>
+
+        <div class="doc-status-indicator" id="doc-status-container" style="display: none;">
+          <span class="file-name" id="current-doc-title">documento.docx</span>
+          <span class="status-badge" id="sync-status">
+            <span class="status-dot"></span> Sincronizado
+          </span>
         </div>
       </div>
 
-      <div class="header-actions">
-        <button id="btn-sample-docx" class="btn btn-secondary" title="Cargar documento de ejemplo para probar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <!-- Quick Action Controls & Zoom -->
+      <div class="navbar-center" id="doc-toolbar" style="display: none;">
+        <!-- Zoom Controls -->
+        <div class="zoom-controls" id="canvas-zoom-controls">
+          <button id="btn-zoom-out" class="btn-icon btn-zoom" title="Reducir Zoom">-</button>
+          <span id="zoom-level-label" class="zoom-label">100%</span>
+          <button id="btn-zoom-in" class="btn-icon btn-zoom" title="Aumentar Zoom">+</button>
+        </div>
+
+        <div class="nav-divider"></div>
+
+        <button id="btn-toggle-find" class="tool-btn" title="Buscar y Reemplazar (Ctrl/Cmd + F)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <span>Buscar</span>
+          <kbd class="shortcut-kbd">⌘F</kbd>
+        </button>
+
+        <button id="btn-toggle-variables" class="tool-btn" title="Rellenar variables de plantilla {{...}}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 7V4h16v3M9 20h6M12 4v16"></path>
+          </svg>
+          <span>Variables</span>
+          <span id="vars-count-badge" class="badge-count" style="display: none;">0</span>
+        </button>
+      </div>
+
+      <div class="navbar-right">
+        <button id="btn-load-sample" class="btn btn-secondary btn-sm" title="Cargar documento de ejemplo con tablas y formato">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
             <path d="M12 18v-6"></path>
             <path d="m9 15 3 3 3-3"></path>
           </svg>
-          Documento Demo
+          <span>Demo</span>
         </button>
 
-        <label for="file-upload-input" class="btn btn-primary" title="Cargar archivo DOCX propio">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <label for="file-input" class="btn btn-secondary btn-sm" title="Subir archivo .DOCX de tu computadora">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
             <line x1="12" y1="3" x2="12" y2="15"></line>
           </svg>
-          Subir .DOCX
-          <input type="file" id="file-upload-input" accept=".docx" style="display:none;" />
+          <span>Abrir .DOCX</span>
+          <input type="file" id="file-input" accept=".docx" style="display:none;" />
         </label>
 
-        <button id="btn-download-docx" class="btn btn-success" disabled title="Descargar archivo DOCX modificado">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button id="btn-download" class="btn btn-primary btn-sm" disabled title="Descargar archivo DOCX con los cambios (Ctrl/Cmd + S)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          Descargar DOCX
+          <span>Descargar .DOCX</span>
         </button>
       </div>
     </header>
 
-    <!-- Main Workspace -->
-    <main class="main-content">
-      <!-- Upload Dropzone (shown when no file is loaded) -->
-      <section id="dropzone-section" class="dropzone-container">
-        <div class="dropzone-box" id="dropzone-box">
-          <div class="dropzone-icon-pulse">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+    <!-- Secondary Rich Formatting Ribbon (Word/Docs Style) -->
+    <nav class="formatting-ribbon" id="formatting-ribbon" style="display: none;">
+      <div class="ribbon-group">
+        <button id="btn-fmt-bold" class="ribbon-btn" title="Negrita (Ctrl/Cmd + B)">
+          <strong>B</strong>
+        </button>
+        <button id="btn-fmt-italic" class="ribbon-btn" title="Cursiva (Ctrl/Cmd + I)">
+          <em>I</em>
+        </button>
+        <button id="btn-fmt-underline" class="ribbon-btn" title="Subrayado (Ctrl/Cmd + U)">
+          <u>U</u>
+        </button>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Color Pickers -->
+      <div class="ribbon-group">
+        <div class="color-picker-wrapper" title="Color de Texto del Párrafo Seleccionado">
+          <span class="color-icon-label">A</span>
+          <input type="color" id="text-color-input" value="#1E3A8A" />
+          <div class="color-swatches">
+            <button class="color-swatch-dot" data-color="#0F172A" style="background: #0F172A;" title="Negro"></button>
+            <button class="color-swatch-dot" data-color="#1E3A8A" style="background: #1E3A8A;" title="Azul Marino"></button>
+            <button class="color-swatch-dot" data-color="#0284C7" style="background: #0284C7;" title="Cian"></button>
+            <button class="color-swatch-dot" data-color="#059669" style="background: #059669;" title="Verde"></button>
+            <button class="color-swatch-dot" data-color="#DC2626" style="background: #DC2626;" title="Rojo"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Alignments -->
+      <div class="ribbon-group">
+        <button id="btn-align-left" class="ribbon-btn active" data-align="left" title="Alinear Párrafo a la Izquierda">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="17" y1="10" x2="3" y2="10"></line>
+            <line x1="21" y1="6" x2="3" y2="6"></line>
+            <line x1="21" y1="14" x2="3" y2="14"></line>
+            <line x1="17" y1="18" x2="3" y2="18"></line>
+          </svg>
+        </button>
+        <button id="btn-align-center" class="ribbon-btn" data-align="center" title="Centrar Párrafo">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="10" x2="6" y2="10"></line>
+            <line x1="21" y1="6" x2="3" y2="6"></line>
+            <line x1="21" y1="14" x2="3" y2="14"></line>
+            <line x1="18" y1="18" x2="6" y2="18"></line>
+          </svg>
+        </button>
+        <button id="btn-align-right" class="ribbon-btn" data-align="right" title="Alinear Párrafo a la Derecha">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="21" y1="10" x2="7" y2="10"></line>
+            <line x1="21" y1="6" x2="3" y2="6"></line>
+            <line x1="21" y1="14" x2="3" y2="14"></line>
+            <line x1="21" y1="18" x2="7" y2="18"></line>
+          </svg>
+        </button>
+        <button id="btn-align-justify" class="ribbon-btn" data-align="both" title="Justificar Párrafo">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="21" y1="6" x2="3" y2="6"></line>
+            <line x1="21" y1="10" x2="3" y2="10"></line>
+            <line x1="21" y1="14" x2="3" y2="14"></line>
+            <line x1="21" y1="18" x2="3" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Table Tools -->
+      <div class="ribbon-group">
+        <button id="btn-insert-table" class="ribbon-btn" title="Insertar una nueva tabla en el documento">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="3" y1="9" x2="21" y2="9"></line>
+            <line x1="3" y1="15" x2="21" y2="15"></line>
+            <line x1="12" y1="3" x2="12" y2="21"></line>
+          </svg>
+          <span>Insertar Tabla</span>
+        </button>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Background & Watermark Tools -->
+      <div class="ribbon-group">
+        <button id="btn-toggle-background-modal" class="ribbon-btn" title="Configurar color o marca de agua en OpenXML">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <span>Fondo / Marca de Agua</span>
+        </button>
+      </div>
+
+      <div class="ribbon-divider"></div>
+      <div class="ribbon-hint-pill">
+        <span>💡 Haz clic en cualquier párrafo o celda para editarlo directamente</span>
+      </div>
+    </nav>
+
+    <!-- Floating Search & Replace Bar -->
+    <div id="search-replace-bar" class="floating-search-bar" style="display: none;">
+      <div class="search-inputs">
+        <div class="search-field">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="find-query" placeholder="Buscar texto..." />
+        </div>
+        <div class="search-field">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <input type="text" id="replace-query" placeholder="Reemplazar por..." />
+        </div>
+      </div>
+
+      <div class="search-options">
+        <label class="toggle-option" title="Coincidir mayúsculas y minúsculas">
+          <input type="checkbox" id="chk-case-sensitive" />
+          <span>Aa</span>
+        </label>
+        <label class="toggle-option" title="Usar Expresiones Regulares (Regex)">
+          <input type="checkbox" id="chk-regex" />
+          <span>.*</span>
+        </label>
+      </div>
+
+      <div class="search-actions">
+        <button id="btn-do-replace" class="btn btn-primary btn-xs">
+          Reemplazar Todo
+        </button>
+        <button id="btn-close-search" class="btn-icon" title="Cerrar (Esc)">
+          ✕
+        </button>
+      </div>
+    </div>
+
+    <!-- Template Variables Modal -->
+    <div id="variables-modal" class="modal-backdrop" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Rellenar Variables de Plantilla</h3>
+            <p class="modal-desc">Reemplaza automáticamente los marcadores como <code>{{VARIABLE}}</code> en todo el documento.</p>
+          </div>
+          <button id="btn-close-variables" class="btn-icon">✕</button>
+        </div>
+        
+        <div class="modal-body">
+          <div id="variables-list-container" class="variables-form-list"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-add-custom-var" class="btn btn-secondary btn-sm">+ Otra Variable</button>
+          <button id="btn-apply-all-variables" class="btn btn-primary btn-sm ml-auto">Aplicar al Documento</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Background & Watermark Modal -->
+    <div id="background-modal" class="modal-backdrop" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Fondo y Marca de Agua del Documento</h3>
+            <p class="modal-desc">Personaliza el color de la página o añade una imagen de fondo/marca de agua.</p>
+          </div>
+          <button id="btn-close-bg-modal" class="btn-icon">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="bg-config-grid">
+            <div class="config-section">
+              <label class="config-label">Color de Página (OpenXML)</label>
+              <div class="page-color-presets">
+                <button class="bg-preset-btn active" data-bg="#FFFFFF" style="background: #FFFFFF; color: #000;">Blanco</button>
+                <button class="bg-preset-btn" data-bg="#F8FAFC" style="background: #F8FAFC; color: #000;">Gris Claro</button>
+                <button class="bg-preset-btn" data-bg="#FFFBEB" style="background: #FFFBEB; color: #92400E;">Crema</button>
+                <button class="bg-preset-btn" data-bg="#F0F9FF" style="background: #F0F9FF; color: #0369A1;">Azul Pastel</button>
+              </div>
+            </div>
+
+            <div class="config-section">
+              <label class="config-label">Marca de Agua</label>
+              <div class="slider-group" id="watermark-controls">
+                <div class="slider-header">
+                  <span>Opacidad de Marca de Agua</span>
+                  <span id="opacity-val-label">20%</span>
+                </div>
+                <input type="range" id="watermark-opacity" min="5" max="100" value="20" class="range-slider" />
+              </div>
+
+              <div class="preset-watermark-tags" style="margin-top: 1rem;">
+                <span class="preset-tag-title">Marcas de Agua Rápidas:</span>
+                <button id="btn-wm-confidential" class="preset-tag-btn">🔒 CONFIDENCIAL</button>
+                <button id="btn-wm-draft" class="preset-tag-btn">📝 BORRADOR</button>
+                <button id="btn-wm-clear" class="preset-tag-btn danger">✕ Quitar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-save-bg-config" class="btn btn-primary btn-sm ml-auto">Aplicar Cambios</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Insert Table Dialog -->
+    <div id="table-modal" class="modal-backdrop" style="display: none;">
+      <div class="modal-card modal-sm">
+        <div class="modal-header">
+          <div>
+            <h3>Insertar Nueva Tabla</h3>
+            <p class="modal-desc">Define las dimensiones de la tabla a agregar.</p>
+          </div>
+          <button id="btn-close-table-modal" class="btn-icon">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="table-create-grid">
+            <div class="form-group">
+              <label>Número de Filas</label>
+              <input type="number" id="tbl-input-rows" min="1" max="50" value="3" class="input-number" />
+            </div>
+            <div class="form-group">
+              <label>Número de Columnas</label>
+              <input type="number" id="tbl-input-cols" min="1" max="10" value="3" class="input-number" />
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-create-table-confirm" class="btn btn-primary btn-sm ml-auto">Insertar Tabla</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Workspace Area -->
+    <main class="workspace-container" id="workspace-root">
+      
+      <!-- Welcome / Dropzone State (When no document is loaded) -->
+      <section id="empty-state-view" class="empty-state">
+        <div class="drop-card" id="drop-target">
+          <div class="drop-icon">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
               <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
               <path d="M12 12v9"></path>
               <path d="m8 17 4-4 4 4"></path>
             </svg>
           </div>
-          <h2>Arrastra o selecciona tu documento <span class="text-highlight">.DOCX</span></h2>
-          <p class="dropzone-desc">El procesamiento se realiza 100% en WebAssembly dentro de tu navegador. Ningún dato sale de tu dispositivo.</p>
+          <h2>Arrastra tu documento <span class="accent-text">.DOCX</span> aquí</h2>
+          <p class="drop-hint">Visualización multi-página fiel a Word con edición directa por párrafos y aceleración WebAssembly.</p>
           
-          <div class="dropzone-buttons">
-            <label for="file-upload-input-2" class="btn btn-primary btn-lg">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <div class="drop-cta-group">
+            <label for="file-input-welcome" class="btn btn-primary btn-lg">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
-              Seleccionar Archivo DOCX
-              <input type="file" id="file-upload-input-2" accept=".docx" style="display:none;" />
+              Seleccionar Archivo .DOCX
+              <input type="file" id="file-input-welcome" accept=".docx" style="display:none;" />
             </label>
-            <button id="btn-sample-docx-2" class="btn btn-outline btn-lg">
-              Probar con Documento de Demostración
+
+            <button id="btn-welcome-demo" class="btn btn-outline btn-lg">
+              Probar Demo Básico
             </button>
           </div>
 
-          <div class="feature-badges">
-            <span class="badge-feature">⚡ Compilado a WebAssembly en Rust</span>
-            <span class="badge-feature">🔒 Privacidad Total (Zero-Server)</span>
-            <span class="badge-feature">🎯 Conserva formato y estilos OpenXML</span>
-            <span class="badge-feature">⚡ Modificación instantánea de texto</span>
+          <div class="examples-showcase">
+            <span class="examples-showcase-title">📁 O prueba con los documentos reales de la carpeta examples:</span>
+            <div class="examples-grid">
+              <button class="example-card-btn" data-example="CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx" title="Cargar Contrato de Compraventa (11 Páginas)">
+                <div class="example-card-icon">📜</div>
+                <div class="example-card-info">
+                  <strong>Contrato Compraventa</strong>
+                  <span>11 páginas · Cláusulas legales, sangrías y tabuladores</span>
+                </div>
+              </button>
+
+              <button class="example-card-btn" data-example="costo-eficiencia-modelos-llm-rag.docx" title="Cargar Informe Técnico con 6 Tablas">
+                <div class="example-card-icon">📊</div>
+                <div class="example-card-info">
+                  <strong>Costo-Eficiencia LLM</strong>
+                  <span>6 tablas · Matrices, números alineados a la derecha</span>
+                </div>
+              </button>
+
+              <button class="example-card-btn" data-example="plantilla-ejemplo-vead.docx" title="Cargar Plantilla Certificado Landscape">
+                <div class="example-card-icon">🎓</div>
+                <div class="example-card-info">
+                  <strong>Plantilla Certificado</strong>
+                  <span>Horizontal (Landscape) · Variables {name}, {asset_name}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <div class="tech-pills">
+            <span class="tech-pill">⚡ Rust + WebAssembly</span>
+            <span class="tech-pill">📄 Vista Multi-Página Fiel a Word</span>
+            <span class="tech-pill">📝 Edición por Párrafos Completos</span>
+            <span class="tech-pill">📊 Soporte de Tablas OpenXML</span>
+            <span class="tech-pill">🎨 Alineación &amp; Colores</span>
+            <span class="tech-pill">🔒 100% Client-Side Privado</span>
           </div>
         </div>
       </section>
 
-      <!-- Document Dashboard (shown when file is loaded) -->
-      <section id="editor-dashboard" class="dashboard-section" style="display: none;">
-        <!-- Metadata bar -->
-        <div class="metadata-banner">
-          <div class="doc-info-item">
-            <span class="doc-label">Archivo Activo</span>
-            <span class="doc-value" id="meta-doc-name">documento.docx</span>
-          </div>
-          <div class="doc-info-divider"></div>
-          <div class="doc-info-item">
-            <span class="doc-label">Párrafos</span>
-            <span class="doc-value highlight-num" id="meta-paragraphs-count">0</span>
-          </div>
-          <div class="doc-info-item">
-            <span class="doc-label">Palabras</span>
-            <span class="doc-value highlight-num" id="meta-words-count">0</span>
-          </div>
-          <div class="doc-info-item">
-            <span class="doc-label">Caracteres</span>
-            <span class="doc-value highlight-num" id="meta-chars-count">0</span>
-          </div>
-          <div class="doc-info-item">
-            <span class="doc-label">Tamaño</span>
-            <span class="doc-value" id="meta-file-size">0 KB</span>
-          </div>
-          <div class="doc-info-item ml-auto">
-            <span class="status-pill status-ready">
-              <span class="status-dot"></span> Wasm Activo
-            </span>
-          </div>
+      <!-- Multi-Page High-Fidelity Canvas View -->
+      <section id="canvas-document-view" class="canvas-viewport-container" style="display: none;">
+        <div id="canvas-pages-wrapper" class="canvas-pages-wrapper">
+          <!-- Dynamic A4 Canvas pages injected here -->
         </div>
 
-        <!-- Notification Banner -->
-        <div id="toast-banner" class="toast-banner" style="display: none;">
-          <div class="toast-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-          </div>
-          <span id="toast-message">Operación realizada con éxito</span>
-        </div>
+        <!-- Global In-Place Seamless Paragraph Block Editor Overlay -->
+        <div id="canvas-paragraph-editor" class="canvas-paragraph-overlay" contenteditable="true" spellcheck="false" style="display: none;"></div>
 
-        <!-- Navigation Tabs -->
-        <div class="tabs-nav">
-          <button class="tab-btn active" data-tab="tab-find-replace">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            Buscar y Reemplazar
-          </button>
-          <button class="tab-btn" data-tab="tab-paragraph-editor">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 20h9"></path>
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-            </svg>
-            Editor de Párrafos
-          </button>
-          <button class="tab-btn" data-tab="tab-batch-variables">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 7V4h16v3M9 20h6M12 4v16"></path>
-            </svg>
-            Variables / Plantillas
-          </button>
-          <button class="tab-btn" data-tab="tab-full-text">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-            </svg>
-            Vista Previa de Texto
-          </button>
-          <button class="tab-btn" data-tab="tab-zip-structure">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="21 8 21 21 3 21 3 8"></polyline>
-              <rect x="1" y="3" width="22" height="5"></rect>
-              <line x1="10" y1="12" x2="14" y2="12"></line>
-            </svg>
-            Estructura OpenXML
-          </button>
-        </div>
-
-        <!-- Tab 1: Find and Replace -->
-        <div class="tab-panel active" id="tab-find-replace">
-          <div class="panel-card">
-            <div class="card-header">
-              <div>
-                <h3>Búsqueda y Reemplazo Global</h3>
-                <p class="card-desc">Sustituye cualquier texto en el documento principal, encabezados y pies de página preservando los estilos.</p>
-              </div>
-            </div>
-            <div class="card-body">
-              <div class="form-grid">
-                <div class="form-group">
-                  <label for="find-input">Texto a Buscar</label>
-                  <div class="input-with-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    </svg>
-                    <input type="text" id="find-input" placeholder="Ej: {{NOMBRE_CLIENTE}} o Empresa XYZ" />
-                  </div>
-                </div>
-
-                <div class="form-group">
-                  <label for="replace-input">Reemplazar Con</label>
-                  <div class="input-with-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                    <input type="text" id="replace-input" placeholder="Ej: Soluciones Tecnológicas S.A.S." />
-                  </div>
-                </div>
-              </div>
-
-              <div class="options-row">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="chk-match-case" />
-                  <span>Coincidir mayúsculas / minúsculas</span>
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" id="chk-use-regex" />
-                  <span>Modo Expresión Regular (Regex)</span>
-                </label>
-
-                <button id="btn-execute-replace" class="btn btn-primary ml-auto">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                  </svg>
-                  Reemplazar en Todo el Documento
-                </button>
-              </div>
-
-              <!-- History Log -->
-              <div class="history-box" id="replace-history-box" style="display: none;">
-                <h4>Historial de Reemplazos Recientes</h4>
-                <ul id="replace-history-list" class="history-list"></ul>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tab 2: Paragraph Editor -->
-        <div class="tab-panel" id="tab-paragraph-editor">
-          <div class="panel-card">
-            <div class="card-header flex-between">
-              <div>
-                <h3>Modificador de Párrafos Individuales</h3>
-                <p class="card-desc">Edita directamente el texto de cada sección o párrafo sin herramientas complejas.</p>
-              </div>
-              <div class="filter-controls">
-                <input type="text" id="paragraph-filter-input" placeholder="Filtrar párrafos..." class="input-sm" />
-                <button id="btn-save-all-paragraphs" class="btn btn-primary btn-sm">
-                  Guardar Todos los Párrafos
-                </button>
-              </div>
-            </div>
-            <div class="card-body">
-              <div id="paragraphs-container" class="paragraphs-list">
-                <!-- Injected dynamically via JS -->
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tab 3: Batch Variables / Templates -->
-        <div class="tab-panel" id="tab-batch-variables">
-          <div class="panel-card">
-            <div class="card-header flex-between">
-              <div>
-                <h3>Variables de Plantilla por Lotes</h3>
-                <p class="card-desc">Define múltiples variables (ej: <code>{{CAMPO}}</code> o <code>[VALOR]</code>) y aplícalas todas de una sola vez.</p>
-              </div>
-              <button id="btn-add-variable-row" class="btn btn-secondary btn-sm">
-                + Agregar Variable
-              </button>
-            </div>
-            <div class="card-body">
-              <div class="variables-table-container">
-                <table class="variables-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 40%;">Variable / Buscar</th>
-                      <th style="width: 45%;">Valor de Reemplazo</th>
-                      <th style="width: 15%; text-align: center;">Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody id="variables-table-body">
-                    <!-- Rows injected dynamically -->
-                  </tbody>
-                </table>
-              </div>
-
-              <div class="table-actions-row">
-                <button id="btn-detect-template-vars" class="btn btn-outline btn-sm">
-                  🔍 Auto-detectar variables {{...}}
-                </button>
-                <button id="btn-apply-batch-variables" class="btn btn-primary ml-auto">
-                  ⚡ Aplicar Todas las Variables
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tab 4: Full Text Preview -->
-        <div class="tab-panel" id="tab-full-text">
-          <div class="panel-card">
-            <div class="card-header flex-between">
-              <div>
-                <h3>Texto Extraído del Documento</h3>
-                <p class="card-desc">Texto plano consolidado del archivo DOCX.</p>
-              </div>
-              <button id="btn-copy-full-text" class="btn btn-secondary btn-sm">
-                Copiar Texto al Portapapeles
-              </button>
-            </div>
-            <div class="card-body">
-              <textarea id="full-text-preview" class="code-preview-area" readonly></textarea>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tab 5: OpenXML Structure -->
-        <div class="tab-panel" id="tab-zip-structure">
-          <div class="panel-card">
-            <div class="card-header">
-              <div>
-                <h3>Estructura Interna del Archivo DOCX</h3>
-                <p class="card-desc">Archivos XML y recursos dentro del paquete ZIP OpenXML.</p>
-              </div>
-            </div>
-            <div class="card-body">
-              <div id="zip-files-list" class="zip-files-grid">
-                <!-- Injected dynamically -->
-              </div>
-            </div>
-          </div>
-        </div>
-
+        <!-- Global In-Place Table Cell Editor Overlay -->
+        <div id="canvas-cell-editor" class="canvas-cell-overlay" contenteditable="true" spellcheck="false" style="display: none;"></div>
       </section>
+
     </main>
 
-    <!-- Footer -->
-    <footer class="app-footer">
-      <div class="footer-left">
-        <span>Construido con <strong class="text-rust">Rust</strong> + <strong class="text-wasm">WebAssembly</strong></span>
+    <!-- Document Info & Live Statistics Bar -->
+    <footer class="app-statusbar" id="app-statusbar" style="display: none;">
+      <div class="statusbar-left">
+        <span class="stat-pill"><strong id="stat-words">0</strong> palabras</span>
+        <span class="stat-pill"><strong id="stat-chars">0</strong> caracteres</span>
+        <span class="stat-pill"><strong id="stat-paragraphs">0</strong> párrafos</span>
+        <span class="stat-pill"><strong id="stat-tables">0</strong> tablas</span>
+        <span class="stat-pill"><strong id="stat-pages">1</strong> páginas</span>
+        <span class="stat-pill"><strong id="stat-format">Vertical</strong></span>
       </div>
-      <div class="footer-right">
-        <span>Sin almacenamiento en servidores • 100% Client-Side</span>
+      <div class="statusbar-right">
+        <span class="engine-badge">⚡ Motor Alta Fidelidad Multi-Página WASM Activo</span>
       </div>
     </footer>
+
+    <!-- Toast Banner -->
+    <div id="toast" class="toast-notification" style="display: none;">
+      <div class="toast-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      </div>
+      <span id="toast-text">Mensaje</span>
+    </div>
+
   </div>
 
   <script type="module" src="/src_web/main.js"></script>

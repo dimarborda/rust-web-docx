@@ -57,31 +57,55 @@ const DOC_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 const SAMPLE_DOCUMENT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:background w:color="FFFFFF"/>
   <w:body>
+    <!-- Document Title Centered with Deep Blue Color -->
     <w:p>
       <w:pPr>
         <w:pStyle w:val="Heading1"/>
+        <w:jc w:val="center"/>
       </w:pPr>
       <w:r>
         <w:rPr>
           <w:b/>
           <w:sz w:val="48"/>
-          <w:color w:val="2B579A"/>
+          <w:color w:val="1E3A8A"/>
         </w:rPr>
-        <w:t>Acuerdo de Servicios Profesionales</w:t>
+        <w:t>CONTRATO DE PRESTACIÓN DE SERVICIOS</w:t>
       </w:r>
     </w:p>
+    
+    <!-- Subtitle Centered with Italic Accent -->
     <w:p>
+      <w:pPr>
+        <w:jc w:val="center"/>
+      </w:pPr>
       <w:r>
         <w:rPr>
           <w:i/>
+          <w:color w:val="64748B"/>
         </w:rPr>
-        <w:t>Documento de prueba generado automáticamente con Rust y WebAssembly.</w:t>
+        <w:t>Documento generado y gestionado en tiempo real con Rust y WebAssembly</w:t>
       </w:r>
     </w:p>
+    
+    <!-- Introductory Paragraph with Template Variables -->
     <w:p>
+      <w:pPr>
+        <w:jc w:val="both"/>
+      </w:pPr>
       <w:r>
-        <w:t>Este contrato se celebra el día </w:t>
+        <w:t>En la ciudad de </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:color w:val="0284C7"/>
+        </w:rPr>
+        <w:t>{{CIUDAD}}</w:t>
+      </w:r>
+      <w:r>
+        <w:t>, a los </w:t>
       </w:r>
       <w:r>
         <w:rPr>
@@ -90,11 +114,12 @@ const SAMPLE_DOCUMENT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standa
         <w:t>{{FECHA_CONTRATO}}</w:t>
       </w:r>
       <w:r>
-        <w:t> entre </w:t>
+        <w:t>, se celebra el presente acuerdo entre </w:t>
       </w:r>
       <w:r>
         <w:rPr>
           <w:b/>
+          <w:color w:val="1E40AF"/>
         </w:rPr>
         <w:t>{{NOMBRE_CLIENTE}}</w:t>
       </w:r>
@@ -104,84 +129,199 @@ const SAMPLE_DOCUMENT_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standa
       <w:r>
         <w:rPr>
           <w:b/>
+          <w:color w:val="1E40AF"/>
         </w:rPr>
         <w:t>{{NOMBRE_PROVEEDOR}}</w:t>
       </w:r>
       <w:r>
-        <w:t> (en adelante "El Proveedor").</w:t>
-      </w:r>
-    </w:p>
-    <w:p>
-      <w:pPr>
-        <w:pStyle w:val="Heading2"/>
-      </w:pPr>
-      <w:r>
-        <w:rPr>
-          <w:b/>
-          <w:sz w:val="32"/>
-        </w:rPr>
-        <w:t>Cláusula Primera: Objeto del Contrato</w:t>
-      </w:r>
-    </w:p>
-    <w:p>
-      <w:r>
-        <w:t>El Proveedor se compromete a prestar servicios de desarrollo de software para el proyecto </w:t>
+        <w:t> (en adelante "El Proveedor"), para el desarrollo del proyecto </w:t>
       </w:r>
       <w:r>
         <w:rPr>
           <w:b/>
+          <w:color w:val="059669"/>
         </w:rPr>
         <w:t>{{NOMBRE_PROYECTO}}</w:t>
-      </w:r>
-      <w:r>
-        <w:t>, con un importe acordado de </w:t>
-      </w:r>
-      <w:r>
-        <w:rPr>
-          <w:b/>
-        </w:rPr>
-        <w:t>{{VALOR_PROYECTO}}</w:t>
       </w:r>
       <w:r>
         <w:t>.</w:t>
       </w:r>
     </w:p>
+
+    <!-- Heading 2 -->
     <w:p>
       <w:pPr>
         <w:pStyle w:val="Heading2"/>
+        <w:jc w:val="left"/>
       </w:pPr>
       <w:r>
         <w:rPr>
           <w:b/>
           <w:sz w:val="32"/>
+          <w:color w:val="1E3A8A"/>
         </w:rPr>
-        <w:t>Cláusula Segunda: Plazos y Entregas</w:t>
+        <w:t>Cláusula Primera: Hitos y Cronograma de Entregas</w:t>
       </w:r>
     </w:p>
+
+    <!-- Table of Deliverables -->
+    <w:tbl>
+      <w:tblPr>
+        <w:tblBorders>
+          <w:top w:val="single" w:sz="6" w:space="0" w:color="CBD5E1"/>
+          <w:left w:val="none"/>
+          <w:bottom w:val="single" w:sz="8" w:space="0" w:color="94A3B8"/>
+          <w:right w:val="none"/>
+          <w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>
+          <w:insideV w:val="none"/>
+        </w:tblBorders>
+      </w:tblPr>
+      
+      <!-- Table Header Row -->
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="left"/></w:pPr>
+            <w:r>
+              <w:rPr><w:b/><w:color w:val="1E3A8A"/></w:rPr>
+              <w:t>Hito / Fase</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="left"/></w:pPr>
+            <w:r>
+              <w:rPr><w:b/><w:color w:val="1E3A8A"/></w:rPr>
+              <w:t>Descripción del Entregable</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r>
+              <w:rPr><w:b/><w:color w:val="1E3A8A"/></w:rPr>
+              <w:t>Plazo Estimado</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="right"/></w:pPr>
+            <w:r>
+              <w:rPr><w:b/><w:color w:val="1E3A8A"/></w:rPr>
+              <w:t>Valor / Importe</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+
+      <!-- Row 1 -->
+      <w:tr>
+        <w:tc>
+          <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Fase 1: Arquitectura</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:r><w:t>Diseño de base de datos y especificación técnica</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Semana 2</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>$5,000,000 COP</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+
+      <!-- Row 2 -->
+      <w:tr>
+        <w:tc>
+          <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Fase 2: Motor Rust WASM</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:r><w:t>Implementación de algoritmos de procesamiento local</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Semana 6</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>$12,000,000 COP</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+
+      <!-- Row 3 -->
+      <w:tr>
+        <w:tc>
+          <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Fase 3: Interfaz &amp; QA</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:r><w:t>Editor visual directo y pruebas de compatibilidad</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>Semana 8</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc>
+          <w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="059669"/></w:rPr><w:t>{{VALOR_PROYECTO}}</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+
+    <!-- Heading 2 -->
     <w:p>
-      <w:r>
-        <w:t>Las entregas se realizarán en la ciudad de </w:t>
-      </w:r>
+      <w:pPr>
+        <w:pStyle w:val="Heading2"/>
+        <w:jc w:val="left"/>
+      </w:pPr>
       <w:r>
         <w:rPr>
           <w:b/>
+          <w:sz w:val="32"/>
+          <w:color w:val="1E3A8A"/>
         </w:rPr>
-        <w:t>{{CIUDAD}}</w:t>
-      </w:r>
-      <w:r>
-        <w:t> antes del plazo fijado.</w:t>
+        <w:t>Cláusula Segunda: Firmas de Conformidad</w:t>
       </w:r>
     </w:p>
-    <w:p>
-      <w:r>
-        <w:t>Firma del Cliente: _________________________</w:t>
-      </w:r>
-    </w:p>
-    <w:p>
-      <w:r>
-        <w:t>Firma del Proveedor: _______________________</w:t>
-      </w:r>
-    </w:p>
+
+    <!-- Signatures Table -->
+    <w:tbl>
+      <w:tblPr>
+        <w:tblBorders>
+          <w:top w:val="none"/><w:left w:val="none"/><w:bottom w:val="none"/><w:right w:val="none"/>
+          <w:insideH w:val="none"/><w:insideV w:val="none"/>
+        </w:tblBorders>
+      </w:tblPr>
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:t>__________________________________</w:t></w:r>
+          </w:p>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:rPr><w:b/></w:rPr><w:t>Por El Cliente</w:t></w:r>
+          </w:p>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:rPr><w:color w:val="64748B"/></w:rPr><w:t>{{NOMBRE_CLIENTE}}</w:t></w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:t>__________________________________</w:t></w:r>
+          </w:p>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:rPr><w:b/></w:rPr><w:t>Por El Proveedor</w:t></w:r>
+          </w:p>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/></w:pPr>
+            <w:r><w:rPr><w:color w:val="64748B"/></w:rPr><w:t>{{NOMBRE_PROVEEDOR}}</w:t></w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+
     <w:sectPr/>
   </w:body>
 </w:document>"#;
