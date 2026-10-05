@@ -7,7 +7,7 @@
 //! (highlight, rStyle, lang, ...), and everything that is not text — hyperlinks,
 //! fields, bookmarks, comments, drawings — stays exactly where it was.
 
-use crate::docx_parser::{parse_paragraph_with, tag_is, ParagraphInfo, RunInfo};
+use crate::docx_parser::{break_char, parse_paragraph_with, tag_is, ParagraphInfo, RunInfo, PAGE_BREAK};
 use crate::styles::StyleSheet;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -327,7 +327,8 @@ pub fn parse_paragraph_fragment(p_xml: &str, styles: &StyleSheet) -> ParagraphIn
 enum AtomKind {
     Text(String),
     Tab,
-    Break,
+    /// Line break ('\n') or page break (PAGE_BREAK)
+    Break(char),
     /// Zero-width content kept verbatim (drawing, fldChar, footnote reference, ...)
     Opaque,
 }
@@ -355,7 +356,7 @@ impl RunModel {
             match &atom.kind {
                 AtomKind::Text(t) => s.push_str(t),
                 AtomKind::Tab => s.push('\t'),
-                AtomKind::Break => s.push('\n'),
+                AtomKind::Break(c) => s.push(*c),
                 AtomKind::Opaque => {}
             }
         }
@@ -384,8 +385,13 @@ fn parse_run(tokens: &[Token], start: usize, end: usize) -> Result<RunModel, Str
                 Some(AtomKind::Text(text))
             } else if tag_is(name, "tab") {
                 Some(AtomKind::Tab)
-            } else if tag_is(name, "br") || tag_is(name, "cr") {
-                Some(AtomKind::Break)
+            } else if tag_is(name, "br") {
+                match &tokens[j].ev {
+                    Event::Start(e) | Event::Empty(e) => Some(AtomKind::Break(break_char(e))),
+                    _ => Some(AtomKind::Break('\n')),
+                }
+            } else if tag_is(name, "cr") {
+                Some(AtomKind::Break('\n'))
             } else {
                 Some(AtomKind::Opaque)
             };
@@ -525,7 +531,7 @@ pub fn edit_paragraph(
                 }
                 AtomKind::Text(t) => t.chars().map(|c| (c, None)).collect(),
                 AtomKind::Tab => vec![('\t', Some((atom.first, atom.last)))],
-                AtomKind::Break => vec![('\n', Some((atom.first, atom.last)))],
+                AtomKind::Break(c) => vec![(*c, Some((atom.first, atom.last)))],
             };
             for (ch, original) in chars {
                 if prefix == 0 && k == 0 && insert_owner == Some(r) {
@@ -858,6 +864,14 @@ fn write_items<'x>(out: &mut String, prefix: &str, group: &[Item], raw: impl Fn(
                 flush(out, &mut pending);
                 out.push_str(&format!("<{}/>", qualified(prefix, "br")));
             }
+            Item::Char { ch: PAGE_BREAK, .. } => {
+                flush(out, &mut pending);
+                out.push_str(&format!(
+                    "<{} {}=\"page\"/>",
+                    qualified(prefix, "br"),
+                    qualified(prefix, "type")
+                ));
+            }
             Item::Char { ch, .. } => pending.push(*ch),
             Item::Opaque { first, last } => {
                 flush(out, &mut pending);
@@ -958,9 +972,19 @@ mod tests {
     #[test]
     fn test_tabs_and_breaks_keep_original_markup() {
         let p = r#"<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br w:type="page"/><w:t>c</w:t></w:r></w:p>"#;
-        let out = edit_paragraph(p, &StyleSheet::default(), "a\tb\ncX", None, None).unwrap();
+        let text = format!("a\tb{}cX", PAGE_BREAK);
+        let out = edit_paragraph(p, &StyleSheet::default(), &text, None, None).unwrap();
         assert!(out.contains(r#"<w:tab/>"#) && out.contains(r#"<w:br w:type="page"/>"#), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "a\tb\ncX");
+        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, text);
+    }
+
+    #[test]
+    fn test_inserting_page_break_writes_typed_br() {
+        let p = r#"<w:p><w:r><w:t>uno dos</w:t></w:r></w:p>"#;
+        let text = format!("uno{}dos", PAGE_BREAK);
+        let out = edit_paragraph(p, &StyleSheet::default(), &text, None, None).unwrap();
+        assert!(out.contains(r#"<w:br w:type="page"/>"#), "{}", out);
+        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, text);
     }
 
     #[test]

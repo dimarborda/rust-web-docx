@@ -5,7 +5,7 @@ pub mod sample_generator;
 pub mod styles;
 
 use docx_parser::{DocxModifier, KeyValuePair, ParagraphUpdate};
-use layout_engine::LayoutEngine;
+use layout_engine::{CachedMeasurer, EstimateMeasurer, FontSpec, LayoutEngine, TextMeasurer};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -20,6 +20,27 @@ pub fn generate_sample_docx_wasm() -> Result<js_sys::Uint8Array, JsValue> {
     let bytes = sample_generator::generate_sample_docx()
         .map_err(|e| JsValue::from_str(&e))?;
     Ok(js_sys::Uint8Array::from(&bytes[..]))
+}
+
+/// Measures text through a JS callback `(text, family, sizePx, bold, italic) => width`
+struct JsMeasurer {
+    func: js_sys::Function,
+}
+
+impl TextMeasurer for JsMeasurer {
+    fn measure(&mut self, text: &str, font: &FontSpec) -> f64 {
+        let args = js_sys::Array::new();
+        args.push(&JsValue::from_str(text));
+        args.push(&JsValue::from_str(font.family));
+        args.push(&JsValue::from_f64(font.size));
+        args.push(&JsValue::from_bool(font.bold));
+        args.push(&JsValue::from_bool(font.italic));
+        self.func
+            .apply(&JsValue::NULL, &args)
+            .ok()
+            .and_then(|w| w.as_f64())
+            .unwrap_or_else(|| EstimateMeasurer.measure(text, font))
+    }
 }
 
 /// In-memory DOCX Session for interactive web editing
@@ -45,17 +66,23 @@ impl DocxSession {
         Ok(DocxSession { modifier })
     }
 
-    /// Computes multi-page layout and render commands for high-performance Canvas rendering
+    /// Computes multi-page layout and render commands for high-performance Canvas rendering.
+    /// `measure(text, family, sizePx, bold, italic) => width` should measure with the same
+    /// canvas font the renderer uses; without it, glyph widths are estimated.
     #[wasm_bindgen]
     pub fn compute_canvas_layout_json(
         &self,
         watermark_text: Option<String>,
         watermark_opacity: f64,
+        measure: Option<js_sys::Function>,
     ) -> Result<String, JsValue> {
         let elements = self.modifier.extract_elements().map_err(|e| JsValue::from_str(&e))?;
         let stats = self.modifier.get_statistics().map_err(|e| JsValue::from_str(&e))?;
-        let engine = LayoutEngine::new();
-        let layout = engine.compute_layout(
+        let mut measurer: Box<dyn TextMeasurer> = match measure {
+            Some(func) => Box::new(CachedMeasurer::new(JsMeasurer { func })),
+            None => Box::new(CachedMeasurer::new(EstimateMeasurer)),
+        };
+        let layout = LayoutEngine::new().compute_layout_with(
             &elements,
             &stats.background_color,
             &stats.page_setup,
@@ -63,6 +90,7 @@ impl DocxSession {
             stats.bg_image_data_url.as_deref(),
             watermark_text.as_deref(),
             watermark_opacity,
+            measurer.as_mut(),
         );
         serde_json::to_string(&layout).map_err(|e| JsValue::from_str(&e.to_string()))
     }

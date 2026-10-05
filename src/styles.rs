@@ -62,7 +62,17 @@ pub struct ParaProps {
     pub indent_first_line: Option<f64>,
     pub space_before: Option<f64>,
     pub space_after: Option<f64>,
+    /// "auto", "exact" or "atLeast"; set together with `line_spacing` / `line_pt`
+    pub line_rule: Option<String>,
+    /// Line spacing multiplier (lineRule auto)
     pub line_spacing: Option<f64>,
+    /// Fixed or minimum line height in points (lineRule exact / atLeast)
+    pub line_pt: Option<f64>,
+    pub keep_next: Option<bool>,
+    pub keep_lines: Option<bool>,
+    pub page_break_before: Option<bool>,
+    pub widow_control: Option<bool>,
+    pub contextual_spacing: Option<bool>,
     /// "0" explicitly removes numbering
     pub num_id: Option<String>,
     pub ilvl: Option<u32>,
@@ -76,7 +86,13 @@ impl ParaProps {
             ($($f:ident),*) => { $( if over.$f.is_some() { self.$f = over.$f.clone(); } )* };
         }
         take!(align, indent_left, indent_right, indent_first_line, space_before, space_after,
-              line_spacing, num_id, ilvl, outline_level);
+              num_id, ilvl, outline_level, keep_next, keep_lines, page_break_before, widow_control,
+              contextual_spacing);
+        if over.line_rule.is_some() {
+            self.line_rule = over.line_rule.clone();
+            self.line_spacing = over.line_spacing;
+            self.line_pt = over.line_pt;
+        }
         let b = &over.borders;
         take_border(&mut self.borders.top, &b.top);
         take_border(&mut self.borders.bottom, &b.bottom);
@@ -389,8 +405,26 @@ pub fn apply_ppr_element(ppr: &mut ParaProps, e: &BytesStart) {
             ppr.space_after = Some(v / 20.0);
         }
         if let Some(v) = num("line") {
-            ppr.line_spacing = Some(v / 240.0);
+            let rule = get_attr_value(e, "lineRule").unwrap_or_else(|| "auto".to_string());
+            if rule == "exact" || rule == "atLeast" {
+                ppr.line_spacing = None;
+                ppr.line_pt = Some(v / 20.0);
+            } else {
+                ppr.line_spacing = Some(v / 240.0);
+                ppr.line_pt = None;
+            }
+            ppr.line_rule = Some(rule);
         }
+    } else if tag_is(n, "keepNext") {
+        ppr.keep_next = Some(is_bool_element_true(e));
+    } else if tag_is(n, "keepLines") {
+        ppr.keep_lines = Some(is_bool_element_true(e));
+    } else if tag_is(n, "pageBreakBefore") {
+        ppr.page_break_before = Some(is_bool_element_true(e));
+    } else if tag_is(n, "widowControl") {
+        ppr.widow_control = Some(is_bool_element_true(e));
+    } else if tag_is(n, "contextualSpacing") {
+        ppr.contextual_spacing = Some(is_bool_element_true(e));
     } else if tag_is(n, "numId") {
         ppr.num_id = get_attr_value(e, "val");
     } else if tag_is(n, "ilvl") {

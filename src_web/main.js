@@ -219,7 +219,7 @@ function renderCanvasPagesFromWasm() {
     const wmText = currentWatermark.type === 'preset' ? currentWatermark.text : null;
     const wmOpacity = currentWatermark.opacity || 0.2;
 
-    const layoutJson = currentSession.compute_canvas_layout_json(wmText, wmOpacity);
+    const layoutJson = currentSession.compute_canvas_layout_json(wmText, wmOpacity, measureTextForLayout);
     canvasPagesLayout = JSON.parse(layoutJson);
 
     statPages.textContent = canvasPagesLayout.total_pages;
@@ -269,10 +269,46 @@ function renderCanvasPagesFromWasm() {
       canvasPagesWrapper.appendChild(pageCard);
     });
 
+    ensureLayoutFonts(canvasPagesLayout);
+
   } catch (err) {
     console.error('Error rendering Canvas layout:', err);
     showToast('Error al renderizar páginas: ' + err, true);
   }
+}
+
+// Rust lays out text with these measurements, so line breaks match what the canvas draws
+const layoutMeasureCtx = document.createElement('canvas').getContext('2d');
+
+function measureTextForLayout(text, family, size, bold, italic) {
+  layoutMeasureCtx.font = buildCanvasFont(bold ? '700' : '400', italic ? 'italic' : 'normal', size, family);
+  return layoutMeasureCtx.measureText(text).width;
+}
+
+// Web fonts (Carlito, Arimo, Tinos...) load lazily: request every face the layout uses and
+// lay out again once they arrive, since measurements taken with a fallback font are wrong
+const requestedFontFaces = new Set();
+
+function ensureLayoutFonts(layout) {
+  const faces = new Set();
+  layout.pages.forEach(page => page.items.forEach(item => {
+    if (item.type === 'text' && item.runs) {
+      item.runs.forEach(run => faces.add(
+        buildCanvasFont(run.bold ? '700' : '400', run.italic ? 'italic' : 'normal', 16, run.font_family || item.font_family)
+      ));
+    } else if (item.type === 'table_cell') {
+      faces.add(buildCanvasFont(item.font_weight, 'normal', 16, item.font_family));
+    }
+  }));
+
+  const pending = [...faces].filter(face => !requestedFontFaces.has(face));
+  if (pending.length === 0) return;
+  pending.forEach(face => requestedFontFaces.add(face));
+
+  Promise.all(pending.map(face => document.fonts.load(face).catch(() => [])))
+    .then(results => {
+      if (results.some(loaded => loaded.length > 0)) renderCanvasPagesFromWasm();
+    });
 }
 
 function formatFontFamily(family) {
@@ -408,8 +444,12 @@ function drawCanvasPageItems(ctx, items) {
           let spaceCount = 0;
 
           item.runs.forEach(run => {
-            const weight = run.bold ? '700' : (item.font_weight || '400');
-            const style = run.italic ? 'italic' : (item.font_style || 'normal');
+            if (run.text === '\t') {
+              naturalWidth += run.width || 0;
+              return;
+            }
+            const weight = run.bold ? '700' : '400';
+            const style = run.italic ? 'italic' : 'normal';
             const fontSize = run.font_size || item.font_size || 14.66;
             const fontFamily = run.font_family || item.font_family || 'Calibri, sans-serif';
             ctx.font = buildCanvasFont(weight, style, fontSize, fontFamily);
@@ -428,8 +468,13 @@ function drawCanvasPageItems(ctx, items) {
         }
 
         item.runs.forEach(run => {
-          const weight = run.bold ? '700' : (item.font_weight || '400');
-          const style = run.italic ? 'italic' : (item.font_style || 'normal');
+          // Tabs were resolved to stop positions by the layout engine
+          if (run.text === '\t') {
+            curX += run.width || 0;
+            return;
+          }
+          const weight = run.bold ? '700' : '400';
+          const style = run.italic ? 'italic' : 'normal';
           const fontSize = run.font_size || item.font_size || 14.66;
           const fontFamily = run.font_family || item.font_family || 'Calibri, sans-serif';
           const runColor = formatCssColor(run.color || item.color, '#1E293B');

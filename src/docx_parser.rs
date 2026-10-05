@@ -71,6 +71,31 @@ pub struct ParagraphInfo {
     /// Rendered list number/bullet ("1.", "a)", "•") with its formatting
     #[serde(default)]
     pub list_label: Option<RunInfo>,
+    /// Fixed line height in points (lineRule exact)
+    #[serde(default)]
+    pub line_exact: Option<f64>,
+    /// Minimum line height in points (lineRule atLeast)
+    #[serde(default)]
+    pub line_at_least: Option<f64>,
+    #[serde(default)]
+    pub keep_next: bool,
+    #[serde(default)]
+    pub keep_lines: bool,
+    #[serde(default)]
+    pub page_break_before: bool,
+    #[serde(default)]
+    pub widow_control: bool,
+    #[serde(default)]
+    pub contextual_spacing: bool,
+    /// Spacing comes from the document (styles/direct) rather than layout heuristics
+    #[serde(default)]
+    pub spacing_resolved: bool,
+    /// The next section starts on a new page after this paragraph
+    #[serde(default)]
+    pub section_break_after: bool,
+    /// This paragraph ends a section (`w:sectPr` in its properties)
+    #[serde(skip)]
+    pub ends_section: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1105,7 +1130,58 @@ pub fn parse_document_elements_with(xml: &str, styles: &StyleSheet) -> Vec<Docum
         buf.clear();
     }
 
+    mark_section_breaks(xml, &mut elements);
     elements
+}
+
+/// A section's `w:type` says how *that* section starts, so the break after a section-ending
+/// paragraph is decided by the type of the following section (default: next page)
+fn mark_section_breaks(xml: &str, elements: &mut [DocumentElement]) {
+    let types = section_types(xml);
+    let mut section = 0;
+    for el in elements.iter_mut() {
+        if let DocumentElement::Paragraph(p) = el {
+            if p.ends_section {
+                section += 1;
+                let next = types.get(section).map(String::as_str).unwrap_or("nextPage");
+                p.section_break_after = next != "continuous" && next != "nextColumn";
+            }
+        }
+    }
+}
+
+/// `w:type` of every `w:sectPr` in document order (paragraph-level ones, then the body one)
+fn section_types(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut types = Vec::new();
+    let mut in_sect = false;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if tag_is(e.name().as_ref(), "sectPr") => {
+                in_sect = true;
+                types.push("nextPage".to_string());
+            }
+            Ok(Event::Empty(ref e)) if tag_is(e.name().as_ref(), "sectPr") => {
+                types.push("nextPage".to_string());
+            }
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if in_sect && tag_is(e.name().as_ref(), "type") => {
+                if let (Some(last), Some(v)) = (types.last_mut(), get_attr_value(e, "val")) {
+                    *last = v;
+                }
+            }
+            Ok(Event::End(ref e)) if tag_is(e.name().as_ref(), "sectPr") => in_sect = false,
+            // Tracked section changes hold the old properties
+            Ok(Event::Start(ref e)) if tag_is(e.name().as_ref(), "sectPrChange") => {
+                let end = e.name().as_ref().to_vec();
+                let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    types
 }
 
 /// Parses a paragraph without a style sheet (direct formatting only)
@@ -1125,6 +1201,7 @@ pub fn parse_paragraph_with(
     let mut direct_ppr = ParaProps::default();
     let mut mark_rpr = RunProps::default();
     let mut raw_runs: Vec<RawRun> = Vec::new();
+    let mut ends_section = false;
 
     let mut in_ppr = false;
     let mut in_ppr_rpr = false;
@@ -1210,11 +1287,20 @@ pub fn parse_paragraph_with(
                 in_t = is_start;
             } else if tag_is(n, "tab") {
                 run.text.push('\t');
-            } else if tag_is(n, "br") || tag_is(n, "cr") {
+            } else if tag_is(n, "br") {
+                run.text.push(break_char(&e));
+            } else if tag_is(n, "cr") {
                 run.text.push('\n');
             }
         } else if in_ppr {
-            if in_ppr_rpr {
+            if tag_is(n, "sectPr") {
+                ends_section = true;
+                if is_start {
+                    let end_name = n.to_vec();
+                    let mut skip_buf = Vec::new();
+                    let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
+                }
+            } else if in_ppr_rpr {
                 apply_rpr_element(&mut mark_rpr, &e, &styles.theme);
             } else if in_pbdr {
                 apply_border_element(&mut direct_ppr.borders, &e);
@@ -1236,8 +1322,22 @@ pub fn parse_paragraph_with(
         buf.clear();
     }
 
-    resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs)
+    let mut info = resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs);
+    info.ends_section = ends_section;
+    info
 }
+
+/// Character used in paragraph text for a `w:br`: form feed for page breaks, newline otherwise
+pub(crate) fn break_char(e: &BytesStart) -> char {
+    if get_attr_value(e, "type").as_deref() == Some("page") {
+        PAGE_BREAK
+    } else {
+        '\n'
+    }
+}
+
+/// Paragraph text marker for a manual page break (`<w:br w:type="page"/>`)
+pub const PAGE_BREAK: char = '\u{000C}';
 
 /// A run as written in the XML, before the style cascade is applied
 #[derive(Default)]
@@ -1358,6 +1458,17 @@ fn resolve_paragraph(
         borders: ppr.borders.clone(),
         runs,
         list_label,
+        line_exact: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("exact")),
+        line_at_least: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("atLeast")),
+        keep_next: ppr.keep_next.unwrap_or(false),
+        keep_lines: ppr.keep_lines.unwrap_or(false),
+        page_break_before: ppr.page_break_before.unwrap_or(false),
+        // Omitted widowControl means "on" (Word writes w:val="0" to disable it)
+        widow_control: ppr.widow_control.unwrap_or(true),
+        contextual_spacing: ppr.contextual_spacing.unwrap_or(false),
+        spacing_resolved: styles.loaded || ppr.space_before.is_some() || ppr.space_after.is_some(),
+        section_break_after: false,
+        ends_section: false,
     }
 }
 
