@@ -7,7 +7,8 @@
 //! (highlight, rStyle, lang, ...), and everything that is not text — hyperlinks,
 //! fields, bookmarks, comments, drawings — stays exactly where it was.
 
-use crate::docx_parser::{parse_paragraph_from_reader, tag_is, ParagraphInfo, RunInfo};
+use crate::docx_parser::{parse_paragraph_with, tag_is, ParagraphInfo, RunInfo};
+use crate::styles::StyleSheet;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::ops::Range;
@@ -310,11 +311,11 @@ fn cell_paragraphs(tokens: &[Token], tc_start: usize, tc_end: usize) -> Result<V
 }
 
 /// Parses a single `<w:p>` fragment with the regular paragraph parser
-pub fn parse_paragraph_fragment(p_xml: &str) -> ParagraphInfo {
+pub fn parse_paragraph_fragment(p_xml: &str, styles: &StyleSheet) -> ParagraphInfo {
     let mut reader = Reader::from_str(p_xml);
     reader.config_mut().trim_text(false);
     match reader.read_event() {
-        Ok(Event::Start(_)) => parse_paragraph_from_reader(&mut reader, 0),
+        Ok(Event::Start(_)) => parse_paragraph_with(&mut reader, 0, styles, None),
         _ => ParagraphInfo {
             style: "Normal".to_string(),
             align: "left".to_string(),
@@ -408,6 +409,7 @@ enum Item {
 /// to the paragraph fragment `p_xml`, returning the edited fragment.
 pub fn edit_paragraph(
     p_xml: &str,
+    styles: &StyleSheet,
     new_text: &str,
     formats: Option<&[FormatTarget]>,
     align: Option<&str>,
@@ -450,7 +452,7 @@ pub fn edit_paragraph(
     }
 
     // 2. Attach the parser's view of each run; both must agree on the text
-    let info = parse_paragraph_fragment(p_xml);
+    let info = parse_paragraph_fragment(p_xml, styles);
     let mut parsed_runs = info.runs.iter();
     for run in runs.iter_mut() {
         let text = run.text();
@@ -888,7 +890,7 @@ mod tests {
     #[test]
     fn test_noop_edit_is_byte_identical() {
         let p = r#"<w:p w:rsidR="00A1"><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>Hola</w:t></w:r></w:p>"#;
-        assert_eq!(edit_paragraph(p, "Hola", None, Some("center")).unwrap(), p);
+        assert_eq!(edit_paragraph(p, &StyleSheet::default(), "Hola", None, Some("center")).unwrap(), p);
     }
 
     #[test]
@@ -898,18 +900,18 @@ mod tests {
         let p = format!(
             r#"<w:p><w:r><w:rPr><w:highlight w:val="yellow"/><w:lang w:val="es-CO"/></w:rPr><w:t xml:space="preserve">Hola </w:t></w:r>{link}{tail}</w:p>"#
         );
-        let out = edit_paragraph(&p, &plain("Hola mundo enlace final"), None, None).unwrap();
+        let out = edit_paragraph(&p, &StyleSheet::default(), &plain("Hola mundo enlace final"), None, None).unwrap();
         assert!(out.contains(r#"<w:rPr><w:highlight w:val="yellow"/><w:lang w:val="es-CO"/></w:rPr><w:t xml:space="preserve">Hola mundo </w:t>"#), "{}", out);
         assert!(out.contains(link), "hyperlink must be untouched: {}", out);
         assert!(out.contains(tail), "untouched runs are copied verbatim: {}", out);
-        assert_eq!(parse_paragraph_fragment(&out).text, "Hola mundo enlace final");
+        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "Hola mundo enlace final");
     }
 
     #[test]
     fn test_drawing_keeps_its_position() {
         let drawing = r#"<w:r><w:drawing><wp:inline><a:graphic/></wp:inline></w:drawing></w:r>"#;
         let p = format!(r#"<w:p><w:r><w:t>Antes</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#);
-        let out = edit_paragraph(&p, "AhoraDespués", None, None).unwrap();
+        let out = edit_paragraph(&p, &StyleSheet::default(), "AhoraDespués", None, None).unwrap();
         let expected = format!(r#"<w:p><w:r><w:t xml:space="preserve">Ahora</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#);
         assert_eq!(out, expected);
     }
@@ -918,9 +920,9 @@ mod tests {
     fn test_bold_one_word_splits_run_and_keeps_rpr_order() {
         let p = r#"<w:p><w:r><w:rPr><w:highlight w:val="cyan"/><w:lang w:val="es-ES"/></w:rPr><w:t>uno dos tres</w:t></w:r></w:p>"#;
         let (text, formats) = formats_for(&[("uno ", false), ("dos", true), (" tres", false)]);
-        let out = edit_paragraph(p, &text, Some(&formats), None).unwrap();
+        let out = edit_paragraph(p, &StyleSheet::default(), &text, Some(&formats), None).unwrap();
         assert!(out.contains(r#"<w:rPr><w:b/><w:highlight w:val="cyan"/><w:lang w:val="es-ES"/></w:rPr><w:t xml:space="preserve">dos</w:t>"#), "{}", out);
-        let info = parse_paragraph_fragment(&out);
+        let info = parse_paragraph_fragment(&out, &StyleSheet::default());
         let bold: Vec<(&str, bool)> = info.runs.iter().map(|r| (r.text.as_str(), r.bold)).collect();
         assert_eq!(bold, vec![("uno ", false), ("dos", true), (" tres", false)]);
     }
@@ -930,7 +932,7 @@ mod tests {
         let p = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="28"/></w:rPr><w:t>Título</w:t></w:r></w:p>"#;
         let run = RunInfo { text: "Título nuevo".into(), ..Default::default() };
         let formats = vec![FormatTarget::from_run(&run); run.text.chars().count()];
-        let out = edit_paragraph(p, &run.text, Some(&formats), None).unwrap();
+        let out = edit_paragraph(p, &StyleSheet::default(), &run.text, Some(&formats), None).unwrap();
         assert!(out.contains(r#"<w:sz w:val="28"/>"#) && out.contains("Georgia"), "{}", out);
     }
 
@@ -938,16 +940,16 @@ mod tests {
     fn test_fields_survive_edits_outside_them() {
         let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
         let p = format!(r#"<w:p><w:r><w:t xml:space="preserve">Página </w:t></w:r>{field}</w:p>"#);
-        let out = edit_paragraph(&p, "Pág. 3", None, None).unwrap();
+        let out = edit_paragraph(&p, &StyleSheet::default(), "Pág. 3", None, None).unwrap();
         assert!(out.contains(field), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out).text, "Pág. 3");
+        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "Pág. 3");
     }
 
     #[test]
     fn test_delete_across_runs() {
         let p = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>AB</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>CD</w:t></w:r></w:p>"#;
-        let out = edit_paragraph(p, "AD", None, None).unwrap();
-        let runs = parse_paragraph_fragment(&out).runs;
+        let out = edit_paragraph(p, &StyleSheet::default(), "AD", None, None).unwrap();
+        let runs = parse_paragraph_fragment(&out, &StyleSheet::default()).runs;
         assert_eq!(runs.len(), 2);
         assert_eq!((runs[0].text.as_str(), runs[0].bold), ("A", true));
         assert_eq!((runs[1].text.as_str(), runs[1].italic), ("D", true));
@@ -956,25 +958,25 @@ mod tests {
     #[test]
     fn test_tabs_and_breaks_keep_original_markup() {
         let p = r#"<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br w:type="page"/><w:t>c</w:t></w:r></w:p>"#;
-        let out = edit_paragraph(p, "a\tb\ncX", None, None).unwrap();
+        let out = edit_paragraph(p, &StyleSheet::default(), "a\tb\ncX", None, None).unwrap();
         assert!(out.contains(r#"<w:tab/>"#) && out.contains(r#"<w:br w:type="page"/>"#), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out).text, "a\tb\ncX");
+        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "a\tb\ncX");
     }
 
     #[test]
     fn test_typing_into_empty_paragraph_uses_paragraph_mark_format() {
         let p = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:rPr><w:color w:val="1F6F6B"/></w:rPr></w:pPr></w:p>"#;
-        let out = edit_paragraph(p, "Nuevo", None, None).unwrap();
+        let out = edit_paragraph(p, &StyleSheet::default(), "Nuevo", None, None).unwrap();
         assert!(out.contains(r#"<w:r><w:rPr><w:color w:val="1F6F6B"/></w:rPr><w:t xml:space="preserve">Nuevo</w:t></w:r></w:p>"#), "{}", out);
 
-        let out = edit_paragraph("<w:p/>", "x", None, Some("center")).unwrap();
+        let out = edit_paragraph("<w:p/>", &StyleSheet::default(), "x", None, Some("center")).unwrap();
         assert_eq!(out, r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">x</w:t></w:r></w:p>"#);
     }
 
     #[test]
     fn test_alignment_inserted_in_schema_order() {
         let p = r#"<w:p><w:pPr><w:pStyle w:val="Normal"/><w:spacing w:after="120"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#;
-        let out = edit_paragraph(p, "x", None, Some("both")).unwrap();
+        let out = edit_paragraph(p, &StyleSheet::default(), "x", None, Some("both")).unwrap();
         assert!(out.contains(r#"<w:spacing w:after="120"/><w:jc w:val="both"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>x</w:t></w:r>"#), "{}", out);
     }
 
@@ -985,7 +987,33 @@ mod tests {
         let parsed = crate::docx_parser::parse_document_elements(xml);
         assert_eq!(ranges.len(), 3);
         assert_eq!(parsed.len(), 3);
-        assert_eq!(parse_paragraph_fragment(&xml[ranges[0].clone()]).text, "uno");
-        assert_eq!(parse_paragraph_fragment(&xml[ranges[2].clone()]).text, "tres");
+        assert_eq!(parse_paragraph_fragment(&xml[ranges[0].clone()], &StyleSheet::default()).text, "uno");
+        assert_eq!(parse_paragraph_fragment(&xml[ranges[2].clone()], &StyleSheet::default()).text, "tres");
+    }
+
+    #[test]
+    fn test_edits_compare_against_style_resolved_formatting() {
+        let styles = StyleSheet::load(
+            Some(r#"<w:styles><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:color w:val="2F5496"/></w:rPr></w:style></w:styles>"#),
+            None,
+            None,
+        );
+        let p = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#;
+        let info = parse_paragraph_fragment(p, &styles);
+        assert!(info.runs[0].bold, "bold comes from the style");
+        assert_eq!(info.runs[0].color, "2F5496");
+
+        // The editor sends back what it was shown: nothing to write
+        let same: Vec<FormatTarget> = vec![FormatTarget::from_run(&info.runs[0]); 6];
+        assert_eq!(edit_paragraph(p, &styles, "Título", Some(&same), None).unwrap(), p);
+
+        // Turning bold off must override the style explicitly
+        let mut plain = info.runs[0].clone();
+        plain.bold = false;
+        let formats = vec![FormatTarget::from_run(&plain); 6];
+        let out = edit_paragraph(p, &styles, "Título", Some(&formats), None).unwrap();
+        assert!(out.contains(r#"<w:rPr><w:b w:val="0"/></w:rPr>"#), "{}", out);
+        assert!(!parse_paragraph_fragment(&out, &styles).runs[0].bold);
     }
 }
+

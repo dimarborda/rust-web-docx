@@ -2,6 +2,7 @@ pub mod docx_parser;
 pub mod layout_engine;
 pub mod paragraph_edit;
 pub mod sample_generator;
+pub mod styles;
 
 use docx_parser::{DocxModifier, KeyValuePair, ParagraphUpdate};
 use layout_engine::LayoutEngine;

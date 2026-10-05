@@ -10,6 +10,10 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::styles::{
+    apply_border_element, apply_ppr_element, apply_rpr_element, is_symbol_font, NumberingCounters, ParaProps,
+    RunProps, StyleSheet,
+};
 use crate::paragraph_edit::{
     body_paragraph_ranges, edit_paragraph, parse_paragraph_fragment, table_cell_paragraph_ranges,
     FormatTarget,
@@ -64,6 +68,9 @@ pub struct ParagraphInfo {
     pub borders: ParagraphBorders,
     #[serde(default)]
     pub runs: Vec<RunInfo>,
+    /// Rendered list number/bullet ("1.", "a)", "•") with its formatting
+    #[serde(default)]
+    pub list_label: Option<RunInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -199,6 +206,7 @@ pub struct DocxModifier {
     background_color: String,
     background_image: Option<Vec<u8>>,
     background_image_ext: String,
+    styles: StyleSheet,
 }
 
 impl DocxModifier {
@@ -246,7 +254,16 @@ impl DocxModifier {
         let bg_image = None;
         let bg_image_ext = "png".to_string();
 
+        let part = |path: &str| files.get(path).and_then(|b| std::str::from_utf8(b).ok());
+        let theme_path = files.keys().filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml")).min().cloned();
+        let styles = StyleSheet::load(
+            part("word/styles.xml"),
+            theme_path.as_deref().and_then(part),
+            part("word/numbering.xml"),
+        );
+
         Ok(DocxModifier {
+            styles,
             files,
             original_order,
             original_size,
@@ -259,8 +276,7 @@ impl DocxModifier {
     /// Extracts list of document elements (paragraphs and tables) in sequential order
     pub fn extract_elements(&self) -> Result<Vec<DocumentElement>, String> {
         let doc_xml = self.get_file_string("word/document.xml")?;
-        let elements = parse_document_elements(&doc_xml);
-        Ok(elements)
+        Ok(parse_document_elements_with(&doc_xml, &self.styles))
     }
 
     /// Extracts list of paragraphs from word/document.xml
@@ -442,7 +458,7 @@ impl DocxModifier {
                 .get(edit.index)
                 .cloned()
                 .ok_or_else(|| format!("No existe el párrafo {}.", edit.index))?;
-            let edited = edit_paragraph(&xml[range.clone()], edit.text, edit.formats.as_deref(), edit.align)?;
+            let edited = edit_paragraph(&xml[range.clone()], &self.styles, edit.text, edit.formats.as_deref(), edit.align)?;
             xml.replace_range(range, &edited);
         }
 
@@ -463,11 +479,11 @@ impl DocxModifier {
         let ranges = table_cell_paragraph_ranges(&xml, table_index, row, col)?;
         let old_lens: Vec<usize> = ranges
             .iter()
-            .map(|r| parse_paragraph_fragment(&xml[r.clone()]).text.chars().count())
+            .map(|r| parse_paragraph_fragment(&xml[r.clone()], &self.styles).text.chars().count())
             .collect();
         let old: Vec<char> = ranges
             .iter()
-            .map(|r| parse_paragraph_fragment(&xml[r.clone()]).text)
+            .map(|r| parse_paragraph_fragment(&xml[r.clone()], &self.styles).text)
             .collect::<Vec<_>>()
             .join("\n")
             .chars()
@@ -503,7 +519,7 @@ impl DocxModifier {
         for (k, &(p, start)) in kept.iter().enumerate() {
             let end = kept.get(k + 1).map(|&(_, s)| s - 1).unwrap_or(new.len());
             let slice: String = new[start..end].iter().collect();
-            edits.push((ranges[p].clone(), edit_paragraph(&xml[ranges[p].clone()], &slice, None, None)?));
+            edits.push((ranges[p].clone(), edit_paragraph(&xml[ranges[p].clone()], &self.styles, &slice, None, None)?));
         }
         // Paragraphs whose boundary fell inside the edited region are merged into the previous one
         for (p, range) in ranges.iter().enumerate() {
@@ -980,7 +996,7 @@ pub(crate) fn tag_is(tag_bytes: &[u8], name: &str) -> bool {
     }
 }
 
-fn get_attr_value(e: &BytesStart, local_name: &str) -> Option<String> {
+pub(crate) fn get_attr_value(e: &BytesStart, local_name: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
         let key = attr.key.as_ref();
         let key_str = std::str::from_utf8(key).unwrap_or("");
@@ -995,7 +1011,7 @@ fn get_attr_i64(e: &BytesStart, local_name: &str) -> Option<i64> {
     get_attr_value(e, local_name).and_then(|v| v.parse::<i64>().ok())
 }
 
-fn is_bool_element_true(e: &BytesStart) -> bool {
+pub(crate) fn is_bool_element_true(e: &BytesStart) -> bool {
     if let Some(val) = get_attr_value(e, "val") {
         let v = val.to_lowercase();
         !(v == "0" || v == "false" || v == "off" || v == "none")
@@ -1030,6 +1046,12 @@ fn extract_bg_color_quick_xml(xml: &str) -> String {
 
 /// Parses `<w:body>` child elements (`<w:p>` and `<w:tbl>`) in sequential document order with quick-xml
 pub fn parse_document_elements(xml: &str) -> Vec<DocumentElement> {
+    parse_document_elements_with(xml, &StyleSheet::default())
+}
+
+/// Like `parse_document_elements`, resolving styles and list numbering
+pub fn parse_document_elements_with(xml: &str, styles: &StyleSheet) -> Vec<DocumentElement> {
+    let mut counters = NumberingCounters::default();
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
 
@@ -1047,23 +1069,27 @@ pub fn parse_document_elements(xml: &str) -> Vec<DocumentElement> {
                 if tag_is(name.as_ref(), "body") {
                     in_body = true;
                 } else if in_body && tag_is(name.as_ref(), "p") {
-                    let p = parse_paragraph_from_reader(&mut reader, p_index);
+                    let p = parse_paragraph_with(&mut reader, p_index, styles, Some(&mut counters));
                     elements.push(DocumentElement::Paragraph(p));
                     p_index += 1;
                 } else if in_body && tag_is(name.as_ref(), "tbl") {
-                    let tbl = parse_table_from_reader(&mut reader, tbl_index);
+                    let tbl = parse_table_with(&mut reader, tbl_index, styles, Some(&mut counters));
                     elements.push(DocumentElement::Table(tbl));
                     tbl_index += 1;
                 }
             }
             Ok(Event::Empty(ref e)) => {
                 if in_body && tag_is(e.name().as_ref(), "p") {
-                    elements.push(DocumentElement::Paragraph(ParagraphInfo {
-                        index: p_index,
-                        style: "Normal".to_string(),
-                        align: "left".to_string(),
-                        ..Default::default()
-                    }));
+                    let p = resolve_paragraph(
+                        p_index,
+                        styles,
+                        None,
+                        None,
+                        &ParaProps::default(),
+                        &RunProps::default(),
+                        Vec::new(),
+                    );
+                    elements.push(DocumentElement::Paragraph(p));
                     p_index += 1;
                 }
             }
@@ -1082,279 +1108,260 @@ pub fn parse_document_elements(xml: &str) -> Vec<DocumentElement> {
     elements
 }
 
+/// Parses a paragraph without a style sheet (direct formatting only)
 pub fn parse_paragraph_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> ParagraphInfo {
-    let mut style = "Normal".to_string();
-    let mut align = "left".to_string();
-    let mut color = String::new();
-    let mut default_bold = false;
-    let mut default_italic = false;
-    let mut default_font_size: Option<f64> = None;
-    let mut default_font_family: Option<String> = None;
-    let mut indent_left = 0.0;
-    let mut indent_first_line = 0.0;
-    let mut indent_right = 0.0;
-    let mut space_before = 0.0;
-    let mut space_after = 0.0;
-    let mut line_spacing: Option<f64> = None;
-    let mut borders = ParagraphBorders::default();
+    parse_paragraph_with(reader, index, &StyleSheet::default(), None)
+}
 
-    let mut runs: Vec<RunInfo> = Vec::new();
-    let mut buf = Vec::new();
+/// Parses the paragraph whose `<w:p>` start tag was just read, resolving the style cascade.
+/// `counters` advances list numbering; pass `None` for isolated fragments.
+pub fn parse_paragraph_with(
+    reader: &mut Reader<&[u8]>,
+    index: usize,
+    styles: &StyleSheet,
+    counters: Option<&mut NumberingCounters>,
+) -> ParagraphInfo {
+    let mut style_id: Option<String> = None;
+    let mut direct_ppr = ParaProps::default();
+    let mut mark_rpr = RunProps::default();
+    let mut raw_runs: Vec<RawRun> = Vec::new();
 
     let mut in_ppr = false;
+    let mut in_ppr_rpr = false;
     let mut in_pbdr = false;
     let mut in_r = false;
+    let mut in_rpr = false;
     let mut in_t = false;
-
-    let mut current_run_bold = false;
-    let mut current_run_italic = false;
-    let mut current_run_underline = false;
-    let mut current_run_color = String::new();
-    let mut current_run_font_size: Option<f64> = None;
-    let mut current_run_font_family: Option<String> = None;
-    let mut current_run_text = String::new();
+    let mut run = RawRun::default();
+    let mut buf = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                // Drawings, VML and embedded objects may contain text boxes with their own
-                // paragraphs; they are not part of this paragraph's text flow
-                if ["drawing", "pict", "object", "txbxContent"].iter().any(|t| tag_is(name.as_ref(), t)) {
-                    let end_name = name.as_ref().to_vec();
-                    let mut skip_buf = Vec::new();
-                    let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
-                    buf.clear();
-                    continue;
-                }
-                if tag_is(name.as_ref(), "pPr") {
-                    in_ppr = true;
-                } else if in_ppr && tag_is(name.as_ref(), "pBdr") {
-                    in_pbdr = true;
-                } else if in_pbdr {
-                    if tag_is(name.as_ref(), "left") {
-                        borders.left = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "bottom") {
-                        borders.bottom = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "top") {
-                        borders.top = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "right") {
-                        borders.right = parse_border_element(e);
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "pStyle") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        style = val;
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "jc") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        align = val;
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "ind") {
-                    parse_indents_from_attr(e, &mut indent_left, &mut indent_first_line, &mut indent_right);
-                } else if in_ppr && tag_is(name.as_ref(), "spacing") {
-                    parse_spacing_from_attr(e, &mut space_before, &mut space_after, &mut line_spacing);
-                } else if in_ppr && tag_is(name.as_ref(), "sz") {
-                    if let Some(sz_val) = get_attr_i64(e, "val") {
-                        default_font_size = Some((sz_val as f64) / 2.0);
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "rFonts") {
-                    default_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
-                } else if in_ppr && tag_is(name.as_ref(), "color") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        if val.to_lowercase() != "auto" {
-                            color = val;
-                        }
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "b") {
-                    default_bold = is_bool_element_true(e);
-                } else if in_ppr && tag_is(name.as_ref(), "i") {
-                    default_italic = is_bool_element_true(e);
-                } else if tag_is(name.as_ref(), "r") {
-                    in_r = true;
-                    current_run_bold = default_bold;
-                    current_run_italic = default_italic;
-                    current_run_underline = false;
-                    current_run_color = color.clone();
-                    current_run_font_size = default_font_size;
-                    current_run_font_family = default_font_family.clone();
-                    current_run_text.clear();
-                } else if in_r && tag_is(name.as_ref(), "b") {
-                    current_run_bold = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "i") {
-                    current_run_italic = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "u") {
-                    current_run_underline = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "sz") {
-                    if let Some(sz_val) = get_attr_i64(e, "val") {
-                        current_run_font_size = Some((sz_val as f64) / 2.0);
-                    }
-                } else if in_r && tag_is(name.as_ref(), "rFonts") {
-                    current_run_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
-                } else if in_r && tag_is(name.as_ref(), "color") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        if val.to_lowercase() != "auto" {
-                            current_run_color = val;
-                        }
-                    }
-                } else if in_r && tag_is(name.as_ref(), "t") {
-                    in_t = true;
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                let name = e.name();
-                if in_pbdr {
-                    if tag_is(name.as_ref(), "left") {
-                        borders.left = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "bottom") {
-                        borders.bottom = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "top") {
-                        borders.top = parse_border_element(e);
-                    } else if tag_is(name.as_ref(), "right") {
-                        borders.right = parse_border_element(e);
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "pStyle") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        style = val;
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "jc") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        align = val;
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "ind") {
-                    parse_indents_from_attr(e, &mut indent_left, &mut indent_first_line, &mut indent_right);
-                } else if in_ppr && tag_is(name.as_ref(), "spacing") {
-                    parse_spacing_from_attr(e, &mut space_before, &mut space_after, &mut line_spacing);
-                } else if in_ppr && tag_is(name.as_ref(), "sz") {
-                    if let Some(sz_val) = get_attr_i64(e, "val") {
-                        default_font_size = Some((sz_val as f64) / 2.0);
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "rFonts") {
-                    default_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
-                } else if in_ppr && tag_is(name.as_ref(), "color") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        if val.to_lowercase() != "auto" {
-                            color = val;
-                        }
-                    }
-                } else if in_ppr && tag_is(name.as_ref(), "b") {
-                    default_bold = is_bool_element_true(e);
-                } else if in_ppr && tag_is(name.as_ref(), "i") {
-                    default_italic = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "b") {
-                    current_run_bold = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "i") {
-                    current_run_italic = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "u") {
-                    current_run_underline = is_bool_element_true(e);
-                } else if in_r && tag_is(name.as_ref(), "sz") {
-                    if let Some(sz_val) = get_attr_i64(e, "val") {
-                        current_run_font_size = Some((sz_val as f64) / 2.0);
-                    }
-                } else if in_r && tag_is(name.as_ref(), "rFonts") {
-                    current_run_font_family = get_attr_value(e, "ascii").or_else(|| get_attr_value(e, "hAnsi"));
-                } else if in_r && tag_is(name.as_ref(), "color") {
-                    if let Some(val) = get_attr_value(e, "val") {
-                        if val.to_lowercase() != "auto" {
-                            current_run_color = val;
-                        }
-                    }
-                } else if in_r && tag_is(name.as_ref(), "tab") {
-                    current_run_text.push('\t');
-                } else if in_r && (tag_is(name.as_ref(), "br") || tag_is(name.as_ref(), "cr")) {
-                    current_run_text.push('\n');
-                }
-            }
-            Ok(Event::Text(ref e)) => {
+        let (e, is_start) = match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => (e, true),
+            Ok(Event::Empty(e)) => (e, false),
+            Ok(Event::Text(ref t)) => {
                 if in_t {
-                    if let Ok(unescaped) = e.unescape() {
-                        current_run_text.push_str(&unescaped);
+                    if let Ok(s) = t.unescape() {
+                        run.text.push_str(&s);
                     }
                 }
+                buf.clear();
+                continue;
             }
             Ok(Event::End(ref e)) => {
                 let name = e.name();
-                if tag_is(name.as_ref(), "t") {
+                let n = name.as_ref();
+                if tag_is(n, "t") {
                     in_t = false;
-                } else if tag_is(name.as_ref(), "r") {
-                    in_r = false;
-                    if !current_run_text.is_empty() {
-                        runs.push(RunInfo {
-                            text: current_run_text.clone(),
-                            bold: current_run_bold,
-                            italic: current_run_italic,
-                            underline: current_run_underline,
-                            color: current_run_color.clone(),
-                            font_size: current_run_font_size,
-                            font_family: current_run_font_family.clone(),
-                        });
-                        current_run_text.clear();
+                } else if tag_is(n, "rPr") {
+                    if in_r {
+                        in_rpr = false;
+                    } else {
+                        in_ppr_rpr = false;
                     }
-                } else if tag_is(name.as_ref(), "pBdr") {
+                } else if tag_is(n, "r") && in_r {
+                    in_r = false;
+                    if !run.text.is_empty() {
+                        raw_runs.push(std::mem::take(&mut run));
+                    }
+                } else if tag_is(n, "pBdr") {
                     in_pbdr = false;
-                } else if tag_is(name.as_ref(), "pPr") {
+                } else if tag_is(n, "pPr") {
                     in_ppr = false;
-                } else if tag_is(name.as_ref(), "p") {
+                } else if tag_is(n, "p") {
                     break;
                 }
+                buf.clear();
+                continue;
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {
+                buf.clear();
+                continue;
+            }
+        };
+
+        let name = e.name();
+        let n = name.as_ref();
+        // Drawings/VML/objects may hold text boxes with their own paragraphs, and tracked
+        // property changes hold the *old* properties: none of them belong to this paragraph
+        if is_start
+            && ["drawing", "pict", "object", "txbxContent", "pPrChange", "rPrChange"]
+                .iter()
+                .any(|t| tag_is(n, t))
+        {
+            let end_name = n.to_vec();
+            let mut skip_buf = Vec::new();
+            let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
+            buf.clear();
+            continue;
+        }
+
+        if in_r {
+            if in_rpr {
+                if tag_is(n, "rStyle") {
+                    run.style = get_attr_value(&e, "val");
+                } else {
+                    apply_rpr_element(&mut run.props, &e, &styles.theme);
+                }
+            } else if tag_is(n, "rPr") {
+                in_rpr = is_start;
+            } else if tag_is(n, "t") {
+                in_t = is_start;
+            } else if tag_is(n, "tab") {
+                run.text.push('\t');
+            } else if tag_is(n, "br") || tag_is(n, "cr") {
+                run.text.push('\n');
+            }
+        } else if in_ppr {
+            if in_ppr_rpr {
+                apply_rpr_element(&mut mark_rpr, &e, &styles.theme);
+            } else if in_pbdr {
+                apply_border_element(&mut direct_ppr.borders, &e);
+            } else if tag_is(n, "rPr") {
+                in_ppr_rpr = is_start;
+            } else if tag_is(n, "pBdr") {
+                in_pbdr = is_start;
+            } else if tag_is(n, "pStyle") {
+                style_id = get_attr_value(&e, "val");
+            } else {
+                apply_ppr_element(&mut direct_ppr, &e);
+            }
+        } else if tag_is(n, "pPr") {
+            in_ppr = is_start;
+        } else if tag_is(n, "r") && is_start {
+            in_r = true;
+            run = RawRun::default();
         }
         buf.clear();
     }
 
-    let is_heading = style.to_lowercase().contains("heading")
-        || style.to_lowercase().contains("title")
-        || style.to_lowercase().contains("encabezado")
-        || style.to_lowercase().contains("título");
+    resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs)
+}
 
-    let mut full_text = String::new();
-    for r in &runs {
-        full_text.push_str(&r.text);
+/// A run as written in the XML, before the style cascade is applied
+#[derive(Default)]
+struct RawRun {
+    text: String,
+    props: RunProps,
+    style: Option<String>,
+}
+
+fn to_run_info(text: String, p: &RunProps) -> RunInfo {
+    RunInfo {
+        text,
+        bold: p.bold.unwrap_or(false),
+        italic: p.italic.unwrap_or(false),
+        underline: p.underline.unwrap_or(false),
+        color: p.color.clone().unwrap_or_default(),
+        font_size: p.font_size,
+        font_family: p.font_family.clone(),
     }
+}
 
+/// Applies document defaults, numbering, paragraph/character styles and direct formatting
+fn resolve_paragraph(
+    index: usize,
+    styles: &StyleSheet,
+    counters: Option<&mut NumberingCounters>,
+    style_id: Option<String>,
+    direct_ppr: &ParaProps,
+    mark_rpr: &RunProps,
+    raw_runs: Vec<RawRun>,
+) -> ParagraphInfo {
+    let effective_style = styles.effective_paragraph_style(style_id.as_deref()).map(str::to_string);
+    let (style_ppr, style_rpr) = styles.style_props(effective_style.as_deref());
+
+    let num_id = direct_ppr
+        .num_id
+        .clone()
+        .or_else(|| style_ppr.num_id.clone())
+        .filter(|id| id != "0");
+    let ilvl = direct_ppr.ilvl.or(style_ppr.ilvl).unwrap_or(0);
+
+    let mut ppr = styles.doc_ppr.clone();
+    if let Some(level) = num_id.as_deref().and_then(|id| styles.numbering.level(id, ilvl)) {
+        ppr.merge(&level.ppr);
+    }
+    ppr.merge(&style_ppr);
+    ppr.merge(direct_ppr);
+
+    let base_rpr = styles.doc_rpr.merged(&style_rpr);
+    let mark = base_rpr.merged(mark_rpr);
+    let runs: Vec<RunInfo> = raw_runs
+        .into_iter()
+        .map(|r| {
+            let eff = base_rpr.merged(&styles.character_props(r.style.as_deref())).merged(&r.props);
+            to_run_info(r.text, &eff)
+        })
+        .collect();
+
+    let list_label = match (num_id.as_deref(), counters) {
+        (Some(id), Some(counters)) => counters
+            .next_label(&styles.numbering, id, ilvl)
+            .filter(|(label, _)| !label.is_empty())
+            .map(|(label, level)| {
+                let text = if level.suffix == "space" { format!("{} ", label) } else { label };
+                let mut run = to_run_info(text, &mark.merged(&level.rpr));
+                if is_symbol_font(level.rpr.font_family.as_deref()) {
+                    run.font_family = mark.font_family.clone();
+                }
+                run
+            }),
+        _ => None,
+    };
+
+    let style_name = effective_style
+        .as_deref()
+        .and_then(|id| styles.style_name(id))
+        .unwrap_or("")
+        .to_lowercase();
+    let style_key = style_id.clone().or(effective_style).unwrap_or_else(|| "Normal".to_string());
+    let is_heading = ppr.outline_level.is_some_and(|l| l < 9)
+        || [style_name.as_str(), style_key.to_lowercase().as_str()].iter().any(|s| {
+            s.contains("heading") || s.contains("title") || s.contains("encabezado") || s.contains("título")
+        });
+
+    let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
     let non_empty_runs: Vec<&RunInfo> = runs.iter().filter(|r| !r.text.trim().is_empty()).collect();
-    let bold = if is_heading {
+    let bold = if !styles.loaded && is_heading {
         true
     } else if !non_empty_runs.is_empty() {
         non_empty_runs.iter().all(|r| r.bold)
     } else {
-        default_bold
+        mark.bold.unwrap_or(false)
     };
-
     let italic = if !non_empty_runs.is_empty() {
         non_empty_runs.iter().all(|r| r.italic)
     } else {
-        default_italic
+        mark.italic.unwrap_or(false)
     };
-
-    let run_count = runs.len();
 
     ParagraphInfo {
         index,
         text: full_text,
-        style,
+        style: style_key,
         is_heading,
-        run_count,
-        align,
-        color,
+        run_count: runs.len(),
+        align: ppr.align.clone().unwrap_or_else(|| "left".to_string()),
+        color: mark.color.clone().unwrap_or_default(),
         bold,
         italic,
-        font_size: default_font_size,
-        font_family: default_font_family,
-        indent_left,
-        indent_first_line,
-        indent_right,
-        space_before,
-        space_after,
-        line_spacing,
-        borders,
+        font_size: mark.font_size,
+        font_family: mark.font_family.clone(),
+        indent_left: ppr.indent_left.unwrap_or(0.0),
+        indent_first_line: ppr.indent_first_line.unwrap_or(0.0),
+        indent_right: ppr.indent_right.unwrap_or(0.0),
+        space_before: ppr.space_before.unwrap_or(0.0),
+        space_after: ppr.space_after.unwrap_or(0.0),
+        line_spacing: ppr.line_spacing,
+        borders: ppr.borders.clone(),
         runs,
+        list_label,
     }
 }
 
-fn parse_border_element(e: &BytesStart) -> Option<BorderInfo> {
+pub(crate) fn parse_border_element(e: &BytesStart) -> Option<BorderInfo> {
     let val = get_attr_value(e, "val").unwrap_or_default().to_lowercase();
     if val.is_empty() || val == "none" || val == "nil" || val == "off" || val == "0" {
         return None;
@@ -1369,48 +1376,6 @@ fn parse_border_element(e: &BytesStart) -> Option<BorderInfo> {
         sz_px,
         space,
     })
-}
-
-fn parse_spacing_from_attr(
-    e: &BytesStart,
-    space_before: &mut f64,
-    space_after: &mut f64,
-    line_spacing: &mut Option<f64>,
-) {
-    if let Some(before) = get_attr_i64(e, "before") {
-        *space_before = (before as f64) / 20.0;
-    }
-    if let Some(after) = get_attr_i64(e, "after") {
-        *space_after = (after as f64) / 20.0;
-    }
-    if let Some(line) = get_attr_i64(e, "line") {
-        *line_spacing = Some((line as f64) / 240.0);
-    }
-}
-
-fn parse_indents_from_attr(
-    e: &BytesStart,
-    indent_left: &mut f64,
-    indent_first_line: &mut f64,
-    indent_right: &mut f64,
-) {
-    if let Some(left) = get_attr_i64(e, "left").or_else(|| get_attr_i64(e, "start")) {
-        *indent_left = (left as f64) / 15.0;
-    }
-    if let Some(right) = get_attr_i64(e, "right").or_else(|| get_attr_i64(e, "end")) {
-        *indent_right = (right as f64) / 15.0;
-    }
-    if let Some(first_line) = get_attr_i64(e, "firstLine") {
-        *indent_first_line = (first_line as f64) / 15.0;
-    } else if let Some(hanging) = get_attr_i64(e, "hanging") {
-        let hanging_px = (hanging as f64) / 15.0;
-        if *indent_left == 0.0 {
-            *indent_left = hanging_px;
-            *indent_first_line = -hanging_px;
-        } else {
-            *indent_first_line = -hanging_px;
-        }
-    }
 }
 
 pub fn is_dark_hex_str(hex: &str) -> bool {
@@ -1429,6 +1394,16 @@ pub fn is_dark_hex_str(hex: &str) -> bool {
 }
 
 pub fn parse_table_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> TableInfo {
+    parse_table_with(reader, index, &StyleSheet::default(), None)
+}
+
+/// Parses the table whose `<w:tbl>` start tag was just read, resolving cell paragraph styles
+pub fn parse_table_with(
+    reader: &mut Reader<&[u8]>,
+    index: usize,
+    styles: &StyleSheet,
+    mut counters: Option<&mut NumberingCounters>,
+) -> TableInfo {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut rich_rows: Vec<TableRowData> = Vec::new();
     let mut grid_cols: Vec<f64> = Vec::new();
@@ -1494,7 +1469,7 @@ pub fn parse_table_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> Tabl
                         }
                     }
                 } else if in_tc && tag_is(name.as_ref(), "p") {
-                    let p = parse_paragraph_from_reader(reader, dummy_p_idx);
+                    let p = parse_paragraph_with(reader, dummy_p_idx, styles, counters.as_deref_mut());
                     dummy_p_idx += 1;
                     current_cell_paragraphs.push(p);
                 }
@@ -1990,6 +1965,17 @@ mod tests {
         assert!(p.runs[0].bold, "First run should be bold");
         assert!(!p.runs[1].bold, "Second run should NOT be bold");
         assert_eq!(p.text, "1. OBJETO: El presente contrato regula los servicios.");
+    }
+
+    #[test]
+    fn test_paragraph_mark_formatting_does_not_leak_into_runs() {
+        let xml = r#"<w:p><w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:pPr><w:r><w:t>normal</w:t></w:r></w:p>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(false);
+        let p = parse_paragraph_from_reader(&mut reader, 0);
+        assert!(!p.runs[0].bold, "pPr/rPr only formats the paragraph mark");
+        assert_eq!(p.runs[0].font_size, None);
+        assert_eq!(p.font_size, Some(20.0), "the mark size is still reported for empty-line height");
     }
 
     #[test]

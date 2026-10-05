@@ -279,6 +279,41 @@ impl LayoutEngine {
                             });
                         }
 
+                        // List number / bullet, drawn in the hanging indent of the first line
+                        if line_idx == 0 {
+                            if let (Some(label), Some(geo)) = (p.list_label.as_ref(), list_label_geometry(p, font_size)) {
+                                let mut run = label.clone();
+                                run.font_size = Some(geo.font_size);
+                                current_page_items.push(RenderCommand::Text {
+                                    text: label.text.clone(),
+                                    x: margin_left + geo.label_offset,
+                                    y: cursor_y + font_size * 0.85,
+                                    width: geo.label_width,
+                                    height: line_height,
+                                    font_size: geo.font_size,
+                                    font_family: font_family.clone(),
+                                    font_weight: if label.bold { "700" } else { "400" }.to_string(),
+                                    font_style: if label.italic { "italic" } else { "normal" }.to_string(),
+                                    color: p_color.clone(),
+                                    align: "left".to_string(),
+                                    paragraph_index: p.index,
+                                    line_index: 0,
+                                    is_last_line: true,
+                                    max_width: geo.label_width,
+                                    runs: vec![TextRun {
+                                        text: run.text.clone(),
+                                        bold: run.bold,
+                                        italic: run.italic,
+                                        underline: run.underline,
+                                        color: run.color.clone(),
+                                        font_size: run.font_size,
+                                        font_family: run.font_family.clone(),
+                                        width: geo.label_width,
+                                    }],
+                                });
+                            }
+                        }
+
                         cursor_y += line_height;
                     }
 
@@ -902,9 +937,12 @@ fn layout_paragraph_lines(
     let mut pending_spaces: Vec<LayoutSegment> = Vec::new();
     let mut line_idx = 0;
 
+    let first_line_indent = list_label_geometry(p, font_size)
+        .map(|g| g.text_offset)
+        .unwrap_or_else(|| (p.indent_left + p.indent_first_line).max(0.0));
     let get_line_indent = |idx: usize| -> f64 {
         if idx == 0 {
-            (p.indent_left + p.indent_first_line).max(0.0)
+            first_line_indent
         } else {
             p.indent_left.max(0.0)
         }
@@ -1111,6 +1149,34 @@ fn get_paragraph_typography(p: &ParagraphInfo) -> (f64, f64, &'static str, Strin
         let weight = if p.bold { "700" } else { "400" };
         (14.66, 20.0, weight, default_family, "#1E293B".to_string())
     }
+}
+
+/// Where a paragraph's list label goes, relative to the left margin (px)
+struct ListLabelGeometry {
+    label_offset: f64,
+    label_width: f64,
+    /// Where the first line's text starts
+    text_offset: f64,
+    font_size: f64,
+}
+
+/// Word places the label at `left - hanging` and tabs to `left`; when the label is wider
+/// than the hanging indent the text moves to the next default tab stop (0.5in)
+fn list_label_geometry(p: &ParagraphInfo, paragraph_font_size: f64) -> Option<ListLabelGeometry> {
+    let label = p.list_label.as_ref()?;
+    let font_size = label.font_size.map(|pt| pt * (96.0 / 72.0)).unwrap_or(paragraph_font_size);
+    let label_offset = (p.indent_left + p.indent_first_line).max(0.0);
+    let label_width = estimate_text_width(&label.text, font_size);
+    let label_end = label_offset + label_width + font_size * 0.2;
+    let text_offset = if label.text.ends_with(' ') {
+        label_offset + label_width
+    } else if p.indent_first_line < 0.0 && label_end <= p.indent_left {
+        p.indent_left
+    } else {
+        const DEFAULT_TAB: f64 = 48.0;
+        (label_end / DEFAULT_TAB).ceil() * DEFAULT_TAB
+    };
+    Some(ListLabelGeometry { label_offset, label_width, text_offset, font_size })
 }
 
 /// Simple greedy word wrapping calculation based on approximate glyph widths
