@@ -1,17 +1,21 @@
 // Canvas-native editing: the caret, the selection and keyboard input live on top of the
 // rendered pages, so there is no per-paragraph edit box. Rust owns the geometry (hit testing,
-// caret boxes, vertical moves) and the edits; this module routes input and paints overlays.
+// caret boxes, vertical moves), the edits and the undo history; this module routes input and
+// paints overlays.
 //
 // Positions are { paragraph, offset } with offsets in Unicode code points of the paragraph
-// text, the same unit Rust uses. In this phase a selection stays inside one paragraph.
+// text, the same unit Rust uses. A selection runs from `anchor` (where it started) to `focus`
+// (where the caret is) and may span paragraphs.
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const LINE_BREAK = '\u000B'; // Shift+Enter: line break inside the paragraph (Word's ^l)
+const TYPING_GROUP_MS = 1500;
 
 /**
  * @param {object} env
  * @param {() => any} env.session            current DocxSession
- * @param {() => any[]} env.elements         document elements (paragraphs with `text`, `runs`)
+ * @param {() => any[]} env.elements         document elements in body order
  * @param {() => number} env.zoom
  * @param {Function} env.measure             text measurer passed to Rust
  * @param {() => void} env.documentChanged   re-render after an edit
@@ -25,6 +29,7 @@ export function createCanvasEditor(env) {
   let goalX = null;        // remembered column for ↑/↓
   let dragging = false;
   let composing = false;
+  let lastEdit = null;     // { kind, caret, time } for grouping keystrokes into one undo step
   const pages = new Map(); // page number → { canvas, overlay }
 
   // A hidden textarea owns keyboard focus: it receives typing, IME/dead-key composition
@@ -45,7 +50,8 @@ export function createCanvasEditor(env) {
   const hitTest = (page, x, y) => parse(session()?.hit_test(page, x, y, env.measure));
   const caretBox = pos => parse(session()?.caret_box(pos.paragraph, pos.offset, env.measure));
   const moveVertical = (pos, dir, x) => parse(session()?.move_vertical(pos.paragraph, pos.offset, dir, x, env.measure));
-  const selectionRects = (p, s, e) => parse(session()?.selection_rects(p, s, e, env.measure)) || [];
+  const selectionRects = (a, b) =>
+    parse(session()?.selection_rects_range(a.paragraph, a.offset, b.paragraph, b.offset, env.measure)) || [];
 
   // ---------- Text helpers ----------
 
@@ -66,18 +72,41 @@ export function createCanvasEditor(env) {
     return last;
   }
 
+  /** True when paragraphs `a` and `a + 1` are next to each other (no table between) */
+  function adjacent(a) {
+    const els = env.elements();
+    const i = els.findIndex(el => el.type === 'paragraph' && el.index === a);
+    const next = els[i + 1];
+    return i >= 0 && next?.type === 'paragraph' && next.index === a + 1;
+  }
+
+  const before = (a, b) => a.paragraph < b.paragraph || (a.paragraph === b.paragraph && a.offset < b.offset);
+  const samePos = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.offset === b.offset;
+
+  function ordered() {
+    return before(focus, anchor) ? [focus, anchor] : [anchor, focus];
+  }
+
+  function collapsed() {
+    return !anchor || !focus || samePos(anchor, focus);
+  }
+
   function selection() {
     if (!anchor || !focus) return null;
-    return {
-      paragraph: focus.paragraph,
-      start: Math.min(anchor.offset, focus.offset),
-      end: Math.max(anchor.offset, focus.offset),
-    };
+    const [start, end] = ordered();
+    return { anchor, focus, start, end, collapsed: collapsed() };
   }
 
   function selectedText() {
-    const sel = selection();
-    return sel ? chars(sel.paragraph).slice(sel.start, sel.end).join('') : '';
+    if (collapsed()) return '';
+    const [start, end] = ordered();
+    const parts = [];
+    for (let p = start.paragraph; p <= end.paragraph; p++) {
+      if (!paragraph(p)) continue;
+      const text = chars(p);
+      parts.push(text.slice(p === start.paragraph ? start.offset : 0, p === end.paragraph ? end.offset : text.length).join(''));
+    }
+    return parts.join('\n');
   }
 
   // Word boundaries for Ctrl/Alt+arrows and double click
@@ -99,22 +128,11 @@ export function createCanvasEditor(env) {
 
   function setCaret(pos, extend = false) {
     if (extend && anchor) {
-      // Phase 1: selections stay within the anchor's paragraph
-      if (pos.paragraph !== anchor.paragraph) {
-        pos = {
-          paragraph: anchor.paragraph,
-          offset: pos.paragraph > anchor.paragraph ? chars(anchor.paragraph).length : 0,
-        };
-      }
       focus = pos;
     } else {
       anchor = pos;
       focus = pos;
     }
-  }
-
-  function collapsed() {
-    return !anchor || !focus || (anchor.paragraph === focus.paragraph && anchor.offset === focus.offset);
   }
 
   function stepHorizontal(pos, dir, byWord) {
@@ -133,42 +151,90 @@ export function createCanvasEditor(env) {
 
   // ---------- Editing ----------
 
-  function replaceSelection(text) {
-    const sel = selection();
-    if (!sel || !session()) return;
+  /**
+   * Replaces `range` (default: the selection) with `text` through Rust's single edit primitive.
+   * `kind` decides undo grouping: consecutive typing (or deleting) at the caret joins one step,
+   * starting a new step at each space so undo goes back word by word.
+   */
+  function edit(text, kind, range = ordered()) {
+    if (!session() || !focus) return;
+    const [start, end] = range;
+    const continues = lastEdit && lastEdit.kind === kind && Date.now() - lastEdit.time < TYPING_GROUP_MS &&
+      (samePos(lastEdit.caret, start) || samePos(lastEdit.caret, end));
+    const coalesce = continues && (kind === 'delete' || (kind === 'type' && !/\s/.test(text)));
+
+    let caret;
     try {
-      session().replace_text(sel.paragraph, sel.start, sel.end, text);
+      caret = parse(session().edit(
+        start.paragraph, start.offset, end.paragraph, end.offset, text,
+        JSON.stringify({ anchor, focus }), coalesce,
+      ));
     } catch (err) {
       console.error('Edit failed:', err);
       env.hint(String(err));
       return;
     }
-    const caret = { paragraph: sel.paragraph, offset: sel.start + Array.from(text).length };
     anchor = focus = caret;
     goalX = null;
+    lastEdit = { kind, caret, time: Date.now() };
     env.documentChanged();
   }
 
   function deleteBackward(byWord) {
-    if (!collapsed()) return replaceSelection('');
+    if (!collapsed()) return edit('', 'cut');
     const text = chars(focus.paragraph);
-    if (focus.offset === 0) {
-      env.hint('Unir párrafos con Retroceso llega en la fase 2.');
-      return;
+    if (focus.offset > 0) {
+      const from = { paragraph: focus.paragraph, offset: byWord ? wordStart(text, focus.offset) : focus.offset - 1 };
+      return edit('', 'delete', [from, focus]);
     }
-    anchor = { paragraph: focus.paragraph, offset: byWord ? wordStart(text, focus.offset) : focus.offset - 1 };
-    replaceSelection('');
+    // At the start of a paragraph: join it with the previous one
+    const prev = focus.paragraph - 1;
+    if (prev < 0) return;
+    const prevEnd = { paragraph: prev, offset: chars(prev).length };
+    if (adjacent(prev)) {
+      edit('', 'join', [prevEnd, focus]);
+    } else {
+      setCaret(prevEnd); // a table sits between: never delete it with Backspace
+    }
   }
 
   function deleteForward(byWord) {
-    if (!collapsed()) return replaceSelection('');
+    if (!collapsed()) return edit('', 'cut');
     const text = chars(focus.paragraph);
-    if (focus.offset >= text.length) {
-      env.hint('Unir párrafos con Suprimir llega en la fase 2.');
+    if (focus.offset < text.length) {
+      const to = { paragraph: focus.paragraph, offset: byWord ? wordEnd(text, focus.offset) : focus.offset + 1 };
+      return edit('', 'delete', [focus, to]);
+    }
+    const next = focus.paragraph + 1;
+    if (next > lastParagraphIndex()) return;
+    if (adjacent(focus.paragraph)) {
+      edit('', 'join', [focus, { paragraph: next, offset: 0 }]);
+    } else {
+      setCaret({ paragraph: next, offset: 0 });
+    }
+  }
+
+  function restoreSelection(json) {
+    const saved = parse(json);
+    if (saved?.anchor && saved?.focus) {
+      anchor = saved.anchor;
+      focus = saved.focus;
+    } else if (saved && 'paragraph' in saved) {
+      anchor = focus = saved; // a caret position (after an edit)
+    }
+  }
+
+  function undoRedo(redo) {
+    if (!session()) return;
+    const result = parse(redo ? session().redo() : session().undo());
+    if (!result?.done) {
+      env.hint(redo ? 'No hay nada para rehacer.' : 'No hay nada para deshacer.');
       return;
     }
-    anchor = { paragraph: focus.paragraph, offset: byWord ? wordEnd(text, focus.offset) : focus.offset + 1 };
-    replaceSelection('');
+    restoreSelection(result.selection);
+    lastEdit = null;
+    goalX = null;
+    env.documentChanged();
   }
 
   // ---------- Painting ----------
@@ -180,10 +246,10 @@ export function createCanvasEditor(env) {
       return;
     }
     const zoom = env.zoom();
-    const sel = selection();
 
-    if (sel && sel.start !== sel.end) {
-      selectionRects(sel.paragraph, sel.start, sel.end).forEach(r => {
+    if (!collapsed()) {
+      const [start, end] = ordered();
+      selectionRects(start, end).forEach(r => {
         const page = pages.get(r.page);
         if (!page) return;
         const div = document.createElement('div');
@@ -218,7 +284,7 @@ export function createCanvasEditor(env) {
       // Only a visible caret can be scrolled to (with a selection it is hidden)
       if (reveal && collapsed()) caret.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
-    env.selectionChanged(sel);
+    env.selectionChanged(selection());
   }
 
   // ---------- Pointer input ----------
@@ -263,6 +329,7 @@ export function createCanvasEditor(env) {
       dragging = true;
     }
     goalX = null;
+    lastEdit = null;
     input.focus({ preventScroll: true });
     paint();
   }
@@ -289,18 +356,20 @@ export function createCanvasEditor(env) {
     const mod = e.metaKey || e.ctrlKey;
     const byWord = IS_MAC ? e.altKey : e.ctrlKey;
     const lineEdge = IS_MAC ? e.metaKey : false;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let handled = true;
+    let moved = true; // caret moved without editing: start a new undo group
 
-    switch (e.key) {
+    switch (key) {
       case 'ArrowLeft':
       case 'ArrowRight': {
-        const dir = e.key === 'ArrowLeft' ? -1 : 1;
+        const dir = key === 'ArrowLeft' ? -1 : 1;
         if (lineEdge) {
           const box = caretBox(focus);
           if (box) setCaret({ paragraph: focus.paragraph, offset: dir < 0 ? box.line_start : box.line_end }, e.shiftKey);
         } else if (!collapsed() && !e.shiftKey) {
-          const sel = selection();
-          setCaret({ paragraph: sel.paragraph, offset: dir < 0 ? sel.start : sel.end });
+          const [start, end] = ordered();
+          setCaret(dir < 0 ? start : end);
         } else {
           setCaret(stepHorizontal(focus, dir, byWord), e.shiftKey);
         }
@@ -309,7 +378,7 @@ export function createCanvasEditor(env) {
       }
       case 'ArrowUp':
       case 'ArrowDown': {
-        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        const dir = key === 'ArrowUp' ? -1 : 1;
         if (lineEdge) {
           const target = dir < 0
             ? { paragraph: 0, offset: 0 }
@@ -319,7 +388,7 @@ export function createCanvasEditor(env) {
         }
         if (goalX === null) goalX = caretBox(focus)?.x ?? 0;
         const next = moveVertical(focus, dir, goalX);
-        // At the first/last line, ↑/↓ go to the start/end of that line
+        // At the first/last line, ↑/↓ go to the start/end of that paragraph
         const fallback = { paragraph: focus.paragraph, offset: dir < 0 ? 0 : chars(focus.paragraph).length };
         setCaret(next || fallback, e.shiftKey);
         break;
@@ -327,43 +396,52 @@ export function createCanvasEditor(env) {
       case 'Home':
       case 'End': {
         const box = caretBox(focus);
-        if (box) setCaret({ paragraph: focus.paragraph, offset: e.key === 'Home' ? box.line_start : box.line_end }, e.shiftKey);
+        if (box) setCaret({ paragraph: focus.paragraph, offset: key === 'Home' ? box.line_start : box.line_end }, e.shiftKey);
         goalX = null;
         break;
       }
       case 'Backspace':
         deleteBackward(byWord);
+        moved = false;
         break;
       case 'Delete':
         deleteForward(byWord);
+        moved = false;
         break;
       case 'Enter':
-        if (e.shiftKey) {
-          replaceSelection('\n');
-        } else {
-          env.hint('Partir párrafos con Enter llega en la fase 2; Shift+Enter inserta un salto de línea.');
-        }
+        edit(e.shiftKey ? LINE_BREAK : '\n', 'enter');
+        moved = false;
         break;
       case 'Tab':
-        replaceSelection('\t');
+        edit('\t', 'type');
+        moved = false;
         break;
       case 'Escape':
         anchor = focus = null;
         input.blur();
         break;
+      case 'a':
+        if (!mod) { handled = false; break; }
+        anchor = { paragraph: 0, offset: 0 };
+        focus = { paragraph: lastParagraphIndex(), offset: chars(lastParagraphIndex()).length };
+        break;
+      case 'z':
+        if (!mod) { handled = false; break; }
+        undoRedo(e.shiftKey);
+        moved = false;
+        break;
+      case 'y':
+        if (!mod || IS_MAC) { handled = false; break; }
+        undoRedo(true);
+        moved = false;
+        break;
       default:
-        if (mod && e.key.toLowerCase() === 'a') {
-          anchor = { paragraph: focus.paragraph, offset: 0 };
-          focus = { paragraph: focus.paragraph, offset: chars(focus.paragraph).length };
-        } else if (mod && e.key.toLowerCase() === 'z') {
-          env.hint('Deshacer llega en la fase 2.');
-        } else {
-          handled = false; // typing and clipboard arrive as input / clipboard events
-        }
+        handled = false; // typing and clipboard arrive as input / clipboard events
     }
 
     if (handled) {
       e.preventDefault();
+      if (moved) lastEdit = null;
       paint({ reveal: true });
     }
   });
@@ -376,14 +454,14 @@ export function createCanvasEditor(env) {
     composing = false;
     const text = input.value;
     input.value = '';
-    if (text && focus) replaceSelection(text);
+    if (text && focus) edit(text, 'type');
   });
 
   input.addEventListener('input', e => {
     if (composing || e.isComposing) return;
     const text = input.value;
     input.value = '';
-    if (text && focus) replaceSelection(text);
+    if (text && focus) edit(text, 'type');
   });
 
   input.addEventListener('copy', e => {
@@ -398,15 +476,15 @@ export function createCanvasEditor(env) {
     if (!text) return;
     e.preventDefault();
     e.clipboardData.setData('text/plain', text);
-    replaceSelection('');
+    edit('', 'cut');
   });
 
   input.addEventListener('paste', e => {
     e.preventDefault();
     if (!focus) return;
-    // Phase 1: pasted line breaks become soft breaks inside the paragraph
+    // Each pasted line becomes a paragraph, as in Word
     const text = (e.clipboardData.getData('text/plain') || '').replace(/\r\n?/g, '\n');
-    if (text) replaceSelection(text);
+    if (text) edit(text, 'paste');
   });
 
   input.addEventListener('blur', () => {
@@ -443,16 +521,20 @@ export function createCanvasEditor(env) {
 
     /** Call after all pages are rendered */
     endRender() {
-      // Keep the caret inside the (possibly shorter) document
+      // Keep the selection inside the (possibly changed) document
       if (focus) {
-        const clamp = pos => ({ paragraph: pos.paragraph, offset: Math.min(pos.offset, chars(pos.paragraph).length) });
+        const last = Math.max(0, lastParagraphIndex());
+        const clamp = pos => {
+          const p = Math.min(pos.paragraph, last);
+          return { paragraph: p, offset: Math.min(pos.offset, chars(p).length) };
+        };
         focus = clamp(focus);
         anchor = clamp(anchor);
       }
       paint({ reveal: true });
     },
 
-    /** Current selection `{paragraph, start, end}` (collapsed when start === end), or null */
+    /** `{ anchor, focus, start, end, collapsed }` with start ≤ end, or null */
     selection,
 
     focus() {
@@ -461,6 +543,7 @@ export function createCanvasEditor(env) {
 
     clear() {
       anchor = focus = null;
+      lastEdit = null;
       paint();
     },
   };

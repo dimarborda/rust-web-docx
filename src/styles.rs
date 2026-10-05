@@ -120,6 +120,8 @@ pub struct Style {
     /// "paragraph", "character", "table" or "numbering"
     pub kind: String,
     pub based_on: Option<String>,
+    /// Style for the paragraph created by pressing Enter at the end of this one
+    pub next: Option<String>,
     pub ppr: ParaProps,
     pub rpr: RunProps,
 }
@@ -192,6 +194,11 @@ impl StyleSheet {
             Some(id) if self.styles.contains_key(id) => Some(id),
             _ => self.default_paragraph_style.as_deref(),
         }
+    }
+
+    /// Style for a new paragraph after one in style `id` (Word's "style for following paragraph")
+    pub fn next_style(&self, id: &str) -> Option<&str> {
+        self.styles.get(id)?.next.as_deref()
     }
 
     pub fn style_name(&self, id: &str) -> Option<&str> {
@@ -280,6 +287,7 @@ impl StyleSheet {
                     match name.as_str() {
                         "name" => style.name = get_attr_value(&e, "val").unwrap_or_default(),
                         "basedOn" => style.based_on = get_attr_value(&e, "val"),
+                        "next" => style.next = get_attr_value(&e, "val"),
                         _ => {}
                     }
                 } else if !path.iter().any(|p| p == "tblStylePr") {

@@ -718,13 +718,10 @@ function setSyncStatus(isSynced) {
   }
 }
 
-// 12. Formatting: applies to the selected characters, or to the whole paragraph when the
-// selection is collapsed
-function selectedParagraph() {
-  const sel = canvasEditor.selection();
-  if (!sel) return null;
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === sel.paragraph);
-  return p ? { sel, p } : null;
+// 12. Formatting: applies to the selected characters (across paragraphs), or to the whole
+// paragraph at the caret when nothing is selected. Each action is one undo step.
+function paragraphElement(index) {
+  return activeDocumentElements.find(el => el.type === 'paragraph' && el.index === index);
 }
 
 /** One entry per character, carrying the formatting of its run */
@@ -739,27 +736,36 @@ function sameFormat(a, b) {
     (a.color || '') === (b.color || '') && a.font_size === b.font_size && a.font_family === b.font_family;
 }
 
-function applyRunFormat(change, { refocus = true } = {}) {
-  const target = selectedParagraph();
-  if (!target) {
-    showToast('Haz clic en el texto para aplicar formato.');
-    return;
-  }
-  const { sel, p } = target;
-  const chars = paragraphChars(p);
-  const range = sel.start === sel.end ? chars : chars.slice(sel.start, sel.end);
-  if (range.length === 0) return;
-  change(range);
-
+function mergeRuns(chars) {
   const runs = [];
   chars.forEach(c => {
     const last = runs[runs.length - 1];
     if (last && sameFormat(last, c)) last.text += c.text;
     else runs.push({ ...c });
   });
+  return runs;
+}
 
+/** Paragraphs touched by the selection, each with its selected character range */
+function selectedParagraphRanges() {
+  const sel = canvasEditor.selection();
+  if (!sel) return null;
+  const items = [];
+  for (let i = sel.start.paragraph; i <= sel.end.paragraph; i++) {
+    const p = paragraphElement(i);
+    if (!p) continue;
+    const chars = paragraphChars(p);
+    const start = sel.collapsed || i !== sel.start.paragraph ? 0 : sel.start.offset;
+    const end = sel.collapsed || i !== sel.end.paragraph ? chars.length : sel.end.offset;
+    items.push({ p, chars, start, end });
+  }
+  return items;
+}
+
+function applyParagraphUpdates(updates, refocus) {
+  if (updates.length === 0) return;
   try {
-    currentSession.update_paragraph_runs(p.index, JSON.stringify(runs), p.align || 'left');
+    currentSession.update_paragraphs_runs(JSON.stringify(updates));
   } catch (err) {
     console.error('Format error:', err);
     showToast('No se pudo aplicar el formato: ' + err, true);
@@ -767,6 +773,21 @@ function applyRunFormat(change, { refocus = true } = {}) {
   }
   renderCanvasPagesFromWasm();
   if (refocus) canvasEditor.focus();
+}
+
+function applyRunFormat(change, { refocus = true } = {}) {
+  const items = selectedParagraphRanges();
+  if (!items) {
+    showToast('Haz clic en el texto para aplicar formato.');
+    return;
+  }
+  const range = items.flatMap(it => it.chars.slice(it.start, it.end));
+  if (range.length === 0) return;
+  change(range);
+  const updates = items
+    .filter(it => it.end > it.start)
+    .map(it => ({ index: it.p.index, runs: mergeRuns(it.chars), align: it.p.align || 'left' }));
+  applyParagraphUpdates(updates, refocus);
 }
 
 function toggleRunFlag(flag) {
@@ -796,29 +817,26 @@ function applyTextColor(hexColor) {
 }
 
 function applyAlignment(alignValue) {
-  const target = selectedParagraph();
-  if (!target) {
+  const items = selectedParagraphRanges();
+  if (!items) {
     showToast('Haz clic en un párrafo para alinearlo.');
     return;
   }
-  const { p } = target;
-  currentSession.update_paragraph_runs(p.index, JSON.stringify(p.runs || []), alignValue);
-  renderCanvasPagesFromWasm();
-  canvasEditor.focus();
+  applyParagraphUpdates(items.map(it => ({ index: it.p.index, runs: it.p.runs || [], align: alignValue })), true);
 }
 
-/** Reflects the formatting at the caret (or of the whole selection) in the ribbon */
+/** Reflects the formatting at the caret (or of the selection) in the ribbon */
 function updateRibbonForSelection(sel) {
-  activeParagraphIndex = sel ? sel.paragraph : null;
+  activeParagraphIndex = sel ? sel.focus.paragraph : null;
   if (!sel) return;
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === sel.paragraph);
+  const p = paragraphElement(sel.start.paragraph);
   if (!p) return;
   updateRibbonAlignUI(p.align || 'left');
 
   const chars = paragraphChars(p);
-  const range = sel.start === sel.end
-    ? chars.slice(Math.max(0, sel.start - 1), Math.max(1, sel.start))
-    : chars.slice(sel.start, sel.end);
+  const range = sel.collapsed
+    ? chars.slice(Math.max(0, sel.start.offset - 1), Math.max(1, sel.start.offset))
+    : chars.slice(sel.start.offset, sel.start.paragraph === sel.end.paragraph ? sel.end.offset : chars.length);
   const all = flag => range.length > 0 && range.every(c => c[flag]);
   btnFmtBold.classList.toggle('active', all('bold'));
   btnFmtItalic.classList.toggle('active', all('italic'));

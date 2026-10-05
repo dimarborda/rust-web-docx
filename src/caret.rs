@@ -253,11 +253,28 @@ pub fn selection_rects(
     end: usize,
     m: &mut dyn TextMeasurer,
 ) -> Vec<Rect> {
+    selection_rects_range(layout, TextPosition { paragraph, offset: start }, TextPosition { paragraph, offset: end }, m)
+}
+
+/// Highlight rectangles for a selection that may span several paragraphs
+pub fn selection_rects_range(
+    layout: &DocumentLayout,
+    from: TextPosition,
+    to: TextPosition,
+    m: &mut dyn TextMeasurer,
+) -> Vec<Rect> {
+    let (from, to) = if (to.paragraph, to.offset) < (from.paragraph, from.offset) { (to, from) } else { (from, to) };
     let mut rects = Vec::new();
-    if start >= end {
+    if from == to {
         return rects;
     }
-    for line in lines(layout).iter().filter(|l| l.paragraph == paragraph) {
+    for line in lines(layout).iter().filter(|l| l.paragraph >= from.paragraph && l.paragraph <= to.paragraph) {
+        // Whole paragraphs in the middle of the selection, including their paragraph mark
+        let start = if line.paragraph == from.paragraph { from.offset } else { 0 };
+        let end = if line.paragraph == to.paragraph { to.offset } else { usize::MAX };
+        if start >= end {
+            continue;
+        }
         let (ls, le) = (line.start, line.caret_end());
         if end < ls || start > le || (end == ls && ls < le) {
             continue;

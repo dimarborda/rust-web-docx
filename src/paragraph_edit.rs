@@ -310,6 +310,182 @@ fn cell_paragraphs(tokens: &[Token], tc_start: usize, tc_end: usize) -> Result<V
     Ok(ranges)
 }
 
+/// Splits a paragraph at `offset` (Enter). Both halves keep the paragraph properties and run
+/// formatting; drawings, fields and note references end up in exactly one half; bookmarks and
+/// comment ranges stay in the first half so their ids remain unique; a section break moves to
+/// the second half (the paragraph that now ends the section). At the end of a paragraph the
+/// new one takes the style's "next" style, as in Word.
+pub fn split_paragraph(p_xml: &str, styles: &StyleSheet, offset: usize) -> Result<(String, String), String> {
+    let info = parse_paragraph_fragment(p_xml, styles);
+    let len = info.text.chars().count();
+    let offset = offset.min(len);
+
+    let first = apply_change(
+        p_xml,
+        styles,
+        Change::Range { start: offset, end: len, text: "" },
+        None,
+        None,
+        OpaquePolicy::KeepBefore { offset, len },
+    )?;
+    let first = set_paragraph_property(&first, "sectPr", None)?;
+
+    let second = apply_change(
+        p_xml,
+        styles,
+        Change::Range { start: 0, end: offset, text: "" },
+        None,
+        None,
+        OpaquePolicy::KeepFrom { offset, len },
+    )?;
+    let mut second = strip_unique_markers(&second)?;
+    if offset == len {
+        if let Some(next) = styles.next_style(&info.style).filter(|n| *n != info.style) {
+            let element = format!(r#"<w:pStyle w:val="{}"/>"#, escape_attr(next));
+            second = set_paragraph_property(&second, "pStyle", Some(&element))?;
+        }
+    }
+    Ok((first, second))
+}
+
+/// Joins two adjacent paragraphs (Backspace at the start of `b`, Delete at the end of `a`).
+/// The result keeps `a`'s paragraph properties, unless `a` is empty: then `b`'s win, so
+/// deleting an empty line in front of a heading leaves the heading.
+pub fn merge_paragraphs(a: &str, b: &str, styles: &StyleSheet) -> Result<String, String> {
+    let ta = tokenize(a)?;
+    let tb = tokenize(b)?;
+    let pa = paragraph_parts(&ta, a)?;
+    let pb = paragraph_parts(&tb, b)?;
+    let a_is_empty = parse_paragraph_fragment(a, styles).text.is_empty()
+        && !ta.iter().any(|t| ["drawing", "pict", "object"].iter().any(|n| is_element(t, n)));
+    let (start, ppr, end) = if a_is_empty { (&pb.start, &pb.ppr, &pb.end) } else { (&pa.start, &pa.ppr, &pa.end) };
+    Ok(format!("{}{}{}{}{}", start, ppr, pa.content, pb.content, end))
+}
+
+/// A paragraph as start tag, `w:pPr`, remaining content and end tag (raw XML)
+struct ParagraphParts {
+    start: String,
+    ppr: String,
+    content: String,
+    end: String,
+}
+
+fn paragraph_parts(tokens: &[Token], xml: &str) -> Result<ParagraphParts, String> {
+    let name = element_name(tokens.first().ok_or("Párrafo vacío")?).ok_or("El fragmento no es un párrafo.")?;
+    let end = format!("</{}>", String::from_utf8_lossy(name));
+    if matches!(tokens[0].ev, Event::Empty(_)) {
+        return Ok(ParagraphParts { start: open_tag_of(tokens, xml, 0, 0), ppr: String::new(), content: String::new(), end });
+    }
+    let last = tokens.len() - 1;
+    let mut i = 1;
+    let mut ppr = String::new();
+    while i < last {
+        if element_name(&tokens[i]).is_some() {
+            if is_element(&tokens[i], "pPr") {
+                let pe = element_end(tokens, i);
+                ppr = xml[tokens[i].span.start..tokens[pe].span.end].to_string();
+                i = pe + 1;
+            }
+            break;
+        }
+        i += 1;
+    }
+    Ok(ParagraphParts {
+        start: xml[tokens[0].span.clone()].to_string(),
+        ppr,
+        content: xml[tokens[i].span.start.min(tokens[last].span.start)..tokens[last].span.start].to_string(),
+        end,
+    })
+}
+
+/// Sets (or with `None` removes) one child of the paragraph's `w:pPr`, in schema order
+pub fn set_paragraph_property(p_xml: &str, local: &str, element: Option<&str>) -> Result<String, String> {
+    let tokens = tokenize(p_xml)?;
+    let parts = paragraph_parts(&tokens, p_xml)?;
+    let mut kids: Vec<(String, String)> = if parts.ppr.is_empty() {
+        Vec::new()
+    } else {
+        let ppr_tokens = tokenize(&parts.ppr)?;
+        children(&ppr_tokens, &parts.ppr, 0, ppr_tokens.len() - 1)
+    };
+    let had = kids.iter().any(|(n, _)| n == local);
+    if !had && element.is_none() {
+        return Ok(p_xml.to_string());
+    }
+    kids.retain(|(n, _)| n != local);
+    if let Some(el) = element {
+        kids.push((local.to_string(), el.to_string()));
+    }
+    sort_children(&mut kids, PPR_ORDER);
+    let ppr = if kids.is_empty() {
+        String::new()
+    } else {
+        format!("<w:pPr>{}</w:pPr>", kids.into_iter().map(|(_, x)| x).collect::<String>())
+    };
+    Ok(format!("{}{}{}{}", parts.start, ppr, parts.content, parts.end))
+}
+
+/// Removes markers whose ids must stay unique in the document (bookmarks, comment ranges,
+/// permissions) and the paragraph's own ids, for a paragraph cloned from another one
+fn strip_unique_markers(p_xml: &str) -> Result<String, String> {
+    const MARKERS: &[&str] = &[
+        "bookmarkStart", "bookmarkEnd", "commentRangeStart", "commentRangeEnd", "permStart", "permEnd",
+    ];
+    let tokens = tokenize(p_xml)?;
+    let mut out = String::with_capacity(p_xml.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        if i == 0 {
+            if let Event::Start(e) | Event::Empty(e) = &tok.ev {
+                let mut tag = format!("<{}", String::from_utf8_lossy(e.name().as_ref()));
+                for attr in e.attributes().flatten() {
+                    let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                    if key.ends_with(":paraId") || key.ends_with(":textId") {
+                        continue;
+                    }
+                    tag.push_str(&format!(" {}=\"{}\"", key, String::from_utf8_lossy(&attr.value)));
+                }
+                tag.push_str(if matches!(tok.ev, Event::Empty(_)) { "/>" } else { ">" });
+                out.push_str(&tag);
+                i += 1;
+                continue;
+            }
+        }
+        if MARKERS.iter().any(|m| is_element(tok, m)) {
+            i = element_end(&tokens, i) + 1;
+            continue;
+        }
+        out.push_str(&p_xml[tok.span.clone()]);
+        i += 1;
+    }
+    Ok(out)
+}
+
+/// True when `xml` contains only complete elements (safe to cut out of the document)
+pub fn is_balanced(xml: &str) -> bool {
+    let Ok(tokens) = tokenize(xml) else { return false };
+    let mut depth = 0i64;
+    for tok in &tokens {
+        match tok.ev {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// True when `xml` has no elements at all (only whitespace between two siblings)
+pub fn is_blank(xml: &str) -> bool {
+    xml.trim().is_empty()
+}
+
 /// Parses a single `<w:p>` fragment with the regular paragraph parser
 pub fn parse_paragraph_fragment(p_xml: &str, styles: &StyleSheet) -> ParagraphInfo {
     let mut reader = Reader::from_str(p_xml);
@@ -420,7 +596,7 @@ pub fn edit_paragraph(
     formats: Option<&[FormatTarget]>,
     align: Option<&str>,
 ) -> Result<String, String> {
-    apply_change(p_xml, styles, Change::Text(new_text), formats, align)
+    apply_change(p_xml, styles, Change::Text(new_text), formats, align, OpaquePolicy::Keep)
 }
 
 /// Replaces the characters `start..end` of the paragraph text with `text`. Unlike
@@ -433,7 +609,7 @@ pub fn edit_paragraph_range(
     end: usize,
     text: &str,
 ) -> Result<String, String> {
-    apply_change(p_xml, styles, Change::Range { start, end, text }, None, None)
+    apply_change(p_xml, styles, Change::Range { start, end, text }, None, None, OpaquePolicy::Keep)
 }
 
 enum Change<'a> {
@@ -442,12 +618,34 @@ enum Change<'a> {
     Range { start: usize, end: usize, text: &'a str },
 }
 
+/// What happens to zero-width content (drawings, fields, note references) of a paragraph
+#[derive(Clone, Copy)]
+enum OpaquePolicy {
+    Keep,
+    /// First half of a split at `offset` (of `len` characters): content before the split point.
+    /// At the very end of the paragraph everything stays in the first half.
+    KeepBefore { offset: usize, len: usize },
+    /// Second half of a split: content from the split point on
+    KeepFrom { offset: usize, len: usize },
+}
+
+impl OpaquePolicy {
+    fn keeps(self, position: usize) -> bool {
+        match self {
+            OpaquePolicy::Keep => true,
+            OpaquePolicy::KeepBefore { offset, len } => offset == len || position < offset,
+            OpaquePolicy::KeepFrom { offset, len } => offset != len && position >= offset,
+        }
+    }
+}
+
 fn apply_change(
     p_xml: &str,
     styles: &StyleSheet,
     change: Change,
     formats: Option<&[FormatTarget]>,
     align: Option<&str>,
+    opaque: OpaquePolicy,
 ) -> Result<String, String> {
     let tokens = tokenize(p_xml)?;
     let p_is_empty_tag = match tokens.first().map(|t| &t.ev) {
@@ -568,7 +766,11 @@ fn apply_change(
         for atom in &run.atoms {
             let chars: Vec<(char, Option<(usize, usize)>)> = match &atom.kind {
                 AtomKind::Opaque => {
-                    items[r].push(Item::Opaque { first: atom.first, last: atom.last });
+                    if opaque.keeps(k) {
+                        items[r].push(Item::Opaque { first: atom.first, last: atom.last });
+                    } else {
+                        dirty[r] = true;
+                    }
                     continue;
                 }
                 AtomKind::Text(t) => t.chars().map(|c| (c, None)).collect(),

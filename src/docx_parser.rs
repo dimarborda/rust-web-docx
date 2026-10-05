@@ -15,7 +15,8 @@ use crate::styles::{
     RunProps, StyleSheet,
 };
 use crate::paragraph_edit::{
-    body_paragraph_ranges, edit_paragraph, edit_paragraph_range, parse_paragraph_fragment, table_cell_paragraph_ranges,
+    body_paragraph_ranges, edit_paragraph, edit_paragraph_range, is_balanced, is_blank, merge_paragraphs,
+    parse_paragraph_fragment, split_paragraph, table_cell_paragraph_ranges,
     FormatTarget,
 };
 
@@ -232,7 +233,27 @@ pub struct DocxModifier {
     background_image: Option<Vec<u8>>,
     background_image_ext: String,
     styles: StyleSheet,
+    history: History,
 }
+
+/// One undoable step: previous contents of every part it changed, plus the editor selection
+/// before and after (opaque JSON owned by the frontend)
+#[derive(Default)]
+struct UndoStep {
+    parts: Vec<(String, Option<Vec<u8>>)>,
+    selection_before: Option<String>,
+    selection_after: Option<String>,
+}
+
+#[derive(Default)]
+struct History {
+    undo: Vec<UndoStep>,
+    redo: Vec<UndoStep>,
+    /// Step being recorded since the last checkpoint
+    recording: Option<UndoStep>,
+}
+
+const MAX_UNDO_STEPS: usize = 200;
 
 impl DocxModifier {
     /// Loads a docx from byte buffer
@@ -288,6 +309,7 @@ impl DocxModifier {
         );
 
         Ok(DocxModifier {
+            history: History::default(),
             styles,
             files,
             original_order,
@@ -296,6 +318,177 @@ impl DocxModifier {
             background_image: bg_image,
             background_image_ext: bg_image_ext,
         })
+    }
+
+    /// Writes a package part, remembering its previous content for undo when a step is open
+    fn put_file(&mut self, name: String, bytes: Vec<u8>) {
+        if let Some(step) = self.history.recording.as_mut() {
+            if !step.parts.iter().any(|(n, _)| *n == name) {
+                step.parts.push((name.clone(), self.files.get(&name).cloned()));
+                self.history.redo.clear();
+            }
+        }
+        self.files.insert(name, bytes);
+    }
+
+    /// Starts a new undo step; changes made until the next checkpoint undo together
+    pub fn checkpoint(&mut self, selection_before: Option<String>) {
+        self.finish_step();
+        self.history.recording = Some(UndoStep { selection_before, ..Default::default() });
+    }
+
+    /// Records where the selection ended up after the current step's changes
+    pub fn set_selection_after(&mut self, selection: Option<String>) {
+        if let Some(step) = self.history.recording.as_mut() {
+            step.selection_after = selection;
+        }
+    }
+
+    /// True while a step is being recorded (edits can be merged into it, e.g. while typing)
+    pub fn is_recording(&self) -> bool {
+        self.history.recording.is_some()
+    }
+
+    fn finish_step(&mut self) {
+        if let Some(step) = self.history.recording.take() {
+            if !step.parts.is_empty() {
+                self.history.undo.push(step);
+                if self.history.undo.len() > MAX_UNDO_STEPS {
+                    self.history.undo.remove(0);
+                }
+            }
+        }
+    }
+
+    /// Swaps the stored part contents with the current ones and returns the inverse step
+    fn apply_step(&mut self, step: UndoStep) -> UndoStep {
+        let parts = step
+            .parts
+            .into_iter()
+            .map(|(name, content)| {
+                let current = match content {
+                    Some(bytes) => self.files.insert(name.clone(), bytes),
+                    None => self.files.remove(&name),
+                };
+                (name, current)
+            })
+            .collect();
+        UndoStep { parts, selection_before: step.selection_before, selection_after: step.selection_after }
+    }
+
+    /// Undoes the last step; returns the selection to restore (`Some(None)` when unknown)
+    pub fn undo(&mut self) -> Option<Option<String>> {
+        self.finish_step();
+        let step = self.history.undo.pop()?;
+        let inverse = self.apply_step(step);
+        let selection = inverse.selection_before.clone();
+        self.history.redo.push(inverse);
+        Some(selection)
+    }
+
+    /// Redoes the last undone step; returns the selection to restore
+    pub fn redo(&mut self) -> Option<Option<String>> {
+        self.finish_step();
+        let step = self.history.redo.pop()?;
+        let inverse = self.apply_step(step);
+        let selection = inverse.selection_after.clone();
+        self.history.undo.push(inverse);
+        Some(selection)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.history.undo.is_empty() || self.history.recording.as_ref().is_some_and(|s| !s.parts.is_empty())
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.history.redo.is_empty()
+    }
+
+    fn body_paragraph(&self, xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
+        body_paragraph_ranges(xml)?
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("No existe el párrafo {}.", index))
+    }
+
+    /// Splits body paragraph `index` at `offset` (Enter)
+    pub fn split_paragraph(&mut self, index: usize, offset: usize) -> Result<(), String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let range = self.body_paragraph(&xml, index)?;
+        let (first, second) = split_paragraph(&xml[range.clone()], &self.styles, offset)?;
+        xml.replace_range(range, &(first + &second));
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        Ok(())
+    }
+
+    /// Deletes from (`p1`, `o1`) to (`p2`, `o2`) across paragraphs: whole paragraphs and tables
+    /// in between are removed and the two ends are joined into one paragraph
+    pub fn delete_range(&mut self, p1: usize, o1: usize, p2: usize, o2: usize) -> Result<(), String> {
+        if p1 == p2 {
+            return self.replace_paragraph_range(p1, o1, o2, "").map(|_| ());
+        }
+        if p2 < p1 {
+            return self.delete_range(p2, o2, p1, o1);
+        }
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let ranges = body_paragraph_ranges(&xml)?;
+        let (r1, r2) = match (ranges.get(p1), ranges.get(p2)) {
+            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            _ => return Err("La selección apunta a párrafos que no existen.".to_string()),
+        };
+        // Cutting must not tear apart a content control or other wrapper element
+        if !is_balanced(&xml[r1.end..r2.start]) {
+            return Err("La selección cruza un control de contenido; no se puede borrar de una vez.".to_string());
+        }
+        let head = edit_paragraph_range(&xml[r1.clone()], &self.styles, o1, usize::MAX, "")?;
+        let tail = edit_paragraph_range(&xml[r2.clone()], &self.styles, 0, o2, "")?;
+        let merged = merge_paragraphs(&head, &tail, &self.styles)?;
+        xml.replace_range(r1.start..r2.end, &merged);
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        Ok(())
+    }
+
+    /// Joins body paragraph `index` with the next one when nothing (e.g. a table) sits between
+    pub fn merge_with_next(&mut self, index: usize) -> Result<(), String> {
+        let xml = self.get_file_string("word/document.xml")?;
+        let ranges = body_paragraph_ranges(&xml)?;
+        match (ranges.get(index), ranges.get(index + 1)) {
+            (Some(a), Some(b)) if is_blank(&xml[a.end..b.start]) => {}
+            _ => return Err("Solo se pueden unir párrafos contiguos.".to_string()),
+        }
+        let len = parse_paragraph_fragment(&xml[ranges[index].clone()], &self.styles).text.chars().count();
+        self.delete_range(index, len, index + 1, 0)
+    }
+
+    /// The editor's single edit primitive: replaces the selection (`p1`,`o1`)–(`p2`,`o2`) with
+    /// `text`. `\n` in `text` starts a new paragraph and `\u{000B}` is a line break inside
+    /// the paragraph (like Word's ^l). Returns the caret position after the inserted text.
+    pub fn replace_range(
+        &mut self,
+        p1: usize,
+        o1: usize,
+        p2: usize,
+        o2: usize,
+        text: &str,
+    ) -> Result<(usize, usize), String> {
+        let ((p1, o1), (p2, o2)) = if (p2, o2) < (p1, o1) { ((p2, o2), (p1, o1)) } else { ((p1, o1), (p2, o2)) };
+        if (p1, o1) != (p2, o2) {
+            self.delete_range(p1, o1, p2, o2)?;
+        }
+        let (mut p, mut o) = (p1, o1);
+        for (i, line) in text.split('\n').enumerate() {
+            if i > 0 {
+                self.split_paragraph(p, o)?;
+                p += 1;
+                o = 0;
+            }
+            if !line.is_empty() {
+                let line = line.replace('\u{000B}', "\n");
+                self.replace_paragraph_range(p, o, o, &line)?;
+                o += line.chars().count();
+            }
+        }
+        Ok((p, o))
     }
 
     /// Extracts list of document elements (paragraphs and tables) in sequential order
@@ -417,7 +610,7 @@ impl DocxModifier {
             if count > 0 {
                 total_replacements += count;
                 affected_files.push(filename.clone());
-                self.files.insert(filename, new_xml.into_bytes());
+                self.put_file(filename, new_xml.into_bytes());
             }
         }
 
@@ -448,7 +641,7 @@ impl DocxModifier {
             .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
         let edited = edit_paragraph_range(&xml[range.clone()], &self.styles, start, end, text)?;
         xml.replace_range(range, &edited);
-        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
         Ok(true)
     }
 
@@ -506,7 +699,7 @@ impl DocxModifier {
             xml.replace_range(range, &edited);
         }
 
-        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
         Ok(ordered.len())
     }
 
@@ -576,7 +769,7 @@ impl DocxModifier {
         for (range, replacement) in edits {
             xml.replace_range(range, &replacement);
         }
-        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
         Ok(true)
     }
 
@@ -584,7 +777,7 @@ impl DocxModifier {
     pub fn add_table(&mut self, rows: usize, cols: usize, headers: &[String]) -> Result<bool, String> {
         let doc_xml = self.get_file_string("word/document.xml")?;
         let new_xml = insert_table_into_xml(&doc_xml, rows, cols, headers)?;
-        self.files.insert("word/document.xml".to_string(), new_xml.into_bytes());
+        self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
         Ok(true)
     }
 
@@ -595,7 +788,7 @@ impl DocxModifier {
 
         let doc_xml = self.get_file_string("word/document.xml")?;
         let new_xml = set_bg_color_in_xml(&doc_xml, &clean_hex);
-        self.files.insert("word/document.xml".to_string(), new_xml.into_bytes());
+        self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
         Ok(())
     }
 
@@ -604,7 +797,7 @@ impl DocxModifier {
         let clean_ext = if ext.contains("jpg") || ext.contains("jpeg") { "jpeg" } else { "png" };
         let image_filename = format!("word/media/background.{}", clean_ext);
         
-        self.files.insert(image_filename.clone(), image_bytes);
+        self.put_file(image_filename.clone(), image_bytes);
         if !self.original_order.contains(&image_filename) {
             self.original_order.push(image_filename.clone());
         }
@@ -619,7 +812,7 @@ impl DocxModifier {
                 let default_tag = format!("<Default Extension=\"{}\" ContentType=\"{}\"/>", clean_ext, mime);
                 if let Some(pos) = types_xml.find("</Types>") {
                     types_xml.insert_str(pos, &default_tag);
-                    self.files.insert("[Content_Types].xml".to_string(), types_xml.into_bytes());
+                    self.put_file("[Content_Types].xml".to_string(), types_xml.into_bytes());
                 }
             }
         }
@@ -638,7 +831,7 @@ impl DocxModifier {
             );
             if let Some(pos) = rels_xml.find("</Relationships>") {
                 rels_xml.insert_str(pos, &rel_entry);
-                self.files.insert(rels_path.to_string(), rels_xml.into_bytes());
+                self.put_file(rels_path.to_string(), rels_xml.into_bytes());
                 if !self.original_order.contains(&rels_path.to_string()) {
                     self.original_order.push(rels_path.to_string());
                 }
