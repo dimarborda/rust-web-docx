@@ -41,6 +41,12 @@ pub struct TextRun {
     pub font_size: Option<f64>,
     pub font_family: Option<String>,
     pub width: f64,
+    /// Absolute x where the run starts (justification included)
+    #[serde(default)]
+    pub x: f64,
+    /// Character offset of the run in its paragraph's text
+    #[serde(default)]
+    pub start: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -67,6 +73,9 @@ pub enum RenderCommand {
         max_width: f64,
         #[serde(default)]
         runs: Vec<TextRun>,
+        /// Present on paragraph body lines (not on list labels or page decorations)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<LineRange>,
     },
     #[serde(rename = "table_cell")]
     TableCell {
@@ -118,6 +127,18 @@ pub enum RenderCommand {
         color: String,
         rotation_deg: f64,
     },
+}
+
+/// Which part of its paragraph a laid out line shows, for caret placement and hit testing
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LineRange {
+    /// Character offsets in the paragraph text: `[start, end)`
+    pub start: usize,
+    pub end: usize,
+    /// Top of the line box (the text item's `y` is the baseline)
+    pub top: f64,
+    /// Extra px added to each space on justified lines
+    pub space_extra: f64,
 }
 
 pub struct LayoutEngine {
@@ -262,6 +283,7 @@ impl LayoutEngine {
                     is_last_line: true,
                     max_width: 250.0,
                     runs: Vec::new(),
+                    line: None,
                 });
             }
 
@@ -284,6 +306,7 @@ impl LayoutEngine {
                     is_last_line: true,
                     max_width: 250.0,
                     runs: Vec::new(),
+                    line: None,
                 });
             }
 
@@ -305,6 +328,7 @@ impl LayoutEngine {
                     is_last_line: true,
                     max_width: 120.0,
                     runs: Vec::new(),
+                    line: None,
                 });
             }
         }
@@ -787,7 +811,8 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
 fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
     let lb = &b.lines[idx];
     let baseline_y = pag.cursor_y + lb.baseline;
-    if !lb.line.text.is_empty() || !lb.line.runs.is_empty() {
+    // Empty lines are emitted too, so the caret can be placed on them
+    {
         pag.items.push(RenderCommand::Text {
             text: lb.line.text.clone(),
             x: lb.line.x,
@@ -805,6 +830,12 @@ fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
             is_last_line: lb.line.is_last_line,
             max_width: lb.line.max_width,
             runs: lb.line.runs.clone(),
+            line: Some(LineRange {
+                start: lb.line.start,
+                end: lb.line.end,
+                top: pag.cursor_y,
+                space_extra: lb.line.space_extra,
+            }),
         });
     }
 
@@ -836,7 +867,10 @@ fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
                     font_size: Some(geo.font_size),
                     font_family: label.font_family.clone(),
                     width: geo.label_width,
+                    x: pag.geo.margin_left + geo.label_offset,
+                    start: 0,
                 }],
+                line: None,
             });
         }
     }
@@ -917,6 +951,12 @@ struct LayoutLine {
     pub is_last_line: bool,
     /// A manual page break ends this line
     pub page_break_after: bool,
+    /// Character range of the paragraph text covered by this line. For wrapped lines `end` is
+    /// where the next line starts (trailing spaces belong to this line but are not drawn)
+    pub start: usize,
+    pub end: usize,
+    /// Extra px added to every space when the line is justified
+    pub space_extra: f64,
     pub runs: Vec<TextRun>,
 }
 
@@ -932,6 +972,8 @@ enum SegmentKind {
 #[derive(Clone, Debug)]
 struct LayoutSegment {
     kind: SegmentKind,
+    /// Character offset of the segment in the paragraph text
+    start: usize,
     bold: bool,
     italic: bool,
     underline: bool,
@@ -941,152 +983,67 @@ struct LayoutSegment {
 }
 
 enum AtomicUnit {
-    Newline,
-    PageBreak,
-    Tab,
+    Newline(usize),
+    PageBreak(usize),
+    Tab(usize),
     Spaces(Vec<LayoutSegment>),
     Word(Vec<LayoutSegment>),
 }
 
+/// Splits runs into words, spaces and breaks, remembering where each piece starts in the text
 fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> Vec<LayoutSegment> {
     let mut segments = Vec::new();
+    let mut pos = 0usize;
 
     for r in runs {
-        let run_color = if !r.color.is_empty() {
-            if r.color.starts_with('#') {
-                r.color.clone()
-            } else {
-                format!("#{}", r.color)
-            }
-        } else {
-            default_color.to_string()
+        let color = css_color(&r.color, default_color);
+        let seg = |kind: SegmentKind, start: usize| LayoutSegment {
+            kind,
+            start,
+            bold: r.bold,
+            italic: r.italic,
+            underline: r.underline,
+            color: color.clone(),
+            font_size: r.font_size.unwrap_or(default_fs),
+            font_family: r.font_family.clone(),
         };
-        let run_fs = r.font_size.unwrap_or(default_fs);
-
-        let mut current_text = String::new();
-        let mut current_spaces = String::new();
+        let mut text = String::new();
+        let mut text_start = pos;
+        let mut spaces = String::new();
+        let mut spaces_start = pos;
 
         for ch in r.text.chars() {
-            if ch == '\n' || ch == PAGE_BREAK {
-                if !current_text.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Text(current_text.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_text.clear();
-                }
-                if !current_spaces.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Space(current_spaces.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_spaces.clear();
-                }
-                segments.push(LayoutSegment {
-                    kind: if ch == PAGE_BREAK { SegmentKind::PageBreak } else { SegmentKind::Newline },
-                    bold: r.bold,
-                    italic: r.italic,
-                    underline: r.underline,
-                    color: run_color.clone(),
-                    font_size: run_fs,
-                    font_family: r.font_family.clone(),
-                });
-            } else if ch == '\t' {
-                if !current_text.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Text(current_text.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_text.clear();
-                }
-                if !current_spaces.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Space(current_spaces.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_spaces.clear();
-                }
-                segments.push(LayoutSegment {
-                    kind: SegmentKind::Tab,
-                    bold: r.bold,
-                    italic: r.italic,
-                    underline: r.underline,
-                    color: run_color.clone(),
-                    font_size: run_fs,
-                    font_family: r.font_family.clone(),
-                });
-            } else if ch.is_whitespace() {
-                if !current_text.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Text(current_text.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_text.clear();
-                }
-                current_spaces.push(ch);
-            } else {
-                if !current_spaces.is_empty() {
-                    segments.push(LayoutSegment {
-                        kind: SegmentKind::Space(current_spaces.clone()),
-                        bold: r.bold,
-                        italic: r.italic,
-                        underline: r.underline,
-                        color: run_color.clone(),
-                        font_size: run_fs,
-                        font_family: r.font_family.clone(),
-                    });
-                    current_spaces.clear();
-                }
-                current_text.push(ch);
+            let is_break = ch == '\n' || ch == PAGE_BREAK || ch == '\t';
+            if (is_break || ch.is_whitespace()) && !text.is_empty() {
+                segments.push(seg(SegmentKind::Text(std::mem::take(&mut text)), text_start));
             }
+            if (is_break || !ch.is_whitespace()) && !spaces.is_empty() {
+                segments.push(seg(SegmentKind::Space(std::mem::take(&mut spaces)), spaces_start));
+            }
+            match ch {
+                '\n' => segments.push(seg(SegmentKind::Newline, pos)),
+                PAGE_BREAK => segments.push(seg(SegmentKind::PageBreak, pos)),
+                '\t' => segments.push(seg(SegmentKind::Tab, pos)),
+                c if c.is_whitespace() => {
+                    if spaces.is_empty() {
+                        spaces_start = pos;
+                    }
+                    spaces.push(c);
+                }
+                c => {
+                    if text.is_empty() {
+                        text_start = pos;
+                    }
+                    text.push(c);
+                }
+            }
+            pos += 1;
         }
-
-        if !current_text.is_empty() {
-            segments.push(LayoutSegment {
-                kind: SegmentKind::Text(current_text),
-                bold: r.bold,
-                italic: r.italic,
-                underline: r.underline,
-                color: run_color.clone(),
-                font_size: run_fs,
-                font_family: r.font_family.clone(),
-            });
+        if !text.is_empty() {
+            segments.push(seg(SegmentKind::Text(text), text_start));
         }
-        if !current_spaces.is_empty() {
-            segments.push(LayoutSegment {
-                kind: SegmentKind::Space(current_spaces),
-                bold: r.bold,
-                italic: r.italic,
-                underline: r.underline,
-                color: run_color,
-                font_size: run_fs,
-                font_family: r.font_family.clone(),
-            });
+        if !spaces.is_empty() {
+            segments.push(seg(SegmentKind::Space(spaces), spaces_start));
         }
     }
 
@@ -1095,55 +1052,44 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
 
 fn group_into_units(segments: Vec<LayoutSegment>) -> Vec<AtomicUnit> {
     let mut units = Vec::new();
-    let mut current_word: Vec<LayoutSegment> = Vec::new();
-    let mut current_spaces: Vec<LayoutSegment> = Vec::new();
+    let mut word: Vec<LayoutSegment> = Vec::new();
+    let mut spaces: Vec<LayoutSegment> = Vec::new();
 
     for seg in segments {
         match seg.kind {
-            SegmentKind::Newline | SegmentKind::PageBreak => {
-                if !current_word.is_empty() {
-                    units.push(AtomicUnit::Word(std::mem::take(&mut current_word)));
+            SegmentKind::Newline | SegmentKind::PageBreak | SegmentKind::Tab => {
+                if !word.is_empty() {
+                    units.push(AtomicUnit::Word(std::mem::take(&mut word)));
                 }
-                if !current_spaces.is_empty() {
-                    units.push(AtomicUnit::Spaces(std::mem::take(&mut current_spaces)));
+                if !spaces.is_empty() {
+                    units.push(AtomicUnit::Spaces(std::mem::take(&mut spaces)));
                 }
-                units.push(if matches!(seg.kind, SegmentKind::PageBreak) {
-                    AtomicUnit::PageBreak
-                } else {
-                    AtomicUnit::Newline
+                units.push(match seg.kind {
+                    SegmentKind::Newline => AtomicUnit::Newline(seg.start),
+                    SegmentKind::PageBreak => AtomicUnit::PageBreak(seg.start),
+                    _ => AtomicUnit::Tab(seg.start),
                 });
             }
-            SegmentKind::Tab => {
-                if !current_word.is_empty() {
-                    units.push(AtomicUnit::Word(std::mem::take(&mut current_word)));
-                }
-                if !current_spaces.is_empty() {
-                    units.push(AtomicUnit::Spaces(std::mem::take(&mut current_spaces)));
-                }
-                units.push(AtomicUnit::Tab);
-            }
             SegmentKind::Space(_) => {
-                if !current_word.is_empty() {
-                    units.push(AtomicUnit::Word(std::mem::take(&mut current_word)));
+                if !word.is_empty() {
+                    units.push(AtomicUnit::Word(std::mem::take(&mut word)));
                 }
-                current_spaces.push(seg);
+                spaces.push(seg);
             }
             SegmentKind::Text(_) => {
-                if !current_spaces.is_empty() {
-                    units.push(AtomicUnit::Spaces(std::mem::take(&mut current_spaces)));
+                if !spaces.is_empty() {
+                    units.push(AtomicUnit::Spaces(std::mem::take(&mut spaces)));
                 }
-                current_word.push(seg);
+                word.push(seg);
             }
         }
     }
-
-    if !current_word.is_empty() {
-        units.push(AtomicUnit::Word(current_word));
+    if !word.is_empty() {
+        units.push(AtomicUnit::Word(word));
     }
-    if !current_spaces.is_empty() {
-        units.push(AtomicUnit::Spaces(current_spaces));
+    if !spaces.is_empty() {
+        units.push(AtomicUnit::Spaces(spaces));
     }
-
     units
 }
 
@@ -1156,6 +1102,7 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
             && last.font_size == Some(seg.font_size)
             && last.font_family == seg.font_family
             && last.text != "\t"
+            && last.start + last.text.chars().count() == seg.start
         {
             last.text.push_str(text);
             last.width += width;
@@ -1171,6 +1118,8 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
         font_size: Some(seg.font_size),
         font_family: seg.font_family.clone(),
         width,
+        x: 0.0,
+        start: seg.start,
     });
 }
 
@@ -1200,7 +1149,7 @@ fn layout_paragraph_lines(
         .unwrap_or_else(|| (p.indent_left + p.indent_first_line).max(0.0));
     let line_indent = |idx: usize| if idx == 0 { first_line_indent } else { p.indent_left.max(0.0) };
     let max_width = |idx: usize| (printable_width - line_indent(idx) - p.indent_right.max(0.0)).max(60.0);
-    let flush = |runs: Vec<TextRun>, line_w: f64, idx: usize, is_last: bool, page_break_after: bool| {
+    let flush = |mut runs: Vec<TextRun>, line_w: f64, idx: usize, ends_paragraph_line: bool, page_break_after: bool, range: (usize, usize)| {
         let indent = line_indent(idx);
         let max_w = max_width(idx);
         let x = match p.align.as_str() {
@@ -1208,19 +1157,36 @@ fn layout_paragraph_lines(
             "right" => margin_left + indent + (max_w - line_w).max(0.0),
             _ => margin_left + indent,
         };
+        // Justified lines (except the last one) stretch their spaces to fill the line
+        let space_count: usize = runs.iter().filter(|r| r.text != "\t").map(|r| r.text.matches(' ').count()).sum();
+        let gap = max_w - line_w;
+        let space_extra = if p.align == "both" && !ends_paragraph_line && space_count > 0 && gap > 0.0 {
+            gap / space_count as f64
+        } else {
+            0.0
+        };
+        let mut cur = x;
+        for r in runs.iter_mut() {
+            r.x = cur;
+            cur += r.width + if r.text == "\t" { 0.0 } else { space_extra * r.text.matches(' ').count() as f64 };
+        }
         LayoutLine {
             text: runs.iter().map(|r| r.text.as_str()).collect(),
             x,
             width: line_w,
             max_width: max_w,
-            is_last_line: is_last,
+            is_last_line: ends_paragraph_line,
             page_break_after,
+            start: range.0,
+            end: range.1,
+            space_extra,
             runs,
         }
     };
 
+    let total_chars = p.text.chars().count();
     if p.text.trim().is_empty() && p.runs.is_empty() {
-        return vec![flush(Vec::new(), 0.0, 0, true, false)];
+        return vec![flush(Vec::new(), 0.0, 0, true, false, (0, total_chars))];
     }
 
     // Raw runs with font sizes scaled to px
@@ -1240,33 +1206,65 @@ fn layout_paragraph_lines(
             font_family: p.font_family.clone(),
         }]
     };
+    let total_chars = source_runs.iter().map(|r| r.text.chars().count()).sum::<usize>();
 
     let units = group_into_units(extract_segments(&source_runs, default_color, font_size));
 
     let mut lines = Vec::new();
     let mut runs: Vec<TextRun> = Vec::new();
     let mut line_w = 0.0;
+    let mut line_start = 0usize;
     let mut pending_spaces: Vec<LayoutSegment> = Vec::new();
+    // Spaces are only swallowed at automatic line wraps, not after manual breaks
+    let mut just_wrapped = false;
+    let mut ended_with_break = false;
     let mut idx = 0;
 
     for unit in units {
+        ended_with_break = false;
         match unit {
-            AtomicUnit::Newline | AtomicUnit::PageBreak => {
-                let page_break = matches!(unit, AtomicUnit::PageBreak);
-                lines.push(flush(std::mem::take(&mut runs), line_w, idx, true, page_break));
+            AtomicUnit::Newline(at) | AtomicUnit::PageBreak(at) => {
+                let page_break = matches!(unit, AtomicUnit::PageBreak(_));
+                // Spaces before a manual break stay on the line
+                for sp in pending_spaces.drain(..) {
+                    if let SegmentKind::Space(ref s) = sp.kind {
+                        if !runs.is_empty() || !just_wrapped {
+                            let w = seg_width(m, &sp, s, family_css);
+                            append_segment_to_runs(&mut runs, s, &sp, w);
+                            line_w += w;
+                        }
+                    }
+                }
+                lines.push(flush(std::mem::take(&mut runs), line_w, idx, true, page_break, (line_start, at)));
                 line_w = 0.0;
-                pending_spaces.clear();
+                line_start = at + 1;
+                just_wrapped = false;
+                ended_with_break = true;
                 idx += 1;
             }
-            AtomicUnit::Tab => {
+            AtomicUnit::Tab(at) => {
                 // Default tab stops every 0.5in, measured from the left margin
                 const DEFAULT_TAB: f64 = 48.0;
-                let pos = line_indent(idx) + line_w;
-                let advance = (((pos / DEFAULT_TAB).floor() + 1.0) * DEFAULT_TAB - pos).max(1.0);
-                if line_w + advance > max_width(idx) && !runs.is_empty() {
-                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false));
+                for sp in pending_spaces.drain(..) {
+                    if let SegmentKind::Space(ref s) = sp.kind {
+                        if !runs.is_empty() || !just_wrapped {
+                            let w = seg_width(m, &sp, s, family_css);
+                            append_segment_to_runs(&mut runs, s, &sp, w);
+                            line_w += w;
+                        }
+                    }
+                }
+                let advance = |indent: f64, w: f64| {
+                    let pos = indent + w;
+                    (((pos / DEFAULT_TAB).floor() + 1.0) * DEFAULT_TAB - pos).max(1.0)
+                };
+                let mut tab_w = advance(line_indent(idx), line_w);
+                if line_w + tab_w > max_width(idx) && !runs.is_empty() {
+                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, at)));
                     line_w = 0.0;
+                    line_start = at;
                     idx += 1;
+                    tab_w = advance(line_indent(idx), 0.0);
                 }
                 runs.push(TextRun {
                     text: "\t".to_string(),
@@ -1276,13 +1274,16 @@ fn layout_paragraph_lines(
                     color: default_color.to_string(),
                     font_size: Some(font_size),
                     font_family: None,
-                    width: advance,
+                    width: tab_w,
+                    x: 0.0,
+                    start: at,
                 });
-                line_w += advance;
-                pending_spaces.clear();
+                line_w += tab_w;
+                just_wrapped = false;
             }
             AtomicUnit::Spaces(spaces) => pending_spaces = spaces,
             AtomicUnit::Word(word_segs) => {
+                let word_start = word_segs.first().map_or(line_start, |s| s.start);
                 let pieces: Vec<(String, LayoutSegment, f64)> = word_segs
                     .into_iter()
                     .filter_map(|seg| match seg.kind {
@@ -1294,9 +1295,8 @@ fn layout_paragraph_lines(
                     })
                     .collect();
                 let word_w: f64 = pieces.iter().map(|(_, _, w)| w).sum();
-                let spaces: Vec<(String, LayoutSegment, f64)> = if runs.is_empty() {
-                    Vec::new()
-                } else {
+                let keep_spaces = !runs.is_empty() || !just_wrapped;
+                let spaces: Vec<(String, LayoutSegment, f64)> = if keep_spaces {
                     pending_spaces
                         .drain(..)
                         .filter_map(|sp| match sp.kind {
@@ -1307,13 +1307,16 @@ fn layout_paragraph_lines(
                             _ => None,
                         })
                         .collect()
+                } else {
+                    Vec::new()
                 };
                 pending_spaces.clear();
                 let spaces_w: f64 = spaces.iter().map(|(_, _, w)| w).sum();
 
                 if line_w + spaces_w + word_w > max_width(idx) && !runs.is_empty() {
-                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false));
+                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, word_start)));
                     line_w = 0.0;
+                    line_start = word_start;
                     idx += 1;
                 } else {
                     for (s, seg, w) in &spaces {
@@ -1325,15 +1328,29 @@ fn layout_paragraph_lines(
                     append_segment_to_runs(&mut runs, t, seg, *w);
                     line_w += w;
                 }
+                just_wrapped = false;
+            }
+        }
+        if let Some(last) = lines.last() {
+            if !last.is_last_line && runs.is_empty() {
+                just_wrapped = true;
             }
         }
     }
 
-    if !runs.is_empty() {
-        lines.push(flush(runs, line_w, idx, true, false));
+    // Trailing spaces stay on the last line (they are visible to the caret)
+    for sp in pending_spaces.drain(..) {
+        if let SegmentKind::Space(ref s) = sp.kind {
+            if !runs.is_empty() || !just_wrapped {
+                let w = seg_width(m, &sp, s, family_css);
+                append_segment_to_runs(&mut runs, s, &sp, w);
+                line_w += w;
+            }
+        }
     }
-    if lines.is_empty() {
-        lines.push(flush(Vec::new(), 0.0, 0, true, false));
+    if !runs.is_empty() || ended_with_break || lines.is_empty() {
+        // A paragraph ending in a manual break still shows an (empty) last line
+        lines.push(flush(runs, line_w, idx, true, false, (line_start, total_chars)));
     }
     lines
 }
@@ -1531,9 +1548,9 @@ mod tests {
             .iter()
             .flat_map(|page| {
                 page.items.iter().filter_map(move |item| match item {
-                    // Page decorations ("Página 1 de 2") carry no runs
-                    RenderCommand::Text { paragraph_index, y, height, runs, .. }
-                        if *paragraph_index == paragraph && !runs.is_empty() =>
+                    // Body lines only: not list labels or page decorations ("Página 1 de 2")
+                    RenderCommand::Text { paragraph_index, y, height, line: Some(_), .. }
+                        if *paragraph_index == paragraph =>
                     {
                         Some((page.page_number, *y, *height))
                     }

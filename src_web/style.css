@@ -1136,3 +1136,57 @@ body {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ---------- Canvas-native caret & selection ---------- */
+.canvas-overlay {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.canvas-caret {
+  position: absolute;
+  width: 1.5px;
+  margin-left: -0.75px;
+  background: #111827;
+  animation: canvas-caret-blink 1.06s steps(1) infinite;
+}
+
+.canvas-caret.with-selection,
+.canvas-overlay.inactive .canvas-caret {
+  display: none;
+}
+
+.canvas-selection {
+  position: absolute;
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.canvas-overlay.inactive .canvas-selection {
+  background: rgba(148, 163, 184, 0.3);
+}
+
+@keyframes canvas-caret-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* Receives keyboard, IME and clipboard input; sits at the caret but stays invisible */
+.canvas-editor-input {
+  position: fixed;
+  width: 1px;
+  height: 1em;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.page-canvas {
+  cursor: text;
+}

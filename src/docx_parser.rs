@@ -15,7 +15,7 @@ use crate::styles::{
     RunProps, StyleSheet,
 };
 use crate::paragraph_edit::{
-    body_paragraph_ranges, edit_paragraph, parse_paragraph_fragment, table_cell_paragraph_ranges,
+    body_paragraph_ranges, edit_paragraph, edit_paragraph_range, parse_paragraph_fragment, table_cell_paragraph_ranges,
     FormatTarget,
 };
 
@@ -431,6 +431,25 @@ impl DocxModifier {
             .map(|u| ParagraphEdit { index: u.index, text: &u.text, formats: None, align: None })
             .collect();
         self.edit_body_paragraphs(&edits)
+    }
+
+    /// Replaces characters `start..end` of a body paragraph with `text` (caret editing)
+    pub fn replace_paragraph_range(
+        &mut self,
+        index: usize,
+        start: usize,
+        end: usize,
+        text: &str,
+    ) -> Result<bool, String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let range = body_paragraph_ranges(&xml)?
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+        let edited = edit_paragraph_range(&xml[range.clone()], &self.styles, start, end, text)?;
+        xml.replace_range(range, &edited);
+        self.files.insert("word/document.xml".to_string(), xml.into_bytes());
+        Ok(true)
     }
 
     /// Updates paragraph with individual styled text runs (bold, italic, color, underline per word/segment)

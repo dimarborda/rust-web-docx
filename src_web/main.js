@@ -1,4 +1,5 @@
 import init, { DocxSession } from '../pkg/rust_web_docx.js';
+import { createCanvasEditor } from './canvas_editor.js';
 
 // Application State
 let wasmReady = false;
@@ -23,7 +24,6 @@ let currentPageBgColor = '#FFFFFF';
 const emptyStateView = document.getElementById('empty-state-view');
 const canvasDocumentView = document.getElementById('canvas-document-view');
 const canvasPagesWrapper = document.getElementById('canvas-pages-wrapper');
-const canvasParagraphEditor = document.getElementById('canvas-paragraph-editor');
 const canvasCellEditor = document.getElementById('canvas-cell-editor');
 
 const docStatusContainer = document.getElementById('doc-status-container');
@@ -176,6 +176,7 @@ async function loadExampleDocx(filename) {
 
 // 3. Document Loaded Transition
 function onDocumentLoaded() {
+  canvasEditor.clear();
   if (!currentSession) return;
 
   emptyStateView.style.display = 'none';
@@ -223,6 +224,7 @@ function renderCanvasPagesFromWasm() {
     canvasPagesLayout = JSON.parse(layoutJson);
 
     statPages.textContent = canvasPagesLayout.total_pages;
+    canvasEditor.beginRender();
     canvasPagesWrapper.innerHTML = '';
 
     const dpr = window.devicePixelRatio || 1;
@@ -251,6 +253,7 @@ function renderCanvasPagesFromWasm() {
       canvas.style.height = `${scaledH}px`;
 
       const ctx = canvas.getContext('2d');
+      disableLigatures(ctx);
       ctx.scale(dpr * currentZoom, dpr * currentZoom);
 
       // 1. Draw page background
@@ -260,16 +263,15 @@ function renderCanvasPagesFromWasm() {
       // 2. Draw page content items
       drawCanvasPageItems(ctx, page.items);
 
-      // 3. Click handler for in-place paragraph / table cell block editing
-      canvas.addEventListener('click', (e) => {
-        handleCanvasClick(e, page, canvas, pageCard);
-      });
-
       pageCard.appendChild(canvas);
       canvasPagesWrapper.appendChild(pageCard);
+
+      // 3. Caret, selection and table cell editing on top of the canvas
+      canvasEditor.attachPage(page, pageCard, canvas);
     });
 
     ensureLayoutFonts(canvasPagesLayout);
+    canvasEditor.endRender();
 
   } catch (err) {
     console.error('Error rendering Canvas layout:', err);
@@ -279,6 +281,14 @@ function renderCanvasPagesFromWasm() {
 
 // Rust lays out text with these measurements, so line breaks match what the canvas draws
 const layoutMeasureCtx = document.createElement('canvas').getContext('2d');
+disableLigatures(layoutMeasureCtx);
+
+// Word does not apply ligatures ("fi") or kerning by default, and with them off every glyph
+// sits exactly at the sum of the advances measured for the caret
+function disableLigatures(ctx) {
+  if ('textRendering' in ctx) ctx.textRendering = 'optimizeSpeed';
+  if ('fontKerning' in ctx) ctx.fontKerning = 'none';
+}
 
 function measureTextForLayout(text, family, size, bold, italic) {
   layoutMeasureCtx.font = buildCanvasFont(bold ? '700' : '400', italic ? 'italic' : 'normal', size, family);
@@ -433,94 +443,32 @@ function drawCanvasPageItems(ctx, items) {
       });
 
     } else if (item.type === 'text') {
-      const isJustified = (item.align === 'both' || item.align === 'justify') && !item.is_last_line;
-
       if (item.runs && item.runs.length > 0) {
-        let curX = item.x;
-        let extraSpacePerSpace = 0;
-
-        if (isJustified && item.max_width && item.max_width > 0) {
-          let naturalWidth = 0;
-          let spaceCount = 0;
-
-          item.runs.forEach(run => {
-            if (run.text === '\t') {
-              naturalWidth += run.width || 0;
-              return;
-            }
-            const weight = run.bold ? '700' : '400';
-            const style = run.italic ? 'italic' : 'normal';
-            const fontSize = run.font_size || item.font_size || 14.66;
-            const fontFamily = run.font_family || item.font_family || 'Calibri, sans-serif';
-            ctx.font = buildCanvasFont(weight, style, fontSize, fontFamily);
-            naturalWidth += ctx.measureText(run.text).width;
-            for (let i = 0; i < run.text.length; i++) {
-              if (run.text[i] === ' ') spaceCount++;
-            }
-          });
-
-          if (spaceCount > 0 && item.max_width > naturalWidth) {
-            const gap = item.max_width - naturalWidth;
-            if (gap / spaceCount < (item.font_size || 14) * 2.0) {
-              extraSpacePerSpace = gap / spaceCount;
-            }
-          }
-        }
-
+        // Runs are drawn exactly where the layout placed them (run.x), with the layout's
+        // justification spacing, so the caret geometry computed in Rust matches the pixels
+        const extra = item.line ? item.line.space_extra : 0;
+        let nextX = item.x;
         item.runs.forEach(run => {
-          // Tabs were resolved to stop positions by the layout engine
+          const startX = run.x ?? nextX;
           if (run.text === '\t') {
-            curX += run.width || 0;
+            nextX = startX + (run.width || 0);
             return;
           }
-          const weight = run.bold ? '700' : '400';
-          const style = run.italic ? 'italic' : 'normal';
           const fontSize = run.font_size || item.font_size || 14.66;
           const fontFamily = run.font_family || item.font_family || 'Calibri, sans-serif';
           const runColor = formatCssColor(run.color || item.color, '#1E293B');
-
-          ctx.font = buildCanvasFont(weight, style, fontSize, fontFamily);
+          ctx.font = buildCanvasFont(run.bold ? '700' : '400', run.italic ? 'italic' : 'normal', fontSize, fontFamily);
           ctx.fillStyle = runColor;
           ctx.textAlign = 'left';
           ctx.textBaseline = 'alphabetic';
 
-          const runStartX = curX;
-
-          if (run.text.includes('\t')) {
-            const parts = run.text.split('\t');
-            parts.forEach((pStr, pIdx) => {
-              if (pIdx > 0) {
-                const tabInterval = 48;
-                const relX = curX - (item.x < 100 ? item.x : 65);
-                curX = 65 + Math.floor((relX + tabInterval) / tabInterval) * tabInterval;
-              }
-              if (pStr) {
-                if (extraSpacePerSpace > 0 && pStr.includes(' ')) {
-                  const words = pStr.split(' ');
-                  words.forEach((w, wIdx) => {
-                    if (wIdx > 0) {
-                      curX += ctx.measureText(' ').width + extraSpacePerSpace;
-                    }
-                    if (w) {
-                      ctx.fillText(w, curX, item.y);
-                      curX += ctx.measureText(w).width;
-                    }
-                  });
-                } else {
-                  ctx.fillText(pStr, curX, item.y);
-                  curX += ctx.measureText(pStr).width;
-                }
-              }
-            });
-          } else if (extraSpacePerSpace > 0 && run.text.includes(' ')) {
-            const words = run.text.split(' ');
-            words.forEach((w, wIdx) => {
-              if (wIdx > 0) {
-                curX += ctx.measureText(' ').width + extraSpacePerSpace;
-              }
-              if (w) {
-                ctx.fillText(w, curX, item.y);
-                curX += ctx.measureText(w).width;
+          let curX = startX;
+          if (extra > 0 && run.text.includes(' ')) {
+            run.text.split(' ').forEach((word, i) => {
+              if (i > 0) curX += ctx.measureText(' ').width + extra;
+              if (word) {
+                ctx.fillText(word, curX, item.y);
+                curX += ctx.measureText(word).width;
               }
             });
           } else {
@@ -530,65 +478,21 @@ function drawCanvasPageItems(ctx, items) {
 
           if (run.underline) {
             ctx.beginPath();
-            ctx.moveTo(runStartX, item.y + 2);
+            ctx.moveTo(startX, item.y + 2);
             ctx.lineTo(curX, item.y + 2);
             ctx.strokeStyle = runColor;
             ctx.lineWidth = 1;
             ctx.stroke();
           }
+          nextX = curX;
         });
-      } else {
-        const fontSize = item.font_size || 14.66;
-        const textColor = formatCssColor(item.color, '#1E293B');
-        ctx.font = buildCanvasFont(item.font_weight, item.font_style, fontSize, item.font_family);
-        ctx.fillStyle = textColor;
-        ctx.textAlign = 'left';
+      } else if (item.text) {
+        // Page decorations (header, footer, page numbers)
+        ctx.font = buildCanvasFont(item.font_weight, item.font_style, item.font_size || 14.66, item.font_family);
+        ctx.fillStyle = formatCssColor(item.color, '#1E293B');
+        ctx.textAlign = item.align === 'right' ? 'right' : (item.align === 'center' ? 'center' : 'left');
         ctx.textBaseline = 'alphabetic';
-
-        let extraSpacePerSpace = 0;
-        if (isJustified && item.max_width && item.max_width > 0) {
-          const naturalWidth = ctx.measureText(item.text).width;
-          let spaceCount = 0;
-          for (let i = 0; i < item.text.length; i++) {
-            if (item.text[i] === ' ') spaceCount++;
-          }
-          if (spaceCount > 0 && item.max_width > naturalWidth) {
-            const gap = item.max_width - naturalWidth;
-            if (gap / spaceCount < fontSize * 2.0) {
-              extraSpacePerSpace = gap / spaceCount;
-            }
-          }
-        }
-
-        if (extraSpacePerSpace > 0 && item.text.includes(' ')) {
-          let curX = item.x;
-          const words = item.text.split(' ');
-          words.forEach((w, wIdx) => {
-            if (wIdx > 0) {
-              curX += ctx.measureText(' ').width + extraSpacePerSpace;
-            }
-            if (w) {
-              ctx.fillText(w, curX, item.y);
-              curX += ctx.measureText(w).width;
-            }
-          });
-        } else if (item.text.includes('\t')) {
-          let curX = item.x;
-          const parts = item.text.split('\t');
-          parts.forEach((pStr, pIdx) => {
-            if (pIdx > 0) {
-              const tabInterval = 48;
-              const relX = curX - 65;
-              curX = 65 + Math.floor((relX + tabInterval) / tabInterval) * tabInterval;
-            }
-            if (pStr) {
-              ctx.fillText(pStr, curX, item.y);
-              curX += ctx.measureText(pStr).width;
-            }
-          });
-        } else {
-          ctx.fillText(item.text, item.x, item.y);
-        }
+        ctx.fillText(item.text, item.x, item.y);
       }
     }
   });
@@ -596,70 +500,35 @@ function drawCanvasPageItems(ctx, items) {
 
 let blurTimeout = null;
 
-// 7. Interactive Click: Activate In-Place Full Paragraph / Table Cell Editor
-function handleCanvasClick(e, page, canvas, pageCard) {
+// 7. Table cells keep their in-place cell editor. Returns true when a cell took the click
+function handleTableClick(page, point, pageCard, canvas) {
   if (blurTimeout) {
     clearTimeout(blurTimeout);
     blurTimeout = null;
   }
 
-  const rect = canvas.getBoundingClientRect();
-  const clickX = (e.clientX - rect.left) / currentZoom;
-  const clickY = (e.clientY - rect.top) / currentZoom;
-
-  // Hit test table cells first
   for (const item of page.items) {
-    if (item.type === 'table_cell') {
-      if (
-        clickX >= item.x &&
-        clickX <= item.x + item.width &&
-        clickY >= item.y &&
-        clickY <= item.y + item.height
-      ) {
-        if (
-          activeTarget &&
-          activeTarget.type === 'cell' &&
-          activeTarget.tableIndex === item.table_index &&
-          activeTarget.row === item.row &&
-          activeTarget.col === item.col
-        ) {
-          closeActiveEditors();
-          return;
-        }
+    if (
+      item.type === 'table_cell' &&
+      point.x >= item.x && point.x <= item.x + item.width &&
+      point.y >= item.y && point.y <= item.y + item.height
+    ) {
+      const sameCell = activeTarget?.type === 'cell' && activeTarget.tableIndex === item.table_index &&
+        activeTarget.row === item.row && activeTarget.col === item.col;
+      if (!sameCell) {
         commitCurrentEditor();
         openInPlaceCellEditor(item, pageCard, canvas);
-        return;
       }
+      return true;
     }
   }
 
-  // Hit test paragraph text items
-  for (const item of page.items) {
-    if (item.type === 'text') {
-      if (
-        clickX >= item.x - 25 &&
-        clickX <= item.x + item.width + 50 &&
-        clickY >= item.y - item.font_size - 6 &&
-        clickY <= item.y + 8
-      ) {
-        // If clicking on the same paragraph that is currently being edited, close it to reveal the rendered canvas
-        if (
-          activeTarget &&
-          activeTarget.type === 'paragraph' &&
-          activeTarget.paragraphIndex === item.paragraph_index
-        ) {
-          closeActiveEditors();
-          return;
-        }
-        commitCurrentEditor();
-        openInPlaceParagraphEditor(item.paragraph_index, page, pageCard, canvas);
-        return;
-      }
-    }
+  // Leaving a cell for the text: save it and refresh the pages once this click is handled
+  if (activeTarget?.type === 'cell') {
+    commitCurrentEditor();
+    setTimeout(renderCanvasPagesFromWasm, 0);
   }
-
-  // If clicked on blank area, commit and close open editors
-  closeActiveEditors();
+  return false;
 }
 
 function escapeHtml(str) {
@@ -670,257 +539,6 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-function rgbToHex(color) {
-  if (!color) return '';
-  if (color.startsWith('#')) return color.toUpperCase();
-  const rgbMatch = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-  if (rgbMatch) {
-    const r = parseInt(rgbMatch[1], 10).toString(16).padStart(2, '0');
-    const g = parseInt(rgbMatch[2], 10).toString(16).padStart(2, '0');
-    const b = parseInt(rgbMatch[3], 10).toString(16).padStart(2, '0');
-    return `#${r}${g}${b}`.toUpperCase();
-  }
-  return color;
-}
-
-function buildParagraphEditorHtml(p) {
-  if (!p) return '';
-  if (p.runs && p.runs.length > 0) {
-    return p.runs.map(run => {
-      let text = escapeHtml(run.text || '');
-      if (!text) return '';
-      text = text.replace(/\n/g, '<br>');
-      
-      let style = '';
-      if (run.color && run.color.toLowerCase() !== 'auto' && run.color !== '') {
-        const hex = run.color.startsWith('#') ? run.color : `#${run.color}`;
-        style += `color: ${hex};`;
-      }
-      
-      let inner = text;
-      if (run.bold) inner = `<b>${inner}</b>`;
-      if (run.italic) inner = `<i>${inner}</i>`;
-      if (run.underline) inner = `<u>${inner}</u>`;
-      if (style) inner = `<span style="${style}">${inner}</span>`;
-      return inner;
-    }).join('');
-  }
-  return escapeHtml(p.text || '').replace(/\n/g, '<br>');
-}
-
-function extractRunsFromEditor(rootEl) {
-  const rawRuns = [];
-
-  function traverse(node, currentStyle) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent;
-      if (text && text.length > 0) {
-        rawRuns.push({
-          text: text,
-          bold: Boolean(currentStyle.bold),
-          italic: Boolean(currentStyle.italic),
-          underline: Boolean(currentStyle.underline),
-          color: currentStyle.color || '',
-          font_size: currentStyle.fontSize || null,
-          font_family: currentStyle.fontFamily || null
-        });
-      }
-      return;
-    }
-
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const tag = node.tagName.toLowerCase();
-      if (tag === 'br') {
-        rawRuns.push({
-          text: '\n',
-          bold: Boolean(currentStyle.bold),
-          italic: Boolean(currentStyle.italic),
-          underline: Boolean(currentStyle.underline),
-          color: currentStyle.color || '',
-          font_size: currentStyle.fontSize || null,
-          font_family: currentStyle.fontFamily || null
-        });
-        return;
-      }
-
-      const nextStyle = { ...currentStyle };
-      const style = node.style;
-
-      if (tag === 'b' || tag === 'strong' || (style && (style.fontWeight === 'bold' || parseInt(style.fontWeight, 10) >= 600))) {
-        nextStyle.bold = true;
-      }
-      if (tag === 'i' || tag === 'em' || (style && style.fontStyle === 'italic')) {
-        nextStyle.italic = true;
-      }
-      if (tag === 'u' || (style && style.textDecoration && style.textDecoration.includes('underline'))) {
-        nextStyle.underline = true;
-      }
-      if (tag === 'font' && node.color) {
-        nextStyle.color = rgbToHex(node.color).replace('#', '');
-      } else if (style && style.color) {
-        const hex = rgbToHex(style.color);
-        if (hex) nextStyle.color = hex.replace('#', '');
-      }
-
-      for (let child = node.firstChild; child; child = child.nextSibling) {
-        traverse(child, nextStyle);
-      }
-    }
-  }
-
-  const baseStyle = {
-    bold: false,
-    italic: false,
-    underline: false,
-    color: '',
-    fontSize: null,
-    fontFamily: null
-  };
-
-  traverse(rootEl, baseStyle);
-
-  // Merge consecutive runs with identical formatting
-  const mergedRuns = [];
-  for (const r of rawRuns) {
-    if (mergedRuns.length > 0) {
-      const last = mergedRuns[mergedRuns.length - 1];
-      if (
-        last.bold === r.bold &&
-        last.italic === r.italic &&
-        last.underline === r.underline &&
-        (last.color || '') === (r.color || '') &&
-        last.font_size === r.font_size &&
-        last.font_family === r.font_family
-      ) {
-        last.text += r.text;
-        continue;
-      }
-    }
-    mergedRuns.push({ ...r });
-  }
-
-  if (mergedRuns.length === 0) {
-    mergedRuns.push({
-      text: '',
-      bold: false,
-      italic: false,
-      underline: false,
-      color: '',
-      font_size: null,
-      font_family: null
-    });
-  }
-
-  return mergedRuns;
-}
-
-function getParagraphElement(pIndex) {
-  if (currentSession) {
-    try {
-      const elementsJson = currentSession.get_document_elements_json();
-      activeDocumentElements = JSON.parse(elementsJson);
-    } catch (e) {
-      console.warn('Could not refresh elements:', e);
-    }
-  }
-  return activeDocumentElements?.find(
-    el => el.type === 'paragraph' && el.index === pIndex
-  );
-}
-
-// 8. Open In-Place Full Paragraph Block Editor
-function openInPlaceParagraphEditor(paragraphIndex, page, pageCard, canvas) {
-  if (blurTimeout) {
-    clearTimeout(blurTimeout);
-    blurTimeout = null;
-  }
-  clearTimeout(updateDebounceTimer);
-
-  activeParagraphIndex = paragraphIndex;
-
-  // Find all text lines belonging to this paragraph on this page
-  const pLines = page.items.filter(
-    it => it.type === 'text' && it.paragraph_index === paragraphIndex
-  );
-
-  if (pLines.length === 0) return;
-
-  const firstLine = pLines[0];
-  const minY = Math.min(...pLines.map(it => it.y - it.font_size * 0.85));
-  const maxY = Math.max(...pLines.map(it => it.y + it.height - it.font_size * 0.85));
-  const blockHeight = Math.max(34, maxY - minY);
-
-  const pElement = getParagraphElement(paragraphIndex);
-  const marginL = (page.margin_left !== undefined) ? page.margin_left : 65;
-  const marginR = (page.margin_right !== undefined) ? page.margin_right : 65;
-  const printableW = (page.printable_width !== undefined) ? page.printable_width : Math.max(100, page.width - marginL - marginR);
-
-  const indentL = (pElement && pElement.indent_left) ? pElement.indent_left : 0;
-  const indentR = (pElement && pElement.indent_right) ? pElement.indent_right : 0;
-
-  const blockX = marginL + indentL;
-  const blockWidth = Math.max(80, printableW - indentL - indentR);
-
-  const rawAlign = pElement?.align || firstLine.align || 'left';
-  const align = (rawAlign === 'both' || rawAlign === 'justify') ? 'justify' : (rawAlign === 'center' || rawAlign === 'right' ? rawAlign : 'left');
-
-  const fullHtml = buildParagraphEditorHtml(pElement || { text: getParagraphFullText(paragraphIndex) });
-
-  const pageCardRect = pageCard.getBoundingClientRect();
-  const containerRect = canvasDocumentView.getBoundingClientRect();
-
-  const cardOffsetLeft = pageCardRect.left - containerRect.left + canvasDocumentView.scrollLeft;
-  const cardOffsetTop = pageCardRect.top - containerRect.top + canvasDocumentView.scrollTop;
-
-  const canvasLeft = canvas.offsetLeft;
-  const canvasTop = canvas.offsetTop;
-
-  const pageBg = page.bg_color || currentPageBgColor || '#FFFFFF';
-  const cleanBg = pageBg.startsWith('#') ? pageBg : `#${pageBg}`;
-  const textColor = firstLine.color ? (firstLine.color.startsWith('#') ? firstLine.color : `#${firstLine.color}`) : '#1E293B';
-  const lineHeightPx = firstLine.height || (firstLine.font_size * 1.35);
-
-  canvasParagraphEditor.style.left = `${cardOffsetLeft + canvasLeft + blockX * currentZoom}px`;
-  canvasParagraphEditor.style.top = `${cardOffsetTop + canvasTop + minY * currentZoom}px`;
-  canvasParagraphEditor.style.width = `${blockWidth * currentZoom}px`;
-  canvasParagraphEditor.style.minHeight = `${blockHeight * currentZoom}px`;
-  canvasParagraphEditor.style.fontSize = `${firstLine.font_size * currentZoom}px`;
-  canvasParagraphEditor.style.fontFamily = formatFontFamily(firstLine.font_family);
-  canvasParagraphEditor.style.fontWeight = (firstLine.font_weight === '700' || pElement?.bold) ? 'bold' : 'normal';
-  canvasParagraphEditor.style.fontStyle = (firstLine.font_style === 'italic' || pElement?.italic) ? 'italic' : 'normal';
-  canvasParagraphEditor.style.color = textColor;
-  canvasParagraphEditor.style.caretColor = textColor;
-  canvasParagraphEditor.style.background = cleanBg;
-  canvasParagraphEditor.style.textAlign = align;
-  canvasParagraphEditor.style.lineHeight = `${lineHeightPx * currentZoom}px`;
-  canvasParagraphEditor.style.letterSpacing = 'normal';
-  canvasParagraphEditor.style.border = 'none';
-  canvasParagraphEditor.style.outline = 'none';
-  canvasParagraphEditor.style.boxShadow = 'none';
-  canvasParagraphEditor.style.padding = '0';
-  canvasParagraphEditor.style.margin = '0';
-  canvasParagraphEditor.style.boxSizing = 'border-box';
-  canvasParagraphEditor.style.wordBreak = 'normal';
-  canvasParagraphEditor.style.overflowWrap = 'break-word';
-  canvasParagraphEditor.style.whiteSpace = 'pre-wrap';
-
-  canvasParagraphEditor.innerHTML = fullHtml;
-  canvasParagraphEditor.style.display = 'block';
-
-  activeTarget = {
-    type: 'paragraph',
-    paragraphIndex,
-    item: firstLine
-  };
-
-  // Focus and select at end
-  canvasParagraphEditor.focus();
-  placeCaretAtEnd(canvasParagraphEditor);
-
-  // Update Ribbon buttons to reflect paragraph formatting
-  updateRibbonStateForParagraph(firstLine, pElement);
 }
 
 // 9. Open In-Place Table Cell Editor
@@ -975,36 +593,6 @@ function openInPlaceCellEditor(cellItem, pageCard, canvas) {
   placeCaretAtEnd(canvasCellEditor);
 }
 
-// 10. Live Synchronize Paragraph Editor Input
-function handleParagraphEditorInput() {
-  if (!canvasParagraphEditor || !activeTarget || activeTarget.type !== 'paragraph' || !currentSession) return;
-
-  const runs = extractRunsFromEditor(canvasParagraphEditor);
-  const pIndex = activeTarget.paragraphIndex;
-  setSyncStatus(false);
-
-  // Update local memory cache
-  const p = activeDocumentElements.find(
-    el => el.type === 'paragraph' && el.index === pIndex
-  );
-  if (p) {
-    p.runs = runs;
-    p.text = runs.map(r => r.text).join('');
-  }
-
-  clearTimeout(updateDebounceTimer);
-  updateDebounceTimer = setTimeout(() => {
-    try {
-      const align = p?.align || 'left';
-      currentSession.update_paragraph_runs(pIndex, JSON.stringify(runs), align);
-      setSyncStatus(true);
-      updateLiveStats();
-    } catch (err) {
-      console.error('Error syncing paragraph runs:', err);
-    }
-  }, 200);
-}
-
 function handleCellEditorInput() {
   if (!canvasCellEditor || !activeTarget || activeTarget.type !== 'cell' || !currentSession) return;
 
@@ -1027,27 +615,6 @@ function handleCellEditorInput() {
 // 11. Commit and Close Active Editors
 function commitCurrentEditor() {
   clearTimeout(updateDebounceTimer);
-
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    if (activeTarget && activeTarget.type === 'paragraph' && currentSession) {
-      const runs = extractRunsFromEditor(canvasParagraphEditor);
-      const pIndex = activeTarget.paragraphIndex;
-      try {
-        const p = activeDocumentElements.find(
-          el => el.type === 'paragraph' && el.index === pIndex
-        );
-        const align = p?.align || 'left';
-        currentSession.update_paragraph_runs(pIndex, JSON.stringify(runs), align);
-        if (p) {
-          p.runs = runs;
-          p.text = runs.map(r => r.text).join('');
-        }
-      } catch (err) {
-        console.error('Error committing paragraph runs:', err);
-      }
-    }
-    canvasParagraphEditor.style.display = 'none';
-  }
 
   if (canvasCellEditor && canvasCellEditor.style.display !== 'none') {
     if (activeTarget && activeTarget.type === 'cell' && currentSession) {
@@ -1130,21 +697,6 @@ function navigateToNextRowCell() {
   renderCanvasPagesFromWasm();
 }
 
-function getParagraphFullText(pIndex) {
-  if (currentSession) {
-    try {
-      const elementsJson = currentSession.get_document_elements_json();
-      activeDocumentElements = JSON.parse(elementsJson);
-    } catch (e) {
-      console.warn('Could not refresh elements:', e);
-    }
-  }
-  const p = activeDocumentElements?.find(
-    el => el.type === 'paragraph' && el.index === pIndex
-  );
-  return p ? p.text : '';
-}
-
 function placeCaretAtEnd(el) {
   if (typeof window.getSelection !== 'undefined' && typeof document.createRange !== 'undefined') {
     const range = document.createRange();
@@ -1166,170 +718,114 @@ function setSyncStatus(isSynced) {
   }
 }
 
-// 12. Formatting Ribbon Actions (Applies to Selection or Active Paragraph Block)
-function applyAlignment(alignValue) {
-  if (activeParagraphIndex === null) {
-    showToast('Haz clic en un párrafo de la página para alinearlo.');
+// 12. Formatting: applies to the selected characters, or to the whole paragraph when the
+// selection is collapsed
+function selectedParagraph() {
+  const sel = canvasEditor.selection();
+  if (!sel) return null;
+  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === sel.paragraph);
+  return p ? { sel, p } : null;
+}
+
+/** One entry per character, carrying the formatting of its run */
+function paragraphChars(p) {
+  const chars = [];
+  (p.runs || []).forEach(run => Array.from(run.text).forEach(ch => chars.push({ ...run, text: ch })));
+  return chars;
+}
+
+function sameFormat(a, b) {
+  return a.bold === b.bold && a.italic === b.italic && a.underline === b.underline &&
+    (a.color || '') === (b.color || '') && a.font_size === b.font_size && a.font_family === b.font_family;
+}
+
+function applyRunFormat(change, { refocus = true } = {}) {
+  const target = selectedParagraph();
+  if (!target) {
+    showToast('Haz clic en el texto para aplicar formato.');
     return;
   }
+  const { sel, p } = target;
+  const chars = paragraphChars(p);
+  const range = sel.start === sel.end ? chars : chars.slice(sel.start, sel.end);
+  if (range.length === 0) return;
+  change(range);
 
-  const cssAlign = (alignValue === 'both' || alignValue === 'justify') ? 'justify' : (alignValue === 'center' || alignValue === 'right' ? alignValue : 'left');
+  const runs = [];
+  chars.forEach(c => {
+    const last = runs[runs.length - 1];
+    if (last && sameFormat(last, c)) last.text += c.text;
+    else runs.push({ ...c });
+  });
 
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    canvasParagraphEditor.style.textAlign = cssAlign;
+  try {
+    currentSession.update_paragraph_runs(p.index, JSON.stringify(runs), p.align || 'left');
+  } catch (err) {
+    console.error('Format error:', err);
+    showToast('No se pudo aplicar el formato: ' + err, true);
+    return;
   }
+  renderCanvasPagesFromWasm();
+  if (refocus) canvasEditor.focus();
+}
 
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === activeParagraphIndex);
-  if (p) p.align = alignValue;
-
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    const runs = extractRunsFromEditor(canvasParagraphEditor);
-    currentSession.update_paragraph_runs(activeParagraphIndex, JSON.stringify(runs), alignValue);
-  } else {
-    const text = p?.text || '';
-    const color = p?.color || '';
-    const bold = p?.bold || false;
-    const italic = p?.italic || false;
-    currentSession.update_paragraph_rich(activeParagraphIndex, text, alignValue, color, bold, italic);
-  }
-
-  updateRibbonAlignUI(alignValue);
-
-  if (!canvasParagraphEditor || canvasParagraphEditor.style.display === 'none') {
-    renderCanvasPagesFromWasm();
-  }
+function toggleRunFlag(flag) {
+  applyRunFormat(range => {
+    const on = !range.every(c => c[flag]);
+    range.forEach(c => { c[flag] = on; });
+  });
 }
 
 function toggleBold() {
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    canvasParagraphEditor.focus();
-    document.execCommand('bold', false, null);
-    handleParagraphEditorInput();
-    updateSelectionFormattingState();
-    return;
-  }
-
-  if (activeParagraphIndex === null) {
-    showToast('Haz clic en un párrafo o texto para aplicar negrita.');
-    return;
-  }
-
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === activeParagraphIndex);
-  if (!p) return;
-  const isBold = !p.bold;
-  p.bold = isBold;
-  if (p.runs && p.runs.length > 0) {
-    p.runs.forEach(r => r.bold = isBold);
-    currentSession.update_paragraph_runs(activeParagraphIndex, JSON.stringify(p.runs), p.align || 'left');
-  } else {
-    currentSession.update_paragraph_rich(activeParagraphIndex, p.text || '', p.align || 'left', p.color || '', isBold, p.italic || false);
-  }
-  btnFmtBold.classList.toggle('active', isBold);
-  renderCanvasPagesFromWasm();
+  toggleRunFlag('bold');
 }
 
 function toggleItalic() {
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    canvasParagraphEditor.focus();
-    document.execCommand('italic', false, null);
-    handleParagraphEditorInput();
-    updateSelectionFormattingState();
-    return;
-  }
-
-  if (activeParagraphIndex === null) {
-    showToast('Haz clic en un párrafo o texto para aplicar cursiva.');
-    return;
-  }
-
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === activeParagraphIndex);
-  if (!p) return;
-  const isItalic = !p.italic;
-  p.italic = isItalic;
-  if (p.runs && p.runs.length > 0) {
-    p.runs.forEach(r => r.italic = isItalic);
-    currentSession.update_paragraph_runs(activeParagraphIndex, JSON.stringify(p.runs), p.align || 'left');
-  } else {
-    currentSession.update_paragraph_rich(activeParagraphIndex, p.text || '', p.align || 'left', p.color || '', p.bold || false, isItalic);
-  }
-  btnFmtItalic.classList.toggle('active', isItalic);
-  renderCanvasPagesFromWasm();
+  toggleRunFlag('italic');
 }
 
 function toggleUnderline() {
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    canvasParagraphEditor.focus();
-    document.execCommand('underline', false, null);
-    handleParagraphEditorInput();
-    updateSelectionFormattingState();
-    return;
-  }
-
-  if (activeParagraphIndex === null) {
-    showToast('Haz clic en un párrafo o texto para aplicar subrayado.');
-    return;
-  }
-
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === activeParagraphIndex);
-  if (p && p.runs && p.runs.length > 0) {
-    const isUnderline = !p.runs[0].underline;
-    p.runs.forEach(r => r.underline = isUnderline);
-    currentSession.update_paragraph_runs(activeParagraphIndex, JSON.stringify(p.runs), p.align || 'left');
-    if (btnFmtUnderline) btnFmtUnderline.classList.toggle('active', isUnderline);
-    renderCanvasPagesFromWasm();
-  }
+  toggleRunFlag('underline');
 }
 
 function applyTextColor(hexColor) {
   if (!hexColor) return;
-  const cleanHex = hexColor.startsWith('#') ? hexColor : `#${hexColor}`;
-
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    canvasParagraphEditor.focus();
-    document.execCommand('foreColor', false, cleanHex);
-    handleParagraphEditorInput();
-    return;
-  }
-
-  if (activeParagraphIndex === null) {
-    showToast('Haz clic en un párrafo o texto para cambiar su color.');
-    return;
-  }
-
-  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === activeParagraphIndex);
-  if (!p) return;
-  const rawCol = cleanHex.replace('#', '');
-  p.color = rawCol;
-  if (p.runs && p.runs.length > 0) {
-    p.runs.forEach(r => r.color = cleanHex);
-    currentSession.update_paragraph_runs(activeParagraphIndex, JSON.stringify(p.runs), p.align || 'left');
-  } else {
-    currentSession.update_paragraph_rich(activeParagraphIndex, p.text || '', p.align || 'left', cleanHex, p.bold || false, p.italic || false);
-  }
-  renderCanvasPagesFromWasm();
+  const clean = hexColor.replace('#', '').toUpperCase();
+  // The native color picker keeps focus while open
+  applyRunFormat(range => range.forEach(c => { c.color = clean; }), { refocus: false });
 }
 
-function updateSelectionFormattingState() {
-  if (canvasParagraphEditor && canvasParagraphEditor.style.display !== 'none') {
-    try {
-      const isBold = document.queryCommandState('bold');
-      const isItalic = document.queryCommandState('italic');
-      const isUnderline = document.queryCommandState('underline');
-      btnFmtBold.classList.toggle('active', Boolean(isBold));
-      btnFmtItalic.classList.toggle('active', Boolean(isItalic));
-      if (btnFmtUnderline) btnFmtUnderline.classList.toggle('active', Boolean(isUnderline));
-
-      const foreColor = document.queryCommandValue('foreColor');
-      if (foreColor) {
-        const hex = rgbToHex(foreColor);
-        if (hex && hex.startsWith('#')) {
-          textColorInput.value = hex;
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
+function applyAlignment(alignValue) {
+  const target = selectedParagraph();
+  if (!target) {
+    showToast('Haz clic en un párrafo para alinearlo.');
+    return;
   }
+  const { p } = target;
+  currentSession.update_paragraph_runs(p.index, JSON.stringify(p.runs || []), alignValue);
+  renderCanvasPagesFromWasm();
+  canvasEditor.focus();
+}
+
+/** Reflects the formatting at the caret (or of the whole selection) in the ribbon */
+function updateRibbonForSelection(sel) {
+  activeParagraphIndex = sel ? sel.paragraph : null;
+  if (!sel) return;
+  const p = activeDocumentElements.find(el => el.type === 'paragraph' && el.index === sel.paragraph);
+  if (!p) return;
+  updateRibbonAlignUI(p.align || 'left');
+
+  const chars = paragraphChars(p);
+  const range = sel.start === sel.end
+    ? chars.slice(Math.max(0, sel.start - 1), Math.max(1, sel.start))
+    : chars.slice(sel.start, sel.end);
+  const all = flag => range.length > 0 && range.every(c => c[flag]);
+  btnFmtBold.classList.toggle('active', all('bold'));
+  btnFmtItalic.classList.toggle('active', all('italic'));
+  if (btnFmtUnderline) btnFmtUnderline.classList.toggle('active', all('underline'));
+
+  const color = (range[0]?.color || p.color || '').replace('#', '');
+  if (/^[0-9a-fA-F]{6}$/.test(color)) textColorInput.value = `#${color}`;
 }
 
 function updateRibbonAlignUI(align) {
@@ -1338,23 +834,6 @@ function updateRibbonAlignUI(align) {
       alignButtons[k].classList.toggle('active', k === align || (k === 'both' && (align === 'justify' || align === 'both')));
     }
   });
-}
-
-function updateRibbonStateForParagraph(item, pElement) {
-  updateRibbonAlignUI(item.align || pElement?.align || 'left');
-
-  const isBold = item.font_weight === '700' || pElement?.bold;
-  const isItalic = item.font_style === 'italic' || pElement?.italic;
-  const isUnderline = pElement?.runs?.[0]?.underline || false;
-
-  btnFmtBold.classList.toggle('active', Boolean(isBold));
-  btnFmtItalic.classList.toggle('active', Boolean(isItalic));
-  if (btnFmtUnderline) btnFmtUnderline.classList.toggle('active', Boolean(isUnderline));
-
-  const color = item.color || pElement?.color;
-  if (color) {
-    textColorInput.value = color.startsWith('#') ? color : `#${color}`;
-  }
 }
 
 // 13. Statistics Calculations
@@ -1562,9 +1041,6 @@ function showToast(msg, isError = false) {
 
 // 19. Setup Event Listeners
 function setupEventListeners() {
-  // Selection change to reflect active formatting (bold, italic, underline, color) in the ribbon
-  document.addEventListener('selectionchange', updateSelectionFormattingState);
-
   // Zoom Controls
   btnZoomIn.addEventListener('click', () => {
     if (currentZoom < 1.5) {
@@ -1582,16 +1058,8 @@ function setupEventListeners() {
     }
   });
 
-  // Paragraph & Cell Editor inputs and keyboard shortcuts
-  canvasParagraphEditor.addEventListener('input', handleParagraphEditorInput);
+  // Table cell editor input and keyboard shortcuts
   canvasCellEditor.addEventListener('input', handleCellEditorInput);
-
-  canvasParagraphEditor.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeActiveEditors();
-    }
-  });
 
   canvasCellEditor.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -1606,29 +1074,12 @@ function setupEventListeners() {
     }
   });
 
-  // Blur handlers to commit changes when clicking away
-  canvasParagraphEditor.addEventListener('blur', () => {
-    if (blurTimeout) clearTimeout(blurTimeout);
-    blurTimeout = setTimeout(() => {
-      const activeEl = document.activeElement;
-      if (
-        activeEl !== canvasParagraphEditor &&
-        activeEl !== canvasCellEditor &&
-        !activeEl?.closest('.formatting-ribbon') &&
-        !activeEl?.closest('.modal-card') &&
-        !activeEl?.closest('.modal-backdrop')
-      ) {
-        closeActiveEditors();
-      }
-    }, 100);
-  });
-
+  // Commit the cell editor when clicking away
   canvasCellEditor.addEventListener('blur', () => {
     if (blurTimeout) clearTimeout(blurTimeout);
     blurTimeout = setTimeout(() => {
       const activeEl = document.activeElement;
       if (
-        activeEl !== canvasParagraphEditor &&
         activeEl !== canvasCellEditor &&
         !activeEl?.closest('.formatting-ribbon') &&
         !activeEl?.closest('.modal-card') &&
@@ -1868,6 +1319,23 @@ function setupEventListeners() {
   });
 }
 
+// Canvas-native caret and selection (replaces the per-paragraph edit box)
+const canvasEditor = createCanvasEditor({
+  session: () => currentSession,
+  elements: () => activeDocumentElements,
+  zoom: () => currentZoom,
+  measure: measureTextForLayout,
+  documentChanged: () => {
+    renderCanvasPagesFromWasm();
+    updateLiveStats();
+    setSyncStatus(true);
+  },
+  selectionChanged: updateRibbonForSelection,
+  handleTableClick,
+  hint: msg => showToast(msg),
+});
+
 // Start
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 initializeWasm();
 setupEventListeners();

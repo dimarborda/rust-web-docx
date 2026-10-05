@@ -420,13 +420,36 @@ pub fn edit_paragraph(
     formats: Option<&[FormatTarget]>,
     align: Option<&str>,
 ) -> Result<String, String> {
+    apply_change(p_xml, styles, Change::Text(new_text), formats, align)
+}
+
+/// Replaces the characters `start..end` of the paragraph text with `text`. Unlike
+/// `edit_paragraph`, the edit position is explicit, so text typed at a caret lands exactly
+/// there (and takes the formatting of the character before it).
+pub fn edit_paragraph_range(
+    p_xml: &str,
+    styles: &StyleSheet,
+    start: usize,
+    end: usize,
+    text: &str,
+) -> Result<String, String> {
+    apply_change(p_xml, styles, Change::Range { start, end, text }, None, None)
+}
+
+enum Change<'a> {
+    /// The whole new text; the edited region is inferred (common prefix/suffix)
+    Text(&'a str),
+    Range { start: usize, end: usize, text: &'a str },
+}
+
+fn apply_change(
+    p_xml: &str,
+    styles: &StyleSheet,
+    change: Change,
+    formats: Option<&[FormatTarget]>,
+    align: Option<&str>,
+) -> Result<String, String> {
     let tokens = tokenize(p_xml)?;
-    let new_chars: Vec<char> = new_text.chars().collect();
-    if let Some(f) = formats {
-        if f.len() != new_chars.len() {
-            return Err("El número de formatos no coincide con el texto.".to_string());
-        }
-    }
     let p_is_empty_tag = match tokens.first().map(|t| &t.ev) {
         Some(Event::Start(e)) if tag_is(e.name().as_ref(), "p") => false,
         Some(Event::Empty(e)) if tag_is(e.name().as_ref(), "p") => true,
@@ -480,17 +503,36 @@ pub fn edit_paragraph(
         owners.extend(std::iter::repeat(r).take(run.text().chars().count()));
     }
     let old_chars: Vec<char> = runs.iter().flat_map(|r| r.text().chars().collect::<Vec<_>>()).collect();
-    let (old_len, new_len) = (old_chars.len(), new_chars.len());
-    let mut prefix = 0;
-    while prefix < old_len && prefix < new_len && old_chars[prefix] == new_chars[prefix] {
-        prefix += 1;
-    }
-    let mut suffix = 0;
-    while suffix < old_len - prefix
-        && suffix < new_len - prefix
-        && old_chars[old_len - 1 - suffix] == new_chars[new_len - 1 - suffix]
-    {
-        suffix += 1;
+    let old_len = old_chars.len();
+    let (new_chars, prefix, suffix) = match change {
+        Change::Text(text) => {
+            let new_chars: Vec<char> = text.chars().collect();
+            let new_len = new_chars.len();
+            let mut prefix = 0;
+            while prefix < old_len && prefix < new_len && old_chars[prefix] == new_chars[prefix] {
+                prefix += 1;
+            }
+            let mut suffix = 0;
+            while suffix < old_len - prefix
+                && suffix < new_len - prefix
+                && old_chars[old_len - 1 - suffix] == new_chars[new_len - 1 - suffix]
+            {
+                suffix += 1;
+            }
+            (new_chars, prefix, suffix)
+        }
+        Change::Range { start, end, text } => {
+            let start = start.min(old_len);
+            let end = end.clamp(start, old_len);
+            let mut new_chars = old_chars[..start].to_vec();
+            new_chars.extend(text.chars());
+            new_chars.extend_from_slice(&old_chars[end..]);
+            (new_chars, start, old_len - end)
+        }
+    };
+    let new_len = new_chars.len();
+    if formats.is_some_and(|f| f.len() != new_len) {
+        return Err("El número de formatos no coincide con el texto.".to_string());
     }
     let deleted = prefix..old_len - suffix;
     let inserted = prefix..new_len - suffix;
@@ -1038,6 +1080,27 @@ mod tests {
         let out = edit_paragraph(p, &styles, "Título", Some(&formats), None).unwrap();
         assert!(out.contains(r#"<w:rPr><w:b w:val="0"/></w:rPr>"#), "{}", out);
         assert!(!parse_paragraph_fragment(&out, &styles).runs[0].bold);
+    }
+
+    #[test]
+    fn test_range_edits_land_exactly_at_the_caret() {
+        let styles = StyleSheet::default();
+        // "ba|nana" + "a": a prefix/suffix diff would place the insertion at offset 4
+        let p = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>ba</w:t></w:r><w:r><w:t>nana</w:t></w:r></w:p>"#;
+        let out = edit_paragraph_range(p, &styles, 2, 2, "a").unwrap();
+        let runs = parse_paragraph_fragment(&out, &styles).runs;
+        assert_eq!((runs[0].text.as_str(), runs[0].bold), ("baa", true), "typed text takes the previous character's format");
+        assert_eq!(runs[1].text, "nana");
+
+        // Backspace over a run boundary and replacing a selection
+        let out = edit_paragraph_range(p, &styles, 1, 3, "").unwrap();
+        assert_eq!(parse_paragraph_fragment(&out, &styles).text, "bana");
+        let out = edit_paragraph_range(p, &styles, 0, 6, "X").unwrap();
+        assert_eq!(parse_paragraph_fragment(&out, &styles).text, "X");
+
+        // Out-of-range offsets are clamped instead of failing
+        let out = edit_paragraph_range(p, &styles, 99, 120, "!").unwrap();
+        assert_eq!(parse_paragraph_fragment(&out, &styles).text, "banana!");
     }
 }
 
