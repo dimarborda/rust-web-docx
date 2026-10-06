@@ -1,9 +1,35 @@
+# Rust build
 target/
+**/*.rs.bk
+
+# WebAssembly build
+pkg/
+
+# Node & frontend build
 node_modules/
 dist/
+.vite/
+
+# OS & Editor
 .DS_Store
 *.swp
+*.swo
+*~
+.vscode/
+.idea/
+.kilo/
+.agents/
 
-# Test documents: each developer drops their own Word files here (see examples/README.md)
+# Temporary / Lock files
+~$*.docx
+~$*.doc
+*.tmp
+
+# Word example & test documents
 examples/*
 !examples/README.md
+*.docx
+*.doc
+*.dotx
+*.dot
+

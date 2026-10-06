@@ -494,13 +494,14 @@ mod tests {
             index: 0,
             rows: vec![],
             rich_rows: vec![
-                TableRowData { cells: vec![cell(1, "a1 primera línea larga"), cell(2, "b1")], is_header: false },
-                TableRowData { cells: vec![cell(3, "a2"), cell(4, "b2")], is_header: false },
+                TableRowData { cells: vec![cell(1, "a1 primera línea larga"), cell(2, "b1")], is_header: false, ..Default::default() },
+                TableRowData { cells: vec![cell(3, "a2"), cell(4, "b2")], is_header: false, ..Default::default() },
             ],
             // Two 3000-twip (200px) columns
             grid_cols: vec![3000.0, 3000.0],
             header_row: false,
             borders: Default::default(),
+            ..Default::default()
         };
         let elements = vec![
             DocumentElement::Paragraph(para(0, "antes", "left")),

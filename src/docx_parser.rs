@@ -112,6 +112,18 @@ pub struct TableCellInfo {
     pub text: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct CellMargins {
+    #[serde(default)]
+    pub top: Option<f64>,
+    #[serde(default)]
+    pub left: Option<f64>,
+    #[serde(default)]
+    pub bottom: Option<f64>,
+    #[serde(default)]
+    pub right: Option<f64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TableCellData {
     pub text: String,
@@ -129,12 +141,22 @@ pub struct TableCellData {
     /// The cell's paragraphs, numbered in the same document-wide sequence as body paragraphs
     #[serde(default)]
     pub paragraphs: Vec<ParagraphInfo>,
+    #[serde(default)]
+    pub valign: Option<String>,
+    #[serde(default)]
+    pub margins: Option<CellMargins>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TableRowData {
     pub cells: Vec<TableCellData>,
     pub is_header: bool,
+    #[serde(default)]
+    pub height_px: Option<f64>,
+    #[serde(default)]
+    pub height_rule: Option<String>,
+    #[serde(default)]
+    pub cant_split: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -149,6 +171,12 @@ pub struct TableInfo {
     /// Effective table borders (table style chain + the table's own `w:tblBorders`)
     #[serde(default)]
     pub borders: TableBorders,
+    #[serde(default)]
+    pub cell_margins: CellMargins,
+    #[serde(default)]
+    pub tbl_width: Option<f64>,
+    #[serde(default)]
+    pub tbl_indent: Option<f64>,
 }
 
 /// Borders of a table. A side holding `val: "none"` explicitly removes a border a style
@@ -1991,10 +2019,10 @@ fn resolve_paragraph(
     let ilvl = direct_ppr.ilvl.or(style_ppr.ilvl).unwrap_or(0);
 
     let mut ppr = styles.doc_ppr.clone();
+    ppr.merge(&style_ppr);
     if let Some(level) = num_id.as_deref().and_then(|id| styles.numbering.level(id, ilvl)) {
         ppr.merge(&level.ppr);
     }
-    ppr.merge(&style_ppr);
     ppr.merge(direct_ppr);
 
     // Word's own defaults close the cascade: Times New Roman 10pt when neither document
@@ -2117,6 +2145,21 @@ pub fn is_dark_hex_str(hex: &str) -> bool {
     false
 }
 
+pub(crate) fn parse_cell_margin_element(margins: &mut CellMargins, e: &BytesStart) {
+    let name = e.name();
+    let n = name.as_ref();
+    let val = get_attr_i64(e, "w").map(|w| (w as f64) / 15.0);
+    if tag_is(n, "top") {
+        margins.top = val;
+    } else if tag_is(n, "bottom") {
+        margins.bottom = val;
+    } else if tag_is(n, "left") || tag_is(n, "start") {
+        margins.left = val;
+    } else if tag_is(n, "right") || tag_is(n, "end") {
+        margins.right = val;
+    }
+}
+
 pub fn parse_table_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> TableInfo {
     parse_table_with(reader, index, &StyleSheet::default(), None, &mut 0)
 }
@@ -2140,19 +2183,31 @@ pub fn parse_table_with(
     let mut table_border_color: Option<String> = None;
     let mut table_borders = TableBorders::default();
     let mut table_style: Option<String> = None;
+    let mut table_cell_margins = CellMargins::default();
+    let mut table_width: Option<f64> = None;
+    let mut table_indent: Option<f64> = None;
+
     let mut current_cell_bg: Option<String> = None;
     let mut current_cell_border: Option<String> = None;
     let mut current_cell_borders = CellBorders::default();
+    let mut current_cell_valign: Option<String> = None;
+    let mut current_cell_margins: Option<CellMargins> = None;
+
     let mut current_row_is_header = false;
+    let mut current_row_height: Option<f64> = None;
+    let mut current_row_height_rule: Option<String> = None;
+    let mut current_row_cant_split = false;
 
     let mut in_tbl_pr = false;
     let mut in_tbl_borders = false;
+    let mut in_tbl_cell_mar = false;
     let mut in_tbl_grid = false;
     let mut in_tr = false;
     let mut in_tr_pr = false;
     let mut in_tc = false;
     let mut in_tc_pr = false;
     let mut in_tc_borders = false;
+    let mut in_tc_mar = false;
     let mut buf = Vec::new();
 
     loop {
@@ -2170,14 +2225,20 @@ pub fn parse_table_with(
                             table_border_color = Some(col);
                         }
                     }
+                } else if in_tbl_pr && tag_is(name.as_ref(), "tblCellMar") {
+                    in_tbl_cell_mar = true;
+                } else if in_tbl_cell_mar {
+                    parse_cell_margin_element(&mut table_cell_margins, e);
                 } else if tag_is(name.as_ref(), "tblGrid") {
                     in_tbl_grid = true;
                 } else if tag_is(name.as_ref(), "tr") {
                     in_tr = true;
                     current_row_strings = Vec::new();
                     current_rich_cells = Vec::new();
-                    // Only rows marked "repeat as header row" are headers
                     current_row_is_header = false;
+                    current_row_height = None;
+                    current_row_height_rule = None;
+                    current_row_cant_split = false;
                 } else if in_tr && tag_is(name.as_ref(), "trPr") {
                     in_tr_pr = true;
                 } else if in_tr && tag_is(name.as_ref(), "tc") {
@@ -2186,6 +2247,8 @@ pub fn parse_table_with(
                     current_cell_bg = None;
                     current_cell_border = None;
                     current_cell_borders = CellBorders::default();
+                    current_cell_valign = None;
+                    current_cell_margins = None;
                 } else if in_tc && tag_is(name.as_ref(), "tcPr") {
                     in_tc_pr = true;
                 } else if in_tc_pr && tag_is(name.as_ref(), "tcBorders") {
@@ -2197,6 +2260,12 @@ pub fn parse_table_with(
                             current_cell_border = Some(col);
                         }
                     }
+                } else if in_tc_pr && tag_is(name.as_ref(), "tcMar") {
+                    in_tc_mar = true;
+                } else if in_tc_mar {
+                    let mut mar = current_cell_margins.take().unwrap_or_default();
+                    parse_cell_margin_element(&mut mar, e);
+                    current_cell_margins = Some(mar);
                 } else if in_tc && tag_is(name.as_ref(), "p") {
                     let p = parse_paragraph_with(reader, *p_index, styles, counters.as_deref_mut());
                     *p_index += 1;
@@ -2224,14 +2293,25 @@ pub fn parse_table_with(
                             table_border_color = Some(col);
                         }
                     }
+                } else if in_tbl_cell_mar {
+                    parse_cell_margin_element(&mut table_cell_margins, e);
                 } else if in_tbl_pr && !in_tc && tag_is(name.as_ref(), "tblStyle") {
                     table_style = get_attr_value(e, "val");
+                } else if in_tbl_pr && !in_tc && tag_is(name.as_ref(), "tblW") {
+                    table_width = get_attr_i64(e, "w").map(|w| (w as f64) / 15.0);
+                } else if in_tbl_pr && !in_tc && tag_is(name.as_ref(), "tblInd") {
+                    table_indent = get_attr_i64(e, "w").map(|w| (w as f64) / 15.0);
                 } else if in_tbl_grid && tag_is(name.as_ref(), "gridCol") {
                     if let Some(w) = get_attr_i64(e, "w") {
                         grid_cols.push(w as f64);
                     }
                 } else if in_tr_pr && tag_is(name.as_ref(), "tblHeader") {
                     current_row_is_header = true;
+                } else if in_tr_pr && tag_is(name.as_ref(), "trHeight") {
+                    current_row_height = get_attr_i64(e, "val").map(|v| (v as f64) / 15.0);
+                    current_row_height_rule = get_attr_value(e, "hRule");
+                } else if in_tr_pr && tag_is(name.as_ref(), "cantSplit") {
+                    current_row_cant_split = is_bool_element_true(e);
                 } else if in_tc_pr && tag_is(name.as_ref(), "shd") {
                     if let Some(fill) = get_attr_value(e, "fill") {
                         let f_low = fill.to_lowercase();
@@ -2246,12 +2326,20 @@ pub fn parse_table_with(
                             current_cell_border = Some(col);
                         }
                     }
+                } else if in_tc_mar {
+                    let mut mar = current_cell_margins.take().unwrap_or_default();
+                    parse_cell_margin_element(&mut mar, e);
+                    current_cell_margins = Some(mar);
+                } else if in_tc_pr && tag_is(name.as_ref(), "vAlign") {
+                    current_cell_valign = get_attr_value(e, "val");
                 }
             }
             Ok(Event::End(ref e)) => {
                 let name = e.name();
                 if tag_is(name.as_ref(), "tblBorders") {
                     in_tbl_borders = false;
+                } else if tag_is(name.as_ref(), "tblCellMar") {
+                    in_tbl_cell_mar = false;
                 } else if tag_is(name.as_ref(), "tblPr") {
                     in_tbl_pr = false;
                 } else if tag_is(name.as_ref(), "tblGrid") {
@@ -2260,6 +2348,8 @@ pub fn parse_table_with(
                     in_tr_pr = false;
                 } else if tag_is(name.as_ref(), "tcBorders") {
                     in_tc_borders = false;
+                } else if tag_is(name.as_ref(), "tcMar") {
+                    in_tc_mar = false;
                 } else if tag_is(name.as_ref(), "tcPr") {
                     in_tc_pr = false;
                 } else if in_tc && tag_is(name.as_ref(), "tc") {
@@ -2320,6 +2410,8 @@ pub fn parse_table_with(
                         border_color,
                         borders: current_cell_borders.clone(),
                         paragraphs: current_cell_paragraphs.clone(),
+                        valign: current_cell_valign.clone(),
+                        margins: current_cell_margins.clone(),
                     });
                 } else if in_tr && tag_is(name.as_ref(), "tr") {
                     in_tr = false;
@@ -2327,6 +2419,9 @@ pub fn parse_table_with(
                     rich_rows.push(TableRowData {
                         cells: current_rich_cells.clone(),
                         is_header: current_row_is_header,
+                        height_px: current_row_height,
+                        height_rule: current_row_height_rule.clone(),
+                        cant_split: current_row_cant_split,
                     });
                 } else if tag_is(name.as_ref(), "tbl") {
                     break;
@@ -2346,12 +2441,13 @@ pub fn parse_table_with(
         grid_cols,
         header_row: false,
         borders: {
-            // The table style chain (or the document's default table style) first, then the
-            // table's own borders on top
             let mut borders = styles.table_borders(table_style.as_deref());
             borders.merge(&table_borders);
             borders
         },
+        cell_margins: table_cell_margins,
+        tbl_width: table_width,
+        tbl_indent: table_indent,
     }
 }
 

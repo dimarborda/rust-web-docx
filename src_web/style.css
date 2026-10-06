@@ -1366,3 +1366,197 @@ body {
     display: none;
   }
 }
+
+/* ==========================================================================
+   Font Manager & Missing Font Warning Banner
+   ========================================================================== */
+
+.modal-card.modal-md {
+  max-width: 580px;
+}
+
+.badge-count.warning {
+  background: #F59E0B;
+  color: #000;
+}
+
+.font-warning-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1.25rem;
+  margin: 0.75rem 1.5rem 0.25rem;
+  animation: fadeIn 0.25s ease;
+  backdrop-filter: blur(8px);
+}
+
+.font-warning-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.font-warning-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.font-warning-text {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #FDE68A;
+}
+
+.font-warning-text code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: #FFF;
+}
+
+.font-warning-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.fonts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fonts-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.fonts-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 180px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem;
+}
+
+.font-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.font-status-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.font-name-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.font-status-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.font-status-tag.available {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.font-status-tag.fallback {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.font-status-tag.custom {
+  background: rgba(99, 102, 241, 0.18);
+  color: #A5B4FC;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.font-upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem 1rem;
+  border: 2px dashed rgba(99, 102, 241, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(99, 102, 241, 0.04);
+  transition: all 0.2s ease;
+  text-align: center;
+  cursor: pointer;
+}
+
+.font-upload-dropzone:hover,
+.font-upload-dropzone.dragover {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.font-upload-dropzone svg {
+  color: var(--primary);
+  margin-bottom: 0.4rem;
+}
+
+.dropzone-text {
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.dropzone-cta-link {
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.dropzone-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.3rem;
+  max-width: 420px;
+}
+
+.btn-delete-font {
+  background: transparent;
+  border: none;
+  color: #EF4444;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  transition: background 0.15s;
+}
+
+.btn-delete-font:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+

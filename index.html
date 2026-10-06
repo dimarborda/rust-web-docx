@@ -58,6 +58,16 @@
           <span>Variables</span>
           <span id="vars-count-badge" class="badge-count" style="display: none;">0</span>
         </button>
+
+        <button id="btn-toggle-fonts" class="tool-btn" title="Gestor de Fuentes Tipográficas del Documento">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 7 4 4 20 4 20 7"></polyline>
+            <line x1="9" y1="20" x2="15" y2="20"></line>
+            <line x1="12" y1="4" x2="12" y2="20"></line>
+          </svg>
+          <span>Fuentes</span>
+          <span id="fonts-count-badge" class="badge-count warning" style="display: none;">0</span>
+        </button>
       </div>
 
       <div class="navbar-right">
@@ -336,8 +346,75 @@
       </div>
     </div>
 
+    <!-- Font Manager Modal -->
+    <div id="fonts-modal" class="modal-backdrop" style="display: none;">
+      <div class="modal-card modal-md">
+        <div class="modal-header">
+          <div>
+            <h3>Gestor de Tipografías</h3>
+            <p class="modal-desc">Garantiza fidelidad visual idéntica a Word subiendo los archivos exactos de fuentes del documento.</p>
+          </div>
+          <button id="btn-close-fonts" class="btn-icon">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Document Fonts Status Section -->
+          <div class="fonts-section">
+            <h4 class="fonts-section-title">Fuentes Detectadas en el Documento</h4>
+            <div id="doc-fonts-list" class="fonts-list-container">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Upload Dropzone Section -->
+          <div class="fonts-section" style="margin-top: 1.25rem;">
+            <h4 class="fonts-section-title">Subir Archivo de Fuente (.ttf / .otf / .woff / .woff2)</h4>
+            <div id="font-drop-zone" class="font-upload-dropzone">
+              <input type="file" id="font-file-input" accept=".ttf,.otf,.woff,.woff2" multiple style="display:none;" />
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              <div class="dropzone-text">
+                <label for="font-file-input" class="dropzone-cta-link">Elige un archivo</label> o arrástralo aquí
+              </div>
+              <span class="dropzone-hint">Sube archivos como <code>Calibri.ttf</code>, <code>CalibriBold.ttf</code>, <code>Aptos.ttf</code>. Se almacenarán de forma segura en tu navegador (IndexedDB).</span>
+            </div>
+          </div>
+
+          <!-- Stored / Custom Fonts Section -->
+          <div class="fonts-section" id="stored-fonts-section" style="margin-top: 1.25rem;">
+            <h4 class="fonts-section-title">Fuentes Guardadas en Memoria</h4>
+            <div id="installed-fonts-list" class="fonts-list-container">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-done-fonts" class="btn btn-secondary btn-sm ml-auto">Cerrar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Main Workspace Area -->
     <main class="workspace-container" id="workspace-root">
+      
+      <!-- Missing Fonts Alert Banner -->
+      <div id="font-warning-banner" class="font-warning-banner" style="display: none;">
+        <div class="font-warning-content">
+          <span class="font-warning-icon">🔤</span>
+          <div class="font-warning-text">
+            <strong id="font-warning-title">Fuente no nativa detectada:</strong>
+            <span id="font-warning-desc">El documento utiliza fuentes que no están instaladas en este navegador.</span>
+          </div>
+        </div>
+        <div class="font-warning-actions">
+          <button id="btn-banner-upload-fonts" class="btn btn-primary btn-sm">Subir Fuente .ttf/.otf</button>
+          <button id="btn-banner-dismiss-fonts" class="btn-icon btn-sm" title="Descartar aviso">✕</button>
+        </div>
+      </div>
       
       <!-- Welcome / Dropzone State (When no document is loaded) -->
       <section id="empty-state-view" class="empty-state">

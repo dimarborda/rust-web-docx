@@ -260,10 +260,7 @@ impl LayoutEngine {
         }
         let mut pages = pag.finish();
 
-        // Decorate pages with Background Images, Header Logo/Text, and Footers
-        let total_pages = pages.len();
-        for (page_idx, page) in pages.iter_mut().enumerate() {
-            let page_num = page_idx + 1;
+        for page in pages.iter_mut() {
 
             // 1. Full page background chosen in the editor ("Fondo / Marca de agua")
             if let Some(bg_url) = bg_image_data_url {
@@ -326,7 +323,7 @@ impl LayoutEngine {
                 });
             }
 
-            // 3. Footer (only if document has footer text or multiple pages)
+            // 3. Footer (only if document has footer text)
             if !header_footer.footer_text.is_empty() {
                 page.items.push(RenderCommand::Text {
                     text: header_footer.footer_text.clone(),
@@ -348,30 +345,9 @@ impl LayoutEngine {
                     line: None,
                 });
             }
-
-            if total_pages > 1 {
-                page.items.push(RenderCommand::Text {
-                    text: format!("Página {} de {}", page_num, total_pages),
-                    x: page_w - margin_right,
-                    y: page_h - page_setup.footer_margin.max(14.0),
-                    width: 120.0,
-                    height: 14.0,
-                    font_size: 9.0,
-                    font_family: "Inter, sans-serif".to_string(),
-                    font_weight: "500".to_string(),
-                    font_style: "normal".to_string(),
-                    color: "#64748B".to_string(),
-                    align: "right".to_string(),
-                    paragraph_index: 0,
-                    line_index: 0,
-                    is_last_line: true,
-                    max_width: 120.0,
-                    runs: Vec::new(),
-                    line: None,
-                });
-            }
         }
 
+        let total_pages = pages.len();
         DocumentLayout {
             total_pages,
             page_width: page_w,
@@ -607,7 +583,7 @@ fn prepare_paragraph<'a>(
             let (size, family) = line
                 .runs
                 .iter()
-                .filter(|r| r.text != "\t")
+                .filter(|r| r.text != "\t" && !r.text.trim().is_empty())
                 .map(|r| (r.font_size.unwrap_or(font_size), r.font_family.as_deref().unwrap_or(&font_family)))
                 .fold((font_size, font_family.as_str()), |best, cur| if cur.0 > best.0 { cur } else { best });
             let (ascent, descent) = font_vertical_metrics(family);
@@ -691,6 +667,11 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
         vec![geo.printable_w / columns as f64; columns]
     };
 
+    let def_mar_left = tbl.cell_margins.left.unwrap_or(CELL_PAD_X);
+    let def_mar_right = tbl.cell_margins.right.unwrap_or(CELL_PAD_X);
+    let def_mar_top = tbl.cell_margins.top.unwrap_or(CELL_PAD_Y);
+    let def_mar_bottom = tbl.cell_margins.bottom.unwrap_or(CELL_PAD_Y);
+
     let rows = tbl
         .rich_rows
         .iter()
@@ -704,15 +685,20 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
                 .map(|(col, cell)| {
                     let width = col_widths.get(col).copied().unwrap_or(geo.printable_w / columns as f64);
                     let dark = cell.bg_color.as_deref().is_some_and(is_dark_hex_str);
+                    let pad_left = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(def_mar_left);
+                    let pad_right = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(def_mar_right);
+                    let pad_top = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(def_mar_top);
+                    let pad_bottom = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(def_mar_bottom);
+
                     let paragraphs: Vec<ParagraphBox> = cell
                         .paragraphs
                         .iter()
                         .map(|p| {
-                            let inner = (width - 2.0 * CELL_PAD_X).max(10.0);
-                            prepare_paragraph(p, x + CELL_PAD_X, inner, dark.then_some("#FFFFFF"), m)
+                            let inner = (width - pad_left - pad_right).max(10.0);
+                            prepare_paragraph(p, x + pad_left, inner, dark.then_some("#FFFFFF"), m)
                         })
                         .collect();
-                    let content_height = 2.0 * CELL_PAD_Y
+                    let content_height = pad_top + pad_bottom
                         + paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
                     let borders = resolve_cell_borders(tbl, cell, row_index, col, row.cells.len());
                     let cell_box = CellBox { x, width, cell, borders, paragraphs, content_height };
@@ -720,7 +706,16 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
                     cell_box
                 })
                 .collect();
-            let height = cells.iter().map(|c| c.content_height).fold(8.0, f64::max);
+            let natural_height = cells.iter().map(|c| c.content_height).fold(8.0, f64::max);
+            let height = if let Some(min_h) = row.height_px {
+                if row.height_rule.as_deref() == Some("exact") {
+                    min_h
+                } else {
+                    natural_height.max(min_h)
+                }
+            } else {
+                natural_height
+            };
             RowBox { height, cells, is_header: row.is_header }
         })
         .collect();
@@ -1122,6 +1117,8 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
         pag.cursor_y += flow.pending_after;
     }
     let tbl = t.tbl;
+    let def_mar_top = tbl.cell_margins.top.unwrap_or(CELL_PAD_Y);
+    let def_mar_bottom = tbl.cell_margins.bottom.unwrap_or(CELL_PAD_Y);
 
     for (row_idx, row) in t.rows.iter().enumerate() {
         // Rows are not split across pages
@@ -1151,7 +1148,18 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
                 border_color: cell.cell.border_color.clone(),
                 borders: cell.borders.clone(),
             });
-            let mut y = top + CELL_PAD_Y;
+
+            let pad_top = cell.cell.margins.as_ref().and_then(|m| m.top).unwrap_or(def_mar_top);
+            let pad_bottom = cell.cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(def_mar_bottom);
+            let text_content_h = cell.paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
+            let extra_v = (row.height - text_content_h - pad_top - pad_bottom).max(0.0);
+            let v_offset = match cell.cell.valign.as_deref() {
+                Some("center") => extra_v / 2.0,
+                Some("bottom") => extra_v,
+                _ => 0.0,
+            };
+
+            let mut y = top + pad_top + v_offset;
             for b in &cell.paragraphs {
                 y += b.space_before;
                 place_paragraph_images(pag, b, y);
@@ -1244,28 +1252,32 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
         let mut spaces_start = pos;
 
         for ch in r.text.chars() {
-            let is_break = ch == '\n' || ch == PAGE_BREAK || ch == '\t';
+            let is_newline = ch == '\n' || ch == '\r' || ch == '\u{000b}';
+            let is_break = is_newline || ch == PAGE_BREAK || ch == '\t';
             if (is_break || ch.is_whitespace()) && !text.is_empty() {
                 segments.push(seg(SegmentKind::Text(std::mem::take(&mut text)), text_start));
             }
             if (is_break || !ch.is_whitespace()) && !spaces.is_empty() {
                 segments.push(seg(SegmentKind::Space(std::mem::take(&mut spaces)), spaces_start));
             }
-            match ch {
-                '\n' => segments.push(seg(SegmentKind::Newline, pos)),
-                PAGE_BREAK => segments.push(seg(SegmentKind::PageBreak, pos)),
-                '\t' => segments.push(seg(SegmentKind::Tab, pos)),
-                c if c.is_whitespace() => {
-                    if spaces.is_empty() {
-                        spaces_start = pos;
+            if is_newline {
+                segments.push(seg(SegmentKind::Newline, pos));
+            } else {
+                match ch {
+                    PAGE_BREAK => segments.push(seg(SegmentKind::PageBreak, pos)),
+                    '\t' => segments.push(seg(SegmentKind::Tab, pos)),
+                    c if c.is_whitespace() => {
+                        if spaces.is_empty() {
+                            spaces_start = pos;
+                        }
+                        spaces.push(if c == '\u{2028}' || c == '\u{2029}' || c == '\u{00a0}' { ' ' } else { c });
                     }
-                    spaces.push(c);
-                }
-                c => {
-                    if text.is_empty() {
-                        text_start = pos;
+                    c => {
+                        if text.is_empty() {
+                            text_start = pos;
+                        }
+                        text.push(c);
                     }
-                    text.push(c);
                 }
             }
             pos += 1;
@@ -1960,6 +1972,57 @@ mod tests {
             assert_eq!(page.len(), 1);
             let (x, y, behind, _) = page[0];
             assert_eq!((x, y, behind), (10.0, setup.header_margin - 20.0, false));
+        }
+    }
+
+    #[test]
+    fn test_table_row_height_and_valign_and_margins() {
+        use crate::docx_parser::{CellMargins, TableCellData, TableInfo, TableRowData};
+        let cell = |i: usize, text: &str, valign: Option<&str>, margins: Option<CellMargins>| TableCellData {
+            paragraphs: vec![para(i, text)],
+            valign: valign.map(str::to_string),
+            margins,
+            ..Default::default()
+        };
+        let table = TableInfo {
+            index: 0,
+            rows: vec![],
+            rich_rows: vec![
+                TableRowData {
+                    cells: vec![
+                        cell(1, "Texto fila alta centrado", Some("center"), None),
+                        cell(2, "Col 2", None, None),
+                    ],
+                    is_header: false,
+                    height_px: Some(60.0),
+                    height_rule: Some("atLeast".to_string()),
+                    ..Default::default()
+                },
+            ],
+            grid_cols: vec![3000.0, 3000.0],
+            cell_margins: CellMargins {
+                top: Some(2.0),
+                left: Some(10.0),
+                bottom: Some(2.0),
+                right: Some(5.0),
+            },
+            ..Default::default()
+        };
+        let elements = vec![DocumentElement::Table(table)];
+        let l = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0);
+        let items = &l.pages[0].items;
+        
+        // Find TableCell command and verify height is 60.0
+        let cell_cmd = items.iter().find(|it| matches!(it, RenderCommand::TableCell { .. })).unwrap();
+        if let RenderCommand::TableCell { height, .. } = cell_cmd {
+            assert_eq!(*height, 60.0, "trHeight must enforce minimum height of 60px");
+        }
+
+        // Find Text command in cell 1 and verify it is vertically centered
+        let text_cmd = items.iter().find(|it| matches!(it, RenderCommand::Text { paragraph_index: 1, .. })).unwrap();
+        if let RenderCommand::Text { y, .. } = text_cmd {
+            // Baseline should be shifted down to center inside 60px height
+            assert!(*y > 70.0 + 20.0, "Vertically centered text baseline must be pushed down, got y={}", y);
         }
     }
 }

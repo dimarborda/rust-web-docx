@@ -84,6 +84,21 @@ const btnCreateTableConfirm = document.getElementById('btn-create-table-confirm'
 const tblInputRows = document.getElementById('tbl-input-rows');
 const tblInputCols = document.getElementById('tbl-input-cols');
 
+// Font Manager Modal & Warning Banner
+const fontsModal = document.getElementById('fonts-modal');
+const btnToggleFonts = document.getElementById('btn-toggle-fonts');
+const btnCloseFonts = document.getElementById('btn-close-fonts');
+const btnDoneFonts = document.getElementById('btn-done-fonts');
+const fontsCountBadge = document.getElementById('fonts-count-badge');
+const docFontsList = document.getElementById('doc-fonts-list');
+const installedFontsList = document.getElementById('installed-fonts-list');
+const fontDropZone = document.getElementById('font-drop-zone');
+const fontFileInput = document.getElementById('font-file-input');
+const fontWarningBanner = document.getElementById('font-warning-banner');
+const fontWarningDesc = document.getElementById('font-warning-desc');
+const btnBannerUploadFonts = document.getElementById('btn-banner-upload-fonts');
+const btnBannerDismissFonts = document.getElementById('btn-banner-dismiss-fonts');
+
 // Formatting Ribbon Buttons
 const btnFmtBold = document.getElementById('btn-fmt-bold');
 const btnFmtItalic = document.getElementById('btn-fmt-italic');
@@ -276,6 +291,7 @@ function refreshDocumentView() {
     renderCanvasPagesFromWasm();
     updateLiveStats();
     scanAndHighlightVariables();
+    checkDocumentFontsStatus();
   } catch (err) {
     console.error('Error refreshing document view:', err);
   }
@@ -422,9 +438,347 @@ function ensureLayoutFonts(layout) {
     });
 }
 
+// ==========================================================================
+// In-Memory Custom Font Manager & IndexedDB Persistence
+// ==========================================================================
+
+const FONT_DB_NAME = 'rust_docx_fonts_db';
+const FONT_DB_VERSION = 1;
+const FONT_STORE_NAME = 'custom_fonts';
+const customRegisteredFonts = new Map();
+
+function openFontsDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FONT_DB_NAME, FONT_DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(FONT_STORE_NAME)) {
+        db.createObjectStore(FONT_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveFontToIndexedDB(fontInfo) {
+  try {
+    const db = await openFontsDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(FONT_STORE_NAME);
+      store.put(fontInfo);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('Error saving font to IndexedDB:', err);
+  }
+}
+
+async function getAllStoredFontsFromDB() {
+  try {
+    const db = await openFontsDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE_NAME, 'readonly');
+      const store = tx.objectStore(FONT_STORE_NAME);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn('Error reading from font IndexedDB:', err);
+    return [];
+  }
+}
+
+async function deleteFontFromIndexedDB(id) {
+  try {
+    const db = await openFontsDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FONT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(FONT_STORE_NAME);
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('Error deleting font from IndexedDB:', err);
+  }
+}
+
+async function initFontManager() {
+  try {
+    const stored = await getAllStoredFontsFromDB();
+    for (const item of stored) {
+      try {
+        const face = new FontFace(item.family, item.buffer, {
+          weight: item.weight || 'normal',
+          style: item.style || 'normal',
+        });
+        await face.load();
+        document.fonts.add(face);
+        customRegisteredFonts.set(item.family.toLowerCase(), item);
+        console.log(`🔤 Fuente personalizada cargada desde memoria: ${item.family}`);
+      } catch (err) {
+        console.warn('Error registrando fuente guardada:', item.family, err);
+      }
+    }
+  } catch (err) {
+    console.warn('IndexedDB font storage error:', err);
+  }
+}
+
+function parseFontInfoFromFileName(filename) {
+  const clean = filename.replace(/\.(ttf|otf|woff2?)$/i, '');
+  const lower = clean.toLowerCase();
+  
+  let weight = 'normal';
+  let style = 'normal';
+  if (lower.includes('bold') || lower.endsWith('b') || lower.includes('bd')) weight = 'bold';
+  if (lower.includes('italic') || lower.includes('oblique') || lower.endsWith('i') || lower.includes('it')) style = 'italic';
+  
+  let family = clean;
+  if (lower.includes('calibri')) family = 'Calibri';
+  else if (lower.includes('aptos')) family = 'Aptos';
+  else if (lower.includes('arial')) family = 'Arial';
+  else if (lower.includes('cambria')) family = 'Cambria';
+  else if (lower.includes('times')) family = 'Times New Roman';
+  else if (lower.includes('consolas')) family = 'Consolas';
+  else {
+    family = clean.replace(/[-_](regular|bold|italic|bolditalic|light|semibold|medium|bd|it)$/i, '').trim();
+  }
+  
+  return { family, weight, style };
+}
+
+function extractTrueTypeFamilyName(arrayBuffer) {
+  try {
+    const view = new DataView(arrayBuffer);
+    const numTables = view.getUint16(4);
+    for (let i = 0; i < numTables; i++) {
+      const tag = String.fromCharCode(
+        view.getUint8(12 + i * 16),
+        view.getUint8(12 + i * 16 + 1),
+        view.getUint8(12 + i * 16 + 2),
+        view.getUint8(12 + i * 16 + 3)
+      );
+      if (tag === 'name') {
+        const offset = view.getUint32(12 + i * 16 + 8);
+        const count = view.getUint16(offset + 2);
+        const stringOffset = offset + view.getUint16(offset + 4);
+        for (let j = 0; j < count; j++) {
+          const rec = offset + 6 + j * 12;
+          const platformID = view.getUint16(rec);
+          const nameID = view.getUint16(rec + 6);
+          const length = view.getUint16(rec + 8);
+          const strOffset = stringOffset + view.getUint16(rec + 10);
+          if (nameID === 1 || nameID === 4) {
+            let name = '';
+            if (platformID === 0 || platformID === 3) {
+              for (let k = 0; k < length; k += 2) {
+                name += String.fromCharCode(view.getUint16(strOffset + k));
+              }
+            } else {
+              for (let k = 0; k < length; k++) {
+                name += String.fromCharCode(view.getUint8(strOffset + k));
+              }
+            }
+            if (name && name.trim()) return name.trim();
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Fallback to filename
+  }
+  return null;
+}
+
+async function handleFontFiles(files) {
+  let count = 0;
+  for (const file of files) {
+    try {
+      const buffer = await file.arrayBuffer();
+      const extracted = extractTrueTypeFamilyName(buffer);
+      const parsed = parseFontInfoFromFileName(file.name);
+      const family = extracted || parsed.family;
+      
+      const face = new FontFace(family, buffer, {
+        weight: parsed.weight,
+        style: parsed.style,
+      });
+      await face.load();
+      document.fonts.add(face);
+      
+      const id = `${family.toLowerCase()}_${parsed.weight}_${parsed.style}_${file.size}`;
+      const fontRecord = {
+        id,
+        family,
+        fileName: file.name,
+        size: file.size,
+        weight: parsed.weight,
+        style: parsed.style,
+        buffer,
+        addedAt: Date.now()
+      };
+      
+      await saveFontToIndexedDB(fontRecord);
+      customRegisteredFonts.set(family.toLowerCase(), fontRecord);
+      count++;
+    } catch (err) {
+      console.error('Error procesando archivo de fuente:', file.name, err);
+      showToast(`Error al cargar fuente ${file.name}: ${err.message}`, true);
+    }
+  }
+
+  if (count > 0) {
+    showToast(`✓ ${count} fuente(s) instalada(s) y activada(s) en memoria`);
+    if (currentSession) {
+      currentSession.reset_measurements();
+      renderCanvasPagesFromWasm({ full: true });
+    }
+    checkDocumentFontsStatus();
+    renderInstalledFontsList();
+  }
+}
+
+function checkDocumentFontsStatus() {
+  if (!activeDocumentElements || activeDocumentElements.length === 0) return;
+  
+  const docFonts = new Set();
+  activeDocumentElements.forEach(el => {
+    if (el.type === 'paragraph') {
+      if (el.font_family) docFonts.add(el.font_family);
+      (el.runs || []).forEach(r => { if (r.font_family) docFonts.add(r.font_family); });
+    } else if (el.type === 'table') {
+      (el.rich_rows || []).forEach(row => row.cells.forEach(cell => {
+        if (cell.font_family) docFonts.add(cell.font_family);
+        (cell.paragraphs || []).forEach(p => {
+          if (p.font_family) docFonts.add(p.font_family);
+          (p.runs || []).forEach(r => { if (r.font_family) docFonts.add(r.font_family); });
+        });
+      }));
+    }
+  });
+
+  const fontList = [...docFonts].filter(f => f && f.trim().length > 0);
+  const missingFonts = [];
+  const statusItems = [];
+
+  fontList.forEach(font => {
+    const fLower = font.toLowerCase().trim();
+    const isCustom = customRegisteredFonts.has(fLower);
+    const isExactAvailable = isCustom || (document.fonts && document.fonts.check(`16px "${font}"`));
+    
+    // Check if it relies on a web fallback (e.g. Calibri without custom upload)
+    const isFallback = !isCustom && (fLower.includes('calibri') || fLower.includes('aptos') || !isExactAvailable);
+    
+    if (isFallback) {
+      missingFonts.push(font);
+    }
+    
+    statusItems.push({
+      name: font,
+      isCustom,
+      isAvailable: isExactAvailable,
+      isFallback
+    });
+  });
+
+  if (fontWarningBanner && fontWarningDesc && fontsCountBadge) {
+    if (missingFonts.length > 0) {
+      fontWarningBanner.style.display = 'flex';
+      fontWarningDesc.innerHTML = `El documento solicita <strong>${missingFonts.map(escapeHtml).join(', ')}</strong> (usando aproximación web). Sube tu archivo <code>.ttf/.otf</code> para obtener fidelidad 100% idéntica a Word.`;
+      fontsCountBadge.style.display = 'inline-flex';
+      fontsCountBadge.textContent = missingFonts.length;
+    } else {
+      fontWarningBanner.style.display = 'none';
+      fontsCountBadge.style.display = 'none';
+    }
+  }
+
+  renderDocFontsModalList(statusItems);
+}
+
+function renderDocFontsModalList(statusItems) {
+  if (!docFontsList) return;
+  if (!statusItems || statusItems.length === 0) {
+    docFontsList.innerHTML = '<div class="font-status-row"><span class="font-name-info">Ninguna fuente específica detectada</span></div>';
+    return;
+  }
+
+  docFontsList.innerHTML = statusItems.map(item => {
+    let tagHtml = '';
+    if (item.isCustom) {
+      tagHtml = '<span class="font-status-tag custom">✓ Activa en memoria (Subida)</span>';
+    } else if (item.isAvailable && !item.isFallback) {
+      tagHtml = '<span class="font-status-tag available">✓ Disponible en el sistema</span>';
+    } else {
+      tagHtml = '<span class="font-status-tag fallback">⚠️ Usando aproximación web</span>';
+    }
+
+    return `
+      <div class="font-status-row">
+        <div class="font-name-info">
+          <span>🔤</span>
+          <span>${escapeHtml(item.name)}</span>
+        </div>
+        ${tagHtml}
+      </div>
+    `;
+  }).join('');
+}
+
+async function renderInstalledFontsList() {
+  if (!installedFontsList) return;
+  const stored = await getAllStoredFontsFromDB();
+  if (stored.length === 0) {
+    installedFontsList.innerHTML = '<div class="font-status-row"><span class="font-name-info" style="color: var(--text-muted); font-size: 0.8rem;">No hay fuentes personalizadas subidas aún.</span></div>';
+    return;
+  }
+
+  installedFontsList.innerHTML = stored.map(item => `
+    <div class="font-status-row">
+      <div class="font-name-info">
+        <span>📄</span>
+        <span><strong>${escapeHtml(item.family)}</strong> (${escapeHtml(item.fileName || 'fuente.ttf')})</span>
+      </div>
+      <button class="btn-delete-font" data-id="${escapeHtml(item.id)}" title="Eliminar fuente de la memoria">✕ Eliminar</button>
+    </div>
+  `).join('');
+
+  installedFontsList.querySelectorAll('.btn-delete-font').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      await deleteFontFromIndexedDB(id);
+      for (const [key, val] of customRegisteredFonts.entries()) {
+        if (val.id === id) customRegisteredFonts.delete(key);
+      }
+      showToast('Fuente eliminada de la memoria');
+      if (currentSession) {
+        currentSession.reset_measurements();
+        renderCanvasPagesFromWasm({ full: true });
+      }
+      checkDocumentFontsStatus();
+      renderInstalledFontsList();
+    });
+  });
+}
+
 function formatFontFamily(family) {
   if (!family) return '"Carlito", "Calibri", "Arimo", "Arial", sans-serif';
-  const fLower = family.toLowerCase();
+  const fLower = family.toLowerCase().trim();
+  
+  // 1. If user uploaded this exact font into memory, prioritize it directly!
+  if (customRegisteredFonts.has(fLower)) {
+    return `"${family}", "Carlito", "Arimo", sans-serif`;
+  }
+  if (document.fonts && document.fonts.check(`16px "${family}"`)) {
+    return `"${family}", "Carlito", "Arimo", sans-serif`;
+  }
+
+  // 2. High-Fidelity metric-matched WebFonts fallback
   if (fLower.includes('calibri')) {
     return '"Calibri", "Carlito", "Segoe UI", Roboto, sans-serif';
   } else if (fLower.includes('consolas') || fLower.includes('courier') || fLower.includes('mono')) {
@@ -1190,8 +1544,61 @@ function setupEventListeners() {
   btnAddCustomVar.addEventListener('click', () => addVariableInputRow());
   btnApplyAllVariables.addEventListener('click', applyVariablesFromModal);
 
+  // Font Manager Modal & Warning Banner
+  const openFontsModal = () => {
+    fontsModal.style.display = 'flex';
+    checkDocumentFontsStatus();
+    renderInstalledFontsList();
+  };
+
+  btnToggleFonts.addEventListener('click', openFontsModal);
+  btnCloseFonts.addEventListener('click', () => {
+    fontsModal.style.display = 'none';
+  });
+  btnDoneFonts.addEventListener('click', () => {
+    fontsModal.style.display = 'none';
+  });
+
+  btnBannerUploadFonts.addEventListener('click', openFontsModal);
+  btnBannerDismissFonts.addEventListener('click', () => {
+    fontWarningBanner.style.display = 'none';
+  });
+
+  // Font file input change
+  fontFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFontFiles(e.target.files);
+      e.target.value = '';
+    }
+  });
+
+  // Drag & drop on font drop zone
+  fontDropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fontDropZone.classList.add('dragover');
+    fontDropZone.classList.add('drag-over');
+  });
+
+  fontDropZone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fontDropZone.classList.remove('dragover');
+    fontDropZone.classList.remove('drag-over');
+  });
+
+  fontDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fontDropZone.classList.remove('dragover');
+    fontDropZone.classList.remove('drag-over');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFontFiles(e.dataTransfer.files);
+    }
+  });
+
   // Close modals on backdrop click
-  [variablesModal, backgroundModal, tableModal].forEach(modal => {
+  [variablesModal, backgroundModal, tableModal, fontsModal].forEach(modal => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) modal.style.display = 'none';
     });
@@ -1228,6 +1635,7 @@ function setupEventListeners() {
       variablesModal.style.display = 'none';
       backgroundModal.style.display = 'none';
       tableModal.style.display = 'none';
+      fontsModal.style.display = 'none';
     }
   });
 }
@@ -1249,5 +1657,8 @@ const canvasEditor = createCanvasEditor({
 
 // Start
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
-initializeWasm();
-setupEventListeners();
+(async () => {
+  await initFontManager();
+  await initializeWasm();
+  setupEventListeners();
+})();
