@@ -134,6 +134,17 @@ fn test_inspect_contrato() {
     assert!(stats.header_footer.header_image_data_url.is_none(), "Contrato should not have header image");
 
     let paragraphs = modifier.extract_paragraphs().unwrap();
+    for (i, p) in paragraphs.iter().enumerate() {
+        if p.text.contains("CLÁUSULA") || p.text.contains("INNprende") || p.text.contains("1581") || p.text.contains("sensibles") {
+            println!("\n=== PARA {} ===", i);
+            println!("Text: {:?}", p.text);
+            println!("Style: {:?}, is_heading: {}, bold: {}, font_size: {:?}, font_family: {:?}", p.style, p.is_heading, p.bold, p.font_size, p.font_family);
+            println!("Runs count: {}", p.runs.len());
+            for (ri, r) in p.runs.iter().enumerate() {
+                println!("  Run {}: bold={}, italic={}, sz={:?}, fam={:?}, text={:?}", ri, r.bold, r.italic, r.font_size, r.font_family, r.text);
+            }
+        }
+    }
     let bdr_left_count = paragraphs.iter().filter(|p| p.borders.left.is_some()).count();
     let bdr_bottom_count = paragraphs.iter().filter(|p| p.borders.bottom.is_some()).count();
     assert_eq!(bdr_left_count, 0, "Contrato must have 0 left borders (nil borders must be ignored)");

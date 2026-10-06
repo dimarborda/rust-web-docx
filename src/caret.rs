@@ -500,6 +500,7 @@ mod tests {
             // Two 3000-twip (200px) columns
             grid_cols: vec![3000.0, 3000.0],
             header_row: false,
+            borders: Default::default(),
         };
         let elements = vec![
             DocumentElement::Paragraph(para(0, "antes", "left")),

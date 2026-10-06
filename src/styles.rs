@@ -4,7 +4,9 @@
 //! document defaults → numbering level (paragraph props) → paragraph style chain →
 //! character style chain → direct formatting.
 
-use crate::docx_parser::{get_attr_value, is_bool_element_true, parse_border_element, tag_is, ParagraphBorders};
+use crate::docx_parser::{
+    get_attr_value, is_bool_element_true, parse_border_element, tag_is, ParagraphBorders, TableBorders,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use std::collections::HashMap;
@@ -124,6 +126,8 @@ pub struct Style {
     pub next: Option<String>,
     pub ppr: ParaProps,
     pub rpr: RunProps,
+    /// `w:tblPr/w:tblBorders` of a table style
+    pub table_borders: TableBorders,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -165,6 +169,7 @@ pub struct StyleSheet {
     pub styles: HashMap<String, Style>,
     pub default_paragraph_style: Option<String>,
     pub default_character_style: Option<String>,
+    pub default_table_style: Option<String>,
     pub theme: ThemeFonts,
     pub numbering: Numbering,
     /// Style chains flattened at load time: id → (pPr, rPr) including all `basedOn` ancestors
@@ -208,6 +213,30 @@ impl StyleSheet {
     /// Flattened (pPr, rPr) of a style chain, without document defaults
     pub fn style_props(&self, id: Option<&str>) -> (ParaProps, RunProps) {
         id.and_then(|id| self.resolved.get(id)).cloned().unwrap_or_default()
+    }
+
+    /// Borders of a table style chain (falls back to the default table style)
+    pub fn table_borders(&self, id: Option<&str>) -> TableBorders {
+        let id = match id {
+            Some(id) if self.styles.contains_key(id) => Some(id.to_string()),
+            _ => self.default_table_style.clone(),
+        };
+        let mut chain = Vec::new();
+        let mut cur = id;
+        while let Some(c) = cur {
+            if chain.contains(&c) || chain.len() > 32 {
+                break;
+            }
+            cur = self.styles.get(&c).and_then(|s| s.based_on.clone());
+            chain.push(c);
+        }
+        let mut borders = TableBorders::default();
+        for c in chain.iter().rev() {
+            if let Some(style) = self.styles.get(c) {
+                borders.merge(&style.table_borders);
+            }
+        }
+        borders
     }
 
     /// Run properties of a character style chain (falls back to the default character style)
@@ -279,6 +308,7 @@ impl StyleSheet {
                     match s.kind.as_str() {
                         "paragraph" => self.default_paragraph_style = Some(s.id.clone()),
                         "character" => self.default_character_style = Some(s.id.clone()),
+                        "table" => self.default_table_style = Some(s.id.clone()),
                         _ => {}
                     }
                 }
@@ -290,7 +320,11 @@ impl StyleSheet {
                         "next" => style.next = get_attr_value(&e, "val"),
                         _ => {}
                     }
-                } else if !path.iter().any(|p| p == "tblStylePr") {
+                } else if path.iter().any(|p| p == "tblStylePr") {
+                    // Conditional formatting (header row, banding) is not applied yet
+                } else if path.ends_with(&["tblPr".to_string(), "tblBorders".to_string()]) {
+                    style.table_borders.set_side(&e);
+                } else {
                     apply_property(&path, &e, &mut style.ppr, &mut style.rpr, &self.theme);
                 }
             } else if path.iter().any(|p| p == "docDefaults") {
@@ -352,9 +386,9 @@ pub fn apply_border_element(borders: &mut ParagraphBorders, e: &BytesStart) {
 pub fn apply_rpr_element(rpr: &mut RunProps, e: &BytesStart, theme: &ThemeFonts) {
     let name = e.name();
     let n = name.as_ref();
-    if tag_is(n, "b") {
+    if tag_is(n, "b") || tag_is(n, "bCs") {
         rpr.bold = Some(is_bool_element_true(e));
-    } else if tag_is(n, "i") {
+    } else if tag_is(n, "i") || tag_is(n, "iCs") {
         rpr.italic = Some(is_bool_element_true(e));
     } else if tag_is(n, "u") {
         rpr.underline = Some(is_bool_element_true(e));
@@ -362,16 +396,21 @@ pub fn apply_rpr_element(rpr: &mut RunProps, e: &BytesStart, theme: &ThemeFonts)
         if let Some(val) = get_attr_value(e, "val") {
             rpr.color = Some(if val.eq_ignore_ascii_case("auto") { String::new() } else { val.to_uppercase() });
         }
-    } else if tag_is(n, "sz") {
+    } else if tag_is(n, "sz") || tag_is(n, "szCs") {
         if let Some(v) = get_attr_value(e, "val").and_then(|v| v.parse::<f64>().ok()) {
             rpr.font_size = Some(v / 2.0);
         }
     } else if tag_is(n, "rFonts") {
         let themed = get_attr_value(e, "asciiTheme")
             .or_else(|| get_attr_value(e, "hAnsiTheme"))
+            .or_else(|| get_attr_value(e, "cstheme"))
             .and_then(|t| if t.starts_with("major") { theme.major.clone() } else { theme.minor.clone() });
-        if let Some(fam) = themed.or_else(|| get_attr_value(e, "ascii")).or_else(|| get_attr_value(e, "hAnsi")) {
-            rpr.font_family = Some(fam);
+        if let Some(fam) = themed
+            .or_else(|| get_attr_value(e, "ascii"))
+            .or_else(|| get_attr_value(e, "hAnsi"))
+            .or_else(|| get_attr_value(e, "cs"))
+        {
+            rpr.font_family = Some(fam.trim().to_string());
         }
     }
 }

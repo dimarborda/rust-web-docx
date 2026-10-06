@@ -12,6 +12,11 @@ const STYLES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 /// Builds a minimal .docx around the given body XML
 fn docx(body: &str) -> DocxModifier {
+    docx_with_styles(body, STYLES)
+}
+
+/// Same, with a custom styles.xml
+fn docx_with_styles(body: &str, styles: &str) -> DocxModifier {
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>{}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>"#,
         body
@@ -23,7 +28,7 @@ fn docx(body: &str) -> DocxModifier {
         for (name, content) in [
             ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
             ("word/document.xml", document.as_str()),
-            ("word/styles.xml", STYLES),
+            ("word/styles.xml", styles),
         ] {
             zip.start_file(name, opts).unwrap();
             zip.write_all(content.as_bytes()).unwrap();
@@ -184,7 +189,7 @@ fn test_structural_edits_export_valid_documents() {
 
 #[test]
 fn test_table_cell_paragraphs_are_editable_like_any_other() {
-    let mut m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>uno</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>después</w:t></w:r></w:p>"#);
+    let m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>uno</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>después</w:t></w:r></w:p>"#);
     let table_paragraphs = || match &m.extract_elements().unwrap()[1] {
         DocumentElement::Table(t) => t.rich_rows[0].cells.iter().flat_map(|c| c.paragraphs.clone()).collect::<Vec<_>>(),
         _ => panic!("expected a table"),
@@ -225,4 +230,75 @@ fn test_enter_at_end_keeps_typing_in_the_same_format() {
     m.replace_range(1, 0, 1, 0, "más").unwrap();
     let run = &m.extract_paragraphs().unwrap()[1].runs[0];
     assert_eq!((run.text.as_str(), run.bold, run.font_family.as_deref()), ("más", true, Some("Consolas")));
+}
+
+#[test]
+fn test_table_borders_follow_style_table_and_cell() {
+    use rust_web_docx::docx_parser::{HeaderFooterInfo, PageSetup};
+    use rust_web_docx::layout_engine::{LayoutEngine, RenderCommand};
+
+    let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+      <w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style>
+      <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/>
+        <w:tblPr><w:tblBorders>
+          <w:top w:val="single" w:sz="4" w:color="auto"/><w:left w:val="single" w:sz="4" w:color="auto"/>
+          <w:bottom w:val="single" w:sz="4" w:color="auto"/><w:right w:val="single" w:sz="4" w:color="auto"/>
+          <w:insideH w:val="single" w:sz="4" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:color="auto"/>
+        </w:tblBorders></w:tblPr></w:style>
+    </w:styles>"#;
+    let cell = |text: &str, borders: &str| format!(r#"<w:tc><w:tcPr>{}</w:tcPr><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>"#, borders, text);
+    let body = format!(
+        r#"<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblBorders><w:insideV w:val="none"/></w:tblBorders></w:tblPr>
+           <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+           <w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl><w:p/>"#,
+        cell("a1", ""),
+        cell("b1", r#"<w:tcBorders><w:bottom w:val="double" w:sz="12" w:color="FF0000"/></w:tcBorders>"#),
+        cell("a2", ""),
+        cell("b2", ""),
+    );
+    let m = docx_with_styles(&body, styles);
+
+    // The style supplies the borders, the table removes the inside verticals
+    let table = m.extract_tables().unwrap().remove(0);
+    let visible = |b: &Option<rust_web_docx::docx_parser::BorderInfo>| b.as_ref().is_some_and(|b| b.is_visible());
+    assert!(visible(&table.borders.top) && visible(&table.borders.inside_h));
+    assert!(!visible(&table.borders.inside_v), "explicit none overrides the style");
+    assert!(table.rich_rows.iter().all(|r| !r.is_header), "no row is a header without tblHeader");
+
+    // What the layout draws for each cell side
+    let elements = m.extract_elements().unwrap();
+    let layout = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0);
+    let cells: Vec<_> = layout.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            RenderCommand::TableCell { row, col, borders, .. } => Some(((*row, *col), borders.clone())),
+            _ => None,
+        })
+        .collect();
+    let at = |r: usize, c: usize| cells.iter().find(|(k, _)| *k == (r, c)).unwrap().1.clone();
+    let a1 = at(0, 0);
+    assert!(a1.top.is_some() && a1.left.is_some() && a1.bottom.is_some(), "outer + insideH borders");
+    assert!(a1.right.is_none(), "no inside vertical border between columns");
+    let b1 = at(0, 1);
+    let own = b1.bottom.expect("the cell's own bottom border");
+    assert_eq!((own.val.as_str(), own.color.as_str()), ("double", "FF0000"));
+    assert!(b1.left.is_none() && b1.right.is_some());
+}
+
+#[test]
+fn test_unstyled_document_uses_word_defaults() {
+    // No docDefaults, no styles: Word renders Times New Roman 10pt, black, no paragraph spacing
+    let m = docx_with_styles(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p><w:p><w:r><w:t>texto</w:t></w:r></w:p>"#,
+        r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+    );
+    for p in m.extract_paragraphs().unwrap() {
+        let run = &p.runs[0];
+        assert_eq!((run.font_family.as_deref(), run.font_size), (Some("Times New Roman"), Some(10.0)));
+        assert!(!run.bold, "an undefined Heading1 style adds nothing, as in Word");
+        assert_eq!(run.color, "");
+        assert_eq!((p.space_before, p.space_after, p.line_spacing), (0.0, 0.0, None));
+    }
 }

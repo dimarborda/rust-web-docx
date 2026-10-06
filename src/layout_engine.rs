@@ -1,6 +1,6 @@
 use crate::docx_parser::{
-    is_dark_hex_str, DocumentElement, HeaderFooterInfo, ImageRef, PageSetup, ParagraphInfo, RunInfo, TableCellData,
-    TableInfo, PAGE_BREAK,
+    is_dark_hex_str, BorderInfo, CellBorders, DocumentElement, HeaderFooterInfo, ImageRef, PageSetup, ParagraphInfo,
+    RunInfo, TableCellData, TableInfo, PAGE_BREAK,
 };
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,10 @@ pub enum RenderCommand {
         font_weight: String,
         align: String,
         border_color: String,
+        /// Visible borders of this cell after resolving cell, table and table-style borders;
+        /// a missing side has no border (the editor may show a non-printing gridline)
+        #[serde(default)]
+        borders: CellBorders,
     },
     #[serde(rename = "line")]
     Line {
@@ -529,6 +533,7 @@ struct CellBox<'a> {
     x: f64,
     width: f64,
     cell: &'a TableCellData,
+    borders: CellBorders,
     paragraphs: Vec<ParagraphBox<'a>>,
     content_height: f64,
 }
@@ -542,6 +547,24 @@ struct RowBox<'a> {
 struct TableBox<'a> {
     tbl: &'a TableInfo,
     rows: Vec<RowBox<'a>>,
+}
+
+/// Visible borders of a cell: its own `w:tcBorders` side, else the table's outer border on
+/// the table edge or its inside border between cells
+fn resolve_cell_borders(tbl: &TableInfo, cell: &TableCellData, row: usize, col: usize, cols: usize) -> CellBorders {
+    let tb = &tbl.borders;
+    let rows = tbl.rich_rows.len();
+    let pick = |own: &Option<BorderInfo>, outer: &Option<BorderInfo>, inner: &Option<BorderInfo>, at_edge: bool| {
+        own.clone()
+            .or_else(|| if at_edge { outer.clone() } else { inner.clone() })
+            .filter(BorderInfo::is_visible)
+    };
+    CellBorders {
+        top: pick(&cell.borders.top, &tb.top, &tb.inside_h, row == 0),
+        bottom: pick(&cell.borders.bottom, &tb.bottom, &tb.inside_h, row + 1 == rows),
+        left: pick(&cell.borders.left, &tb.left, &tb.inside_v, col == 0),
+        right: pick(&cell.borders.right, &tb.right, &tb.inside_v, col + 1 == cols),
+    }
 }
 
 /// Word's default cell margins: 0.08" left/right, none top/bottom
@@ -594,19 +617,14 @@ fn prepare_paragraph<'a>(
             } else if let Some(pt) = p.line_at_least {
                 natural.max(pt * PX_PER_PT)
             } else {
-                natural * p.line_spacing.unwrap_or(if p.spacing_resolved { 1.0 } else { 1.15 })
+                natural * p.line_spacing.unwrap_or(1.0)
             };
             // Extra leading sits above the text, as in Word
             LineBox { line, height, baseline: height - descent * size }
         })
         .collect();
 
-    let (space_before, space_after) = if p.spacing_resolved {
-        (p.space_before * PX_PER_PT, p.space_after * PX_PER_PT)
-    } else {
-        let after = if p.space_after > 0.0 { p.space_after } else if p.is_heading { 12.0 } else { 6.0 };
-        (p.space_before, after)
-    };
+    let (space_before, space_after) = (p.space_before * PX_PER_PT, p.space_after * PX_PER_PT);
     let top_border_h = p.borders.top.as_ref().map_or(0.0, |b| b.space.max(3.0) + b.sz_px);
 
     // Inline pictures sit on the first line (approximation: before its text), which grows
@@ -676,7 +694,8 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
     let rows = tbl
         .rich_rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(row_index, row)| {
             let mut x = geo.margin_left;
             let cells: Vec<CellBox> = row
                 .cells
@@ -695,7 +714,8 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
                         .collect();
                     let content_height = 2.0 * CELL_PAD_Y
                         + paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
-                    let cell_box = CellBox { x, width, cell, paragraphs, content_height };
+                    let borders = resolve_cell_borders(tbl, cell, row_index, col, row.cells.len());
+                    let cell_box = CellBox { x, width, cell, borders, paragraphs, content_height };
                     x += width;
                     cell_box
                 })
@@ -818,7 +838,7 @@ fn keep_chain_height(blocks: &[Block], start: usize) -> f64 {
                 break;
             }
             Block::Table(t) => {
-                h += 8.0 + t.rows.first().map_or(0.0, |r| r.height);
+                h += t.rows.first().map_or(0.0, |r| r.height);
                 break;
             }
         }
@@ -1101,7 +1121,6 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
     if !pag.at_top() {
         pag.cursor_y += flow.pending_after;
     }
-    pag.cursor_y += 4.0;
     let tbl = t.tbl;
 
     for (row_idx, row) in t.rows.iter().enumerate() {
@@ -1130,6 +1149,7 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
                 font_weight: if cell.cell.bold { "700" } else { "400" }.to_string(),
                 align: cell.cell.align.clone(),
                 border_color: cell.cell.border_color.clone(),
+                borders: cell.borders.clone(),
             });
             let mut y = top + CELL_PAD_Y;
             for b in &cell.paragraphs {
@@ -1145,7 +1165,7 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
         pag.cursor_y += row.height;
     }
 
-    flow.pending_after = 12.0;
+    flow.pending_after = 0.0;
     flow.prev_style = None;
     flow.prev_contextual = false;
 }
@@ -1583,51 +1603,39 @@ fn add_watermark_command(items: &mut Vec<RenderCommand>, text: &str, opacity: f6
     );
 }
 
-fn get_paragraph_typography(p: &ParagraphInfo) -> (f64, f64, &'static str, String, String) {
-    let lower_style = p.style.to_lowercase();
-    let effective_family = p.font_family.as_deref()
-        .or_else(|| p.runs.iter().find_map(|r| r.font_family.as_deref()));
-
-    let default_family = if let Some(fam) = effective_family {
-        if fam.eq_ignore_ascii_case("consolas") || fam.eq_ignore_ascii_case("courier") || fam.eq_ignore_ascii_case("monospace") {
-            "Consolas, Cousine, 'JetBrains Mono', monospace".to_string()
-        } else if fam.eq_ignore_ascii_case("calibri") {
-            "Calibri, Carlito, 'Segoe UI', Inter, sans-serif".to_string()
-        } else if fam.eq_ignore_ascii_case("cambria") {
-            "Cambria, Caladea, Georgia, serif".to_string()
-        } else if fam.eq_ignore_ascii_case("times new roman") || fam.eq_ignore_ascii_case("times") {
-            "'Times New Roman', Tinos, Georgia, serif".to_string()
-        } else if fam.eq_ignore_ascii_case("arial") {
-            "Arial, Arimo, Helvetica, sans-serif".to_string()
-        } else if fam.eq_ignore_ascii_case("aptos") {
-            "Aptos, Calibri, Carlito, 'Segoe UI', sans-serif".to_string()
-        } else {
-            format!("{}, Calibri, Carlito, Inter, sans-serif", fam)
-        }
-    } else {
+/// CSS font stack for a Word font, with metric-compatible web fallbacks
+fn css_font_stack(family: &str) -> String {
+    let f = family.to_lowercase();
+    if f.contains("consolas") || f.contains("courier") || f.contains("monospace") {
+        "Consolas, Cousine, 'JetBrains Mono', monospace".to_string()
+    } else if f.contains("calibri") {
         "Calibri, Carlito, 'Segoe UI', Inter, sans-serif".to_string()
-    };
-
-    if let Some(sz_pt) = p.font_size {
-        let font_size_px = sz_pt * 1.3333;
-        let weight = if p.bold || p.is_heading { "700" } else { "400" };
-        let lh = font_size_px * p.line_spacing.unwrap_or(1.35).clamp(1.15, 2.0);
-        let color = if !p.color.is_empty() {
-            if p.color.starts_with('#') { p.color.clone() } else { format!("#{}", p.color) }
-        } else {
-            "#1B1F1E".to_string()
-        };
-        (font_size_px, lh, weight, default_family, color)
-    } else if lower_style.contains("heading1") || lower_style.contains("title") || lower_style.contains("título") {
-        (24.0, 32.0, "700", "Calibri, Carlito, Outfit, sans-serif".to_string(), "#1B1F1E".to_string())
-    } else if lower_style.contains("heading2") || lower_style.contains("subtítulo") {
-        (18.0, 26.0, "600", "Calibri, Carlito, Outfit, sans-serif".to_string(), "#1E40AF".to_string())
-    } else if lower_style.contains("heading3") {
-        (15.0, 22.0, "600", "Calibri, Carlito, Inter, sans-serif".to_string(), "#334155".to_string())
+    } else if f.contains("cambria") {
+        "Caladea, Cambria, Georgia, serif".to_string()
+    } else if f.contains("times") {
+        "Tinos, 'Times New Roman', Georgia, serif".to_string()
+    } else if f.contains("arial") || f.contains("helvetica") {
+        "Arimo, Arial, Helvetica, sans-serif".to_string()
+    } else if f.contains("aptos") {
+        "Aptos, Calibri, Carlito, 'Segoe UI', sans-serif".to_string()
+    } else if f.contains("sans") || f.contains("gothic") || f.contains("tahoma") || f.contains("verdana") || f.contains("segoe") || f.contains("roboto") {
+        format!("'{}', Carlito, Arimo, 'Segoe UI', Inter, sans-serif", family)
     } else {
-        let weight = if p.bold { "700" } else { "400" };
-        (14.66, 20.0, weight, default_family, "#1E293B".to_string())
+        format!("'{}', Tinos, 'Times New Roman', serif", family)
     }
+}
+
+/// Paragraph-level typography (size px, weight, CSS family, color) from the resolved
+/// paragraph. Anything still missing gets Word's defaults: Times New Roman 10pt, black.
+fn get_paragraph_typography(p: &ParagraphInfo) -> (f64, f64, &'static str, String, String) {
+    let family = p
+        .font_family
+        .as_deref()
+        .or_else(|| p.runs.iter().find_map(|r| r.font_family.as_deref()))
+        .unwrap_or("Times New Roman");
+    let font_size_px = p.font_size.unwrap_or(10.0) * PX_PER_PT;
+    let weight = if p.bold { "700" } else { "400" };
+    (font_size_px, font_size_px, weight, css_font_stack(family), css_color(&p.color, "#000000"))
 }
 
 /// Where a paragraph's list label goes, relative to the left margin (px)

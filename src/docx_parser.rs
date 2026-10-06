@@ -123,6 +123,9 @@ pub struct TableCellData {
     pub font_size: f64,
     pub font_family: String,
     pub border_color: String,
+    /// The cell's own borders (`w:tcBorders`), overriding the table's
+    #[serde(default)]
+    pub borders: CellBorders,
     /// The cell's paragraphs, numbered in the same document-wide sequence as body paragraphs
     #[serde(default)]
     pub paragraphs: Vec<ParagraphInfo>,
@@ -143,6 +146,107 @@ pub struct TableInfo {
     #[serde(default)]
     pub grid_cols: Vec<f64>,
     pub header_row: bool,
+    /// Effective table borders (table style chain + the table's own `w:tblBorders`)
+    #[serde(default)]
+    pub borders: TableBorders,
+}
+
+/// Borders of a table. A side holding `val: "none"` explicitly removes a border a style
+/// would add; `None` means "not specified here".
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TableBorders {
+    pub top: Option<BorderInfo>,
+    pub left: Option<BorderInfo>,
+    pub bottom: Option<BorderInfo>,
+    pub right: Option<BorderInfo>,
+    pub inside_h: Option<BorderInfo>,
+    pub inside_v: Option<BorderInfo>,
+}
+
+impl TableBorders {
+    pub fn merge(&mut self, over: &TableBorders) {
+        for (dst, src) in [
+            (&mut self.top, &over.top),
+            (&mut self.left, &over.left),
+            (&mut self.bottom, &over.bottom),
+            (&mut self.right, &over.right),
+            (&mut self.inside_h, &over.inside_h),
+            (&mut self.inside_v, &over.inside_v),
+        ] {
+            if src.is_some() {
+                *dst = src.clone();
+            }
+        }
+    }
+
+    /// Sets the side named by a `w:tblBorders` child (`top`, `start`, `insideH`…)
+    pub fn set_side(&mut self, e: &BytesStart) {
+        let name = e.name();
+        let n = name.as_ref();
+        let border = Some(parse_side_border(e));
+        if tag_is(n, "top") {
+            self.top = border;
+        } else if tag_is(n, "left") || tag_is(n, "start") {
+            self.left = border;
+        } else if tag_is(n, "bottom") {
+            self.bottom = border;
+        } else if tag_is(n, "right") || tag_is(n, "end") {
+            self.right = border;
+        } else if tag_is(n, "insideH") {
+            self.inside_h = border;
+        } else if tag_is(n, "insideV") {
+            self.inside_v = border;
+        }
+    }
+}
+
+/// The four sides of a cell. In `TableCellData` a side is the cell's own `w:tcBorders`
+/// entry; in a render command it is the visible border after resolving table borders.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct CellBorders {
+    pub top: Option<BorderInfo>,
+    pub left: Option<BorderInfo>,
+    pub bottom: Option<BorderInfo>,
+    pub right: Option<BorderInfo>,
+}
+
+impl CellBorders {
+    fn set_side(&mut self, e: &BytesStart) {
+        let name = e.name();
+        let n = name.as_ref();
+        let border = Some(parse_side_border(e));
+        if tag_is(n, "top") {
+            self.top = border;
+        } else if tag_is(n, "left") || tag_is(n, "start") {
+            self.left = border;
+        } else if tag_is(n, "bottom") {
+            self.bottom = border;
+        } else if tag_is(n, "right") || tag_is(n, "end") {
+            self.right = border;
+        }
+    }
+}
+
+/// A border side keeping explicit "none" (unlike `parse_border_element`); `sz` is in
+/// eighths of a point
+pub(crate) fn parse_side_border(e: &BytesStart) -> BorderInfo {
+    let val = get_attr_value(e, "val").unwrap_or_default().to_lowercase();
+    let val = if val.is_empty() || val == "nil" { "none".to_string() } else { val };
+    let color = get_attr_value(e, "color").filter(|c| !c.eq_ignore_ascii_case("auto")).unwrap_or_default();
+    let sz = get_attr_i64(e, "sz").unwrap_or(4) as f64;
+    BorderInfo {
+        val,
+        color,
+        sz_px: ((sz / 8.0) * (96.0 / 72.0)).clamp(0.5, 8.0),
+        space: get_attr_i64(e, "space").unwrap_or(0) as f64,
+    }
+}
+
+impl BorderInfo {
+    /// Whether this side actually draws a line
+    pub fn is_visible(&self) -> bool {
+        !matches!(self.val.as_str(), "none" | "nil" | "")
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1837,6 +1941,15 @@ pub(crate) fn break_char(e: &BytesStart) -> char {
 /// Paragraph text marker for a manual page break (`<w:br w:type="page"/>`)
 pub const PAGE_BREAK: char = '\u{000C}';
 
+/// Formatting Word applies when the document defines none (no docDefaults, no styles)
+fn word_default_rpr() -> RunProps {
+    RunProps {
+        font_size: Some(10.0),
+        font_family: Some("Times New Roman".to_string()),
+        ..Default::default()
+    }
+}
+
 /// A run as written in the XML, before the style cascade is applied
 #[derive(Default)]
 struct RawRun {
@@ -1884,7 +1997,9 @@ fn resolve_paragraph(
     ppr.merge(&style_ppr);
     ppr.merge(direct_ppr);
 
-    let base_rpr = styles.doc_rpr.merged(&style_rpr);
+    // Word's own defaults close the cascade: Times New Roman 10pt when neither document
+    // defaults nor styles say otherwise
+    let base_rpr = word_default_rpr().merged(&styles.doc_rpr).merged(&style_rpr);
     let mark = base_rpr.merged(mark_rpr);
     let runs: Vec<RunInfo> = raw_runs
         .into_iter()
@@ -1922,9 +2037,7 @@ fn resolve_paragraph(
 
     let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
     let non_empty_runs: Vec<&RunInfo> = runs.iter().filter(|r| !r.text.trim().is_empty()).collect();
-    let bold = if !styles.loaded && is_heading {
-        true
-    } else if !non_empty_runs.is_empty() {
+    let bold = if !non_empty_runs.is_empty() {
         non_empty_runs.iter().all(|r| r.bold)
     } else {
         mark.bold.unwrap_or(false)
@@ -1964,7 +2077,8 @@ fn resolve_paragraph(
         // Omitted widowControl means "on" (Word writes w:val="0" to disable it)
         widow_control: ppr.widow_control.unwrap_or(true),
         contextual_spacing: ppr.contextual_spacing.unwrap_or(false),
-        spacing_resolved: styles.loaded || ppr.space_before.is_some() || ppr.space_after.is_some(),
+        // Unspecified spacing is Word's default (0 before/after, single line), never a guess
+        spacing_resolved: true,
         section_break_after: false,
         ends_section: false,
         images: Vec::new(),
@@ -2024,8 +2138,11 @@ pub fn parse_table_with(
     let mut current_cell_paragraphs: Vec<ParagraphInfo> = Vec::new();
 
     let mut table_border_color: Option<String> = None;
+    let mut table_borders = TableBorders::default();
+    let mut table_style: Option<String> = None;
     let mut current_cell_bg: Option<String> = None;
     let mut current_cell_border: Option<String> = None;
+    let mut current_cell_borders = CellBorders::default();
     let mut current_row_is_header = false;
 
     let mut in_tbl_pr = false;
@@ -2036,8 +2153,6 @@ pub fn parse_table_with(
     let mut in_tc = false;
     let mut in_tc_pr = false;
     let mut in_tc_borders = false;
-    let mut row_idx = 0;
-
     let mut buf = Vec::new();
 
     loop {
@@ -2049,6 +2164,7 @@ pub fn parse_table_with(
                 } else if in_tbl_pr && tag_is(name.as_ref(), "tblBorders") {
                     in_tbl_borders = true;
                 } else if in_tbl_borders {
+                    table_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
                         if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
                             table_border_color = Some(col);
@@ -2060,7 +2176,8 @@ pub fn parse_table_with(
                     in_tr = true;
                     current_row_strings = Vec::new();
                     current_rich_cells = Vec::new();
-                    current_row_is_header = row_idx == 0;
+                    // Only rows marked "repeat as header row" are headers
+                    current_row_is_header = false;
                 } else if in_tr && tag_is(name.as_ref(), "trPr") {
                     in_tr_pr = true;
                 } else if in_tr && tag_is(name.as_ref(), "tc") {
@@ -2068,11 +2185,13 @@ pub fn parse_table_with(
                     current_cell_paragraphs = Vec::new();
                     current_cell_bg = None;
                     current_cell_border = None;
+                    current_cell_borders = CellBorders::default();
                 } else if in_tc && tag_is(name.as_ref(), "tcPr") {
                     in_tc_pr = true;
                 } else if in_tc_pr && tag_is(name.as_ref(), "tcBorders") {
                     in_tc_borders = true;
                 } else if in_tc_borders {
+                    current_cell_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
                         if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
                             current_cell_border = Some(col);
@@ -2099,11 +2218,14 @@ pub fn parse_table_with(
                     *p_index += 1;
                 }
                 if in_tbl_borders {
+                    table_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
                         if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
                             table_border_color = Some(col);
                         }
                     }
+                } else if in_tbl_pr && !in_tc && tag_is(name.as_ref(), "tblStyle") {
+                    table_style = get_attr_value(e, "val");
                 } else if in_tbl_grid && tag_is(name.as_ref(), "gridCol") {
                     if let Some(w) = get_attr_i64(e, "w") {
                         grid_cols.push(w as f64);
@@ -2118,6 +2240,7 @@ pub fn parse_table_with(
                         }
                     }
                 } else if in_tc_borders {
+                    current_cell_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
                         if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
                             current_cell_border = Some(col);
@@ -2195,6 +2318,7 @@ pub fn parse_table_with(
                         font_size,
                         font_family,
                         border_color,
+                        borders: current_cell_borders.clone(),
                         paragraphs: current_cell_paragraphs.clone(),
                     });
                 } else if in_tr && tag_is(name.as_ref(), "tr") {
@@ -2204,7 +2328,6 @@ pub fn parse_table_with(
                         cells: current_rich_cells.clone(),
                         is_header: current_row_is_header,
                     });
-                    row_idx += 1;
                 } else if tag_is(name.as_ref(), "tbl") {
                     break;
                 }
@@ -2221,7 +2344,14 @@ pub fn parse_table_with(
         rows,
         rich_rows,
         grid_cols,
-        header_row: true,
+        header_row: false,
+        borders: {
+            // The table style chain (or the document's default table style) first, then the
+            // table's own borders on top
+            let mut borders = styles.table_borders(table_style.as_deref());
+            borders.merge(&table_borders);
+            borders
+        },
     }
 }
 
@@ -2597,7 +2727,7 @@ mod tests {
         reader.config_mut().trim_text(false);
         let p = parse_paragraph_from_reader(&mut reader, 0);
         assert!(!p.runs[0].bold, "pPr/rPr only formats the paragraph mark");
-        assert_eq!(p.runs[0].font_size, None);
+        assert_eq!(p.runs[0].font_size, Some(10.0), "Word's default, not the mark's 20pt");
         assert_eq!(p.font_size, Some(20.0), "the mark size is still reported for empty-line height");
     }
 

@@ -423,22 +423,24 @@ function ensureLayoutFonts(layout) {
 }
 
 function formatFontFamily(family) {
-  if (!family) return '"Calibri", "Carlito", "Segoe UI", Inter, sans-serif';
+  if (!family) return '"Carlito", "Calibri", "Arimo", "Arial", sans-serif';
   const fLower = family.toLowerCase();
   if (fLower.includes('calibri')) {
     return '"Calibri", "Carlito", "Segoe UI", Roboto, sans-serif';
   } else if (fLower.includes('consolas') || fLower.includes('courier') || fLower.includes('mono')) {
     return '"Consolas", "Cousine", "JetBrains Mono", monospace';
   } else if (fLower.includes('cambria')) {
-    return '"Cambria", "Caladea", Georgia, serif';
+    return '"Caladea", "Cambria", Georgia, serif';
   } else if (fLower.includes('times')) {
-    return '"Times New Roman", "Tinos", Georgia, serif';
-  } else if (fLower.includes('arial')) {
-    return '"Arial", "Arimo", Helvetica, sans-serif';
+    return '"Tinos", "Times New Roman", Georgia, serif';
+  } else if (fLower.includes('arial') || fLower.includes('helvetica')) {
+    return '"Arimo", "Arial", Helvetica, sans-serif';
   } else if (fLower.includes('aptos')) {
     return '"Aptos", "Calibri", "Carlito", "Segoe UI", sans-serif';
+  } else if (fLower.includes('sans') || fLower.includes('gothic') || fLower.includes('tahoma') || fLower.includes('verdana') || fLower.includes('segoe') || fLower.includes('roboto')) {
+    return `"${family}", "Carlito", "Arimo", "Segoe UI", Inter, sans-serif`;
   }
-  return `"${family}", "Calibri", "Carlito", Inter, sans-serif`;
+  return `"${family}", "Carlito", "Arimo", Inter, sans-serif`;
 }
 
 function buildCanvasFont(weight, style, size, family) {
@@ -449,13 +451,49 @@ function buildCanvasFont(weight, style, size, family) {
 }
 
 // Image element cache for smooth 60fps canvas rendering
-function formatCssColor(color, fallback = '#1E293B') {
+function formatCssColor(color, fallback = '#000000') {
   if (!color || color === 'auto' || color === '') return fallback;
   if (color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl')) return color;
   return `#${color}`;
 }
 
 const imageElementCache = new Map();
+
+// Word shows dashed "gridlines" where table cells have no border (View → Gridlines). They help
+// editing and are never part of the document.
+const SHOW_TABLE_GRIDLINES = true;
+
+function drawCellSide(ctx, border, x1, y1, x2, y2) {
+  ctx.save();
+  ctx.beginPath();
+  if (border) {
+    const width = border.sz_px || 0.75;
+    ctx.strokeStyle = formatCssColor(border.color, '#000000');
+    ctx.lineWidth = width;
+    if (border.val === 'dashed' || border.val === 'dashSmallGap') ctx.setLineDash([width * 4, width * 2]);
+    else if (border.val === 'dotted') ctx.setLineDash([width, width * 1.5]);
+    if (border.val === 'double') {
+      // Two thin lines, as Word draws "double"
+      const dx = y1 === y2 ? 0 : width;
+      const dy = y1 === y2 ? width : 0;
+      ctx.lineWidth = Math.max(0.5, width / 2);
+      ctx.moveTo(x1 - dx, y1 - dy); ctx.lineTo(x2 - dx, y2 - dy);
+      ctx.moveTo(x1 + dx, y1 + dy); ctx.lineTo(x2 + dx, y2 + dy);
+    } else {
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+    }
+  } else if (SHOW_TABLE_GRIDLINES) {
+    ctx.strokeStyle = 'rgba(100, 116, 139, 0.45)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 2]);
+    ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  } else {
+    ctx.restore();
+    return;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
 
 // 6. Draw Content on High-Fidelity Canvas
 function drawCanvasPageItems(ctx, items) {
@@ -503,45 +541,19 @@ function drawCanvasPageItems(ctx, items) {
       ctx.stroke();
 
     } else if (item.type === 'table_cell') {
-      // 1. Draw cell background fill if specified
+      // Cell shading only when the document sets it
       if (item.bg_color) {
-        ctx.fillStyle = formatCssColor(item.bg_color, '#F8FAFC');
-        ctx.fillRect(item.x, item.y, item.width, item.height);
-      } else if (item.is_header) {
-        ctx.fillStyle = '#F8FAFC';
+        ctx.fillStyle = formatCssColor(item.bg_color, '#FFFFFF');
         ctx.fillRect(item.x, item.y, item.width, item.height);
       }
-
-      // 2. Draw cell borders
-      const borderColor = formatCssColor(item.border_color, '#DDD5C2');
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(item.x, item.y, item.width, item.height);
-
-      // 3. Draw cell text content with exact color and alignment
-      const textColor = formatCssColor(item.color, '#1E293B');
-      const weight = item.font_weight || '400';
-      const fontSize = item.font_size || 9.5;
-      const fontFamily = item.font_family || 'Calibri, sans-serif';
-
-      ctx.font = buildCanvasFont(weight, 'normal', fontSize, fontFamily);
-      ctx.fillStyle = textColor;
-      ctx.textAlign = item.align === 'center' ? 'center' : (item.align === 'right' ? 'right' : 'left');
-      ctx.textBaseline = 'alphabetic';
-
-      const lines = (item.lines && item.lines.length > 0) ? item.lines : (item.text ? item.text.split('\n') : ['']);
-      const lineHeight = fontSize * 1.35;
-      const totalTextH = lines.length * lineHeight;
-      const startY = item.y + (item.height - totalTextH) / 2 + fontSize * 0.88;
-
-      const padX = 8;
-      const textX = item.align === 'center' 
-        ? item.x + item.width / 2 
-        : (item.align === 'right' ? item.x + item.width - padX : item.x + padX);
-
-      lines.forEach((lineText, lIdx) => {
-        ctx.fillText(lineText, textX, startY + lIdx * lineHeight);
-      });
+      // The document's borders; where a side has none, Word's non-printing gridline
+      const { x, y, width: w, height: h } = item;
+      const sides = item.borders || {};
+      drawCellSide(ctx, sides.top, x, y, x + w, y);
+      drawCellSide(ctx, sides.bottom, x, y + h, x + w, y + h);
+      drawCellSide(ctx, sides.left, x, y, x, y + h);
+      drawCellSide(ctx, sides.right, x + w, y, x + w, y + h);
+      // The cell's text is drawn as regular paragraph lines
 
     } else if (item.type === 'text') {
       if (item.runs && item.runs.length > 0) {
@@ -557,7 +569,7 @@ function drawCanvasPageItems(ctx, items) {
           }
           const fontSize = run.font_size || item.font_size || 14.66;
           const fontFamily = run.font_family || item.font_family || 'Calibri, sans-serif';
-          const runColor = formatCssColor(run.color || item.color, '#1E293B');
+          const runColor = formatCssColor(run.color || item.color, '#000000');
           ctx.font = buildCanvasFont(run.bold ? '700' : '400', run.italic ? 'italic' : 'normal', fontSize, fontFamily);
           ctx.fillStyle = runColor;
           ctx.textAlign = 'left';
@@ -590,7 +602,7 @@ function drawCanvasPageItems(ctx, items) {
       } else if (item.text) {
         // Page decorations (header, footer, page numbers)
         ctx.font = buildCanvasFont(item.font_weight, item.font_style, item.font_size || 14.66, item.font_family);
-        ctx.fillStyle = formatCssColor(item.color, '#1E293B');
+        ctx.fillStyle = formatCssColor(item.color, '#000000');
         ctx.textAlign = item.align === 'right' ? 'right' : (item.align === 'center' ? 'center' : 'left');
         ctx.textBaseline = 'alphabetic';
         ctx.fillText(item.text, item.x, item.y);
