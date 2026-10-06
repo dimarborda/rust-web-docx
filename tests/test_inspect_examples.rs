@@ -148,6 +148,9 @@ fn test_inspect_costo_eficiencia() {
     let stats = modifier.get_statistics().unwrap();
     assert!(stats.bg_image_data_url.is_none(), "Costo-eficiencia should NOT have background image!");
     assert!(stats.header_footer.header_image_data_url.is_some(), "Costo-eficiencia MUST have header logo image!");
+    let logo = stats.header_footer.header_images.first().expect("the default header has the logo");
+    assert!(logo.image.anchored && !logo.image.behind_text);
+    assert!((logo.image.width - 185.0).abs() < 1.0, "{:?}", logo.image);
     assert_eq!(stats.page_setup.orientation, "portrait");
     let paragraphs = modifier.extract_paragraphs().unwrap();
     let bdr_left_count = paragraphs.iter().filter(|p| p.borders.left.is_some()).count();
@@ -186,9 +189,15 @@ fn test_inspect_plantilla() {
     let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
-    assert!(stats.bg_image_data_url.is_some(), "Plantilla diploma MUST have full background image!");
-    let bg_url = stats.bg_image_data_url.unwrap();
-    assert!(bg_url.starts_with("data:image/png;base64,iVBOR"), "Background image must be a valid PNG base64 data url");
+    // The artwork is a picture anchored behind the text of the first paragraph, sized to the
+    // page, not a background repeated on every page
+    assert!(stats.bg_image_data_url.is_none(), "No page-wide background: the picture belongs to one page");
+    let first = &modifier.extract_paragraphs().unwrap()[0];
+    let art = first.images.first().expect("the first paragraph anchors the certificate artwork");
+    assert!(art.anchored && art.behind_text);
+    assert!((art.width - 1130.1).abs() < 1.0 && (art.height - 811.3).abs() < 1.0, "{:?}", art);
+    let inputs = modifier.layout_inputs().unwrap();
+    assert!(inputs.body_images[&art.rel_id].starts_with("data:image/png;base64,iVBOR"));
     assert!(stats.header_footer.header_image_data_url.is_none(), "Plantilla diploma should NOT have header image!");
     assert_eq!(stats.page_setup.orientation, "landscape");
 }

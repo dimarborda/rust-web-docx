@@ -9,7 +9,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
     let stats_before = modifier.get_statistics().expect("Should get stats before");
     assert_eq!(stats_before.page_setup.orientation, "landscape");
-    assert!(stats_before.bg_image_data_url.is_some(), "Should have background image initially");
+    assert!(common::has_picture_behind_text(&modifier), "Should have background image initially");
 
     // 1. Update paragraph 1 ({name})
     let count1 = modifier.update_paragraphs(&[
@@ -26,7 +26,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
     let stats_after_p1 = modifier.get_statistics().expect("Should get stats after p1");
     assert_eq!(stats_after_p1.page_setup.orientation, "landscape", "Orientation MUST remain landscape after editing p1");
-    assert!(stats_after_p1.bg_image_data_url.is_some(), "Background image MUST remain present after editing p1");
+    assert!(common::has_picture_behind_text(&modifier), "Background image MUST remain present after editing p1");
 
     // 2. Update paragraph 2 ({asset_name})
     let count2 = modifier.update_paragraphs(&[
@@ -39,7 +39,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
     let stats_after_p2 = modifier.get_statistics().expect("Should get stats after p2");
     assert_eq!(stats_after_p2.page_setup.orientation, "landscape", "Orientation MUST remain landscape after editing p2");
-    assert!(stats_after_p2.bg_image_data_url.is_some(), "Background image MUST remain present after editing p2");
+    assert!(common::has_picture_behind_text(&modifier), "Background image MUST remain present after editing p2");
 
     // 3. Update paragraph 4 ({documento_de_identidad}) - paragraph right before sectPr
     let count4 = modifier.update_paragraphs(&[
@@ -52,7 +52,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
     let stats_after_p4 = modifier.get_statistics().expect("Should get stats after p4");
     assert_eq!(stats_after_p4.page_setup.orientation, "landscape", "Orientation MUST remain landscape after editing p4");
-    assert!(stats_after_p4.bg_image_data_url.is_some(), "Background image MUST remain present after editing p4");
+    assert!(common::has_picture_behind_text(&modifier), "Background image MUST remain present after editing p4");
 
     // 4. Update paragraph 0 (the paragraph that contains the drawing / background anchor)
     // If paragraph 0 is updated, the drawing MUST NOT be wiped out!
@@ -66,7 +66,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
     let stats_after_p0 = modifier.get_statistics().expect("Should get stats after p0");
     assert_eq!(stats_after_p0.page_setup.orientation, "landscape", "Orientation MUST remain landscape after editing p0");
-    assert!(stats_after_p0.bg_image_data_url.is_some(), "Background image drawing MUST NOT be lost when updating paragraph 0");
+    assert!(common::has_picture_behind_text(&modifier), "Background image drawing MUST NOT be lost when updating paragraph 0");
 
     // Verify raw text
     let raw = modifier.extract_raw_text().expect("Should get raw text");
@@ -86,7 +86,7 @@ fn test_rich_paragraph_formatting_preserves_sectpr() {
 
     let stats = modifier.get_statistics().expect("Should get stats");
     assert_eq!(stats.page_setup.orientation, "landscape");
-    assert!(stats.bg_image_data_url.is_some());
+    assert!(common::has_picture_behind_text(&modifier));
 
     // Apply rich formatting to paragraph 4 (before sectPr)
     modifier.update_paragraph_rich(4, "ID: 999888777", "center", "008800", false, true)
@@ -153,5 +153,5 @@ fn test_update_paragraph_runs_per_word() {
     // Verify sectPr preserved
     let stats = modifier.get_statistics().expect("Should get stats");
     assert_eq!(stats.page_setup.orientation, "landscape");
-    assert!(stats.bg_image_data_url.is_some());
+    assert!(common::has_picture_behind_text(&modifier));
 }

@@ -38,7 +38,7 @@ fn test_vead_template_variables_split_across_runs() {
     let reloaded = DocxModifier::from_bytes(&exported).expect("Exported docx should parse");
     let stats = reloaded.get_statistics().unwrap();
     assert_eq!(stats.page_setup.orientation, "landscape");
-    assert!(stats.bg_image_data_url.is_some(), "background image must survive");
+    assert!(common::has_picture_behind_text(&reloaded), "the certificate artwork must survive");
     assert!(reloaded.extract_raw_text().unwrap().contains("Alexander von Humboldt"));
 }
 

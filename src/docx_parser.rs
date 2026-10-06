@@ -100,6 +100,9 @@ pub struct ParagraphInfo {
     /// This paragraph ends a section (`w:sectPr` in its properties)
     #[serde(skip)]
     pub ends_section: bool,
+    /// Pictures anchored in or inline with this paragraph
+    #[serde(default)]
+    pub images: Vec<ImageRef>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -178,6 +181,200 @@ pub struct HeaderFooterInfo {
     pub has_header: bool,
     pub has_footer: bool,
     pub header_image_data_url: Option<String>,
+    /// Images of the default header and footer, positioned like Word does on every page
+    #[serde(default)]
+    pub header_images: Vec<PlacedImage>,
+    #[serde(default)]
+    pub footer_images: Vec<PlacedImage>,
+}
+
+/// A picture (`w:drawing`) as written in the document. Lengths in px.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ImageRef {
+    /// Relationship id of the picture (`r:embed`)
+    pub rel_id: String,
+    pub width: f64,
+    pub height: f64,
+    /// Floating (`wp:anchor`) rather than in line with the text (`wp:inline`)
+    pub anchored: bool,
+    /// Drawn behind the text (`behindDoc`)
+    pub behind_text: bool,
+    /// What the horizontal position is relative to: page, margin, column, character…
+    pub h_relative: String,
+    pub h_offset: f64,
+    /// left / center / right instead of an offset
+    pub h_align: Option<String>,
+    /// What the vertical position is relative to: page, margin, paragraph, line…
+    pub v_relative: String,
+    pub v_offset: f64,
+    /// top / center / bottom instead of an offset
+    pub v_align: Option<String>,
+}
+
+/// An image together with its pixels as a data URL
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlacedImage {
+    pub image: ImageRef,
+    pub data_url: String,
+}
+
+const EMU_PER_PX: f64 = 9525.0;
+
+/// Reads the `w:drawing` whose start tag was just consumed
+pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
+    let mut img = ImageRef {
+        h_relative: "column".into(),
+        v_relative: "paragraph".into(),
+        ..Default::default()
+    };
+    let mut axis = ' ';
+    let mut text_kind: Option<&'static str> = None;
+    let mut buf = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        let (e, is_start) = match event {
+            Ok(Event::Start(e)) => (e, true),
+            Ok(Event::Empty(e)) => (e, false),
+            Ok(Event::Text(t)) => {
+                if let (Some(kind), Ok(value)) = (text_kind, t.unescape()) {
+                    let value = value.trim().to_string();
+                    match (axis, kind) {
+                        ('h', "offset") => img.h_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX,
+                        ('v', "offset") => img.v_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX,
+                        ('h', "align") => img.h_align = Some(value),
+                        ('v', "align") => img.v_align = Some(value),
+                        _ => {}
+                    }
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(Event::End(e)) => {
+                let name = e.name();
+                let n = name.as_ref();
+                if tag_is(n, "drawing") {
+                    break;
+                } else if tag_is(n, "positionH") || tag_is(n, "positionV") {
+                    axis = ' ';
+                } else if tag_is(n, "posOffset") || tag_is(n, "align") {
+                    text_kind = None;
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {
+                buf.clear();
+                continue;
+            }
+        };
+        let name = e.name();
+        let n = name.as_ref();
+        if tag_is(n, "anchor") {
+            img.anchored = true;
+            img.behind_text = get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
+        } else if tag_is(n, "positionH") || tag_is(n, "positionV") {
+            axis = if tag_is(n, "positionH") { 'h' } else { 'v' };
+            if let Some(rel) = get_attr_value(&e, "relativeFrom") {
+                if axis == 'h' { img.h_relative = rel } else { img.v_relative = rel }
+            }
+        } else if is_start && tag_is(n, "posOffset") {
+            text_kind = Some("offset");
+        } else if is_start && tag_is(n, "align") {
+            text_kind = Some("align");
+        } else if tag_is(n, "extent") && img.width == 0.0 {
+            img.width = get_attr_i64(&e, "cx").unwrap_or(0) as f64 / EMU_PER_PX;
+            img.height = get_attr_i64(&e, "cy").unwrap_or(0) as f64 / EMU_PER_PX;
+        } else if tag_is(n, "blip") && img.rel_id.is_empty() {
+            img.rel_id = get_attr_value(&e, "embed").unwrap_or_default();
+        } else if is_start && tag_is(n, "txbxContent") {
+            // Text boxes are not rendered yet; skip their content
+            let end = n.to_vec();
+            let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
+        }
+        buf.clear();
+    }
+    (!img.rel_id.is_empty() && img.width > 0.0).then_some(img)
+}
+
+/// Every picture of an XML part (e.g. a header), in document order
+pub(crate) fn extract_drawings(xml: &str) -> Vec<ImageRef> {
+    let mut reader = Reader::from_str(xml);
+    let mut images = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) if tag_is(e.name().as_ref(), "drawing") => {
+                buf.clear();
+                if let Some(img) = parse_drawing(&mut reader) {
+                    images.push(img);
+                }
+                continue;
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    images
+}
+
+/// `data:` URL of a related image part (`target` as written in a .rels file)
+pub(crate) fn image_data_url(files: &HashMap<String, Vec<u8>>, target: &str) -> Option<String> {
+    let clean = target.trim_start_matches("../").trim_start_matches('/');
+    let path = if clean.starts_with("word/") { clean.to_string() } else { format!("word/{}", clean) };
+    let bytes = files.get(&path)?;
+    let lower = path.to_lowercase();
+    let mime = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "image/png"
+    };
+    Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes)))
+}
+
+/// Pictures of a part with their pixels, resolved through the part's relationships
+fn placed_images(files: &HashMap<String, Vec<u8>>, part: &str) -> Vec<PlacedImage> {
+    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else { return Vec::new() };
+    let rels_path = match part.rsplit_once('/') {
+        Some((dir, file)) => format!("{}/_rels/{}.rels", dir, file),
+        None => return Vec::new(),
+    };
+    let rels = files
+        .get(&rels_path)
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(parse_relationships_map)
+        .unwrap_or_default();
+    extract_drawings(xml)
+        .into_iter()
+        .filter_map(|image| {
+            let data_url = image_data_url(files, rels.get(&image.rel_id)?)?;
+            Some(PlacedImage { image, data_url })
+        })
+        .collect()
+}
+
+/// Part name of the default header or footer of the document's last section
+fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> Option<String> {
+    let doc = std::str::from_utf8(files.get("word/document.xml")?).ok()?;
+    let rels = parse_relationships_map(std::str::from_utf8(files.get("word/_rels/document.xml.rels")?).ok()?);
+    let tag = format!("<w:{}Reference ", kind);
+    let mut chosen = None;
+    let mut from = 0;
+    while let Some(i) = doc[from..].find(&tag).map(|i| i + from) {
+        let end = doc[i..].find('>').map(|j| i + j).unwrap_or(doc.len());
+        let element = &doc[i..end];
+        if element.contains("w:type=\"default\"") {
+            chosen = element.split("r:id=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
+        }
+        from = end;
+    }
+    let target = rels.get(&chosen?)?;
+    Some(format!("word/{}", target.trim_start_matches('/').trim_start_matches("word/")))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -254,6 +451,8 @@ pub struct LayoutInputs {
     pub page_setup: PageSetup,
     pub header_footer: HeaderFooterInfo,
     pub bg_image_data_url: Option<String>,
+    /// Pixels of the body's pictures by relationship id
+    pub body_images: HashMap<String, String>,
 }
 
 /// Derived data reused until the document changes (parsing and image encoding are the
@@ -583,6 +782,7 @@ impl DocxModifier {
             page_setup: extract_page_setup_quick_xml(doc),
             header_footer: self.get_header_footer(),
             bg_image_data_url: self.get_bg_image_data_url(),
+            body_images: self.body_image_data_urls(doc),
         });
         self.cache.borrow_mut().inputs = Some((signature, self.parts_revision, inputs.clone()));
         Ok(inputs)
@@ -992,7 +1192,24 @@ impl DocxModifier {
         extract_header_footer_quick_xml(&self.files)
     }
 
-    /// Gets data URL for background image ONLY if referenced in word/document.xml or set explicitly
+    /// Pixels of every picture referenced by document.xml, by relationship id
+    fn body_image_data_urls(&self, doc: &str) -> HashMap<String, String> {
+        let rels = self
+            .files
+            .get("word/_rels/document.xml.rels")
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(parse_relationships_map)
+            .unwrap_or_default();
+        extract_drawing_embed_ids(doc)
+            .into_iter()
+            .filter_map(|id| {
+                let url = image_data_url(&self.files, rels.get(&id)?)?;
+                Some((id, url))
+            })
+            .collect()
+    }
+
+    /// Data URL of the page background chosen in the editor ("Fondo / Marca de agua")
     pub fn get_bg_image_data_url(&self) -> Option<String> {
         // 1. If explicitly set via UI/API
         if let Some(bytes) = &self.background_image {
@@ -1002,43 +1219,6 @@ impl DocxModifier {
                 "image/png"
             };
             return Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes)));
-        }
-
-        // 2. Check if word/document.xml has a drawing or background referencing an image in word/_rels/document.xml.rels
-        if let Some(doc_bytes) = self.files.get("word/document.xml") {
-            if let Ok(doc_xml) = String::from_utf8(doc_bytes.clone()) {
-                if let Some(rel_bytes) = self.files.get("word/_rels/document.xml.rels") {
-                    if let Ok(rel_xml) = String::from_utf8(rel_bytes.clone()) {
-                        let rels = parse_relationships_map(&rel_xml);
-                        let embed_ids = extract_drawing_embed_ids(&doc_xml);
-                        for eid in embed_ids {
-                            if let Some(target) = rels.get(&eid) {
-                                let clean_target = target.trim_start_matches("../").trim_start_matches('/');
-                                let img_path = if clean_target.starts_with("media/") {
-                                    format!("word/{}", clean_target)
-                                } else if clean_target.starts_with("word/") {
-                                    clean_target.to_string()
-                                } else {
-                                    format!("word/media/{}", clean_target)
-                                };
-
-                                if let Some(img_bytes) = self.files.get(&img_path) {
-                                    let mime = if img_path.ends_with(".jpg") || img_path.ends_with(".jpeg") {
-                                        "image/jpeg"
-                                    } else if img_path.ends_with(".png") {
-                                        "image/png"
-                                    } else if img_path.ends_with(".svg") {
-                                        "image/svg+xml"
-                                    } else {
-                                        "image/png"
-                                    };
-                                    return Some(format!("data:{};base64,{}", mime, BASE64.encode(img_bytes)));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         None
@@ -1260,6 +1440,14 @@ pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> Head
                 }
             }
         }
+    }
+
+    // Pictures of the default header/footer (the ones shown on regular pages)
+    if let Some(part) = default_header_footer_part(files, "header").filter(|p| files.contains_key(p)) {
+        info.header_images = placed_images(files, &part);
+    }
+    if let Some(part) = default_header_footer_part(files, "footer").filter(|p| files.contains_key(p)) {
+        info.footer_images = placed_images(files, &part);
     }
 
     // Check footers
@@ -1502,6 +1690,7 @@ pub fn parse_paragraph_with(
     let mut direct_ppr = ParaProps::default();
     let mut mark_rpr = RunProps::default();
     let mut raw_runs: Vec<RawRun> = Vec::new();
+    let mut images: Vec<ImageRef> = Vec::new();
     let mut ends_section = false;
 
     let mut in_ppr = false;
@@ -1561,10 +1750,17 @@ pub fn parse_paragraph_with(
 
         let name = e.name();
         let n = name.as_ref();
-        // Drawings/VML/objects may hold text boxes with their own paragraphs, and tracked
-        // property changes hold the *old* properties: none of them belong to this paragraph
+        if is_start && tag_is(n, "drawing") {
+            buf.clear();
+            if let Some(img) = parse_drawing(reader) {
+                images.push(img);
+            }
+            continue;
+        }
+        // VML/objects may hold text boxes with their own paragraphs, and tracked property
+        // changes hold the *old* properties: none of them belong to this paragraph
         if is_start
-            && ["drawing", "pict", "object", "txbxContent", "pPrChange", "rPrChange"]
+            && ["pict", "object", "txbxContent", "pPrChange", "rPrChange"]
                 .iter()
                 .any(|t| tag_is(n, t))
         {
@@ -1625,6 +1821,7 @@ pub fn parse_paragraph_with(
 
     let mut info = resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs);
     info.ends_section = ends_section;
+    info.images = images;
     info
 }
 
@@ -1770,6 +1967,7 @@ fn resolve_paragraph(
         spacing_resolved: styles.loaded || ppr.space_before.is_some() || ppr.space_after.is_some(),
         section_break_after: false,
         ends_section: false,
+        images: Vec::new(),
     }
 }
 

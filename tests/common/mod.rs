@@ -30,3 +30,12 @@ pub fn all_examples() -> Vec<(String, Vec<u8>)> {
     out.sort();
     out
 }
+
+/// True when some paragraph still anchors a picture behind the text (e.g. a certificate's
+/// full-page artwork), i.e. editing did not lose the drawing
+pub fn has_picture_behind_text(m: &rust_web_docx::docx_parser::DocxModifier) -> bool {
+    m.extract_paragraphs()
+        .unwrap()
+        .iter()
+        .any(|p| p.images.iter().any(|i| i.anchored && i.behind_text))
+}

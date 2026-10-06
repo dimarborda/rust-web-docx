@@ -1,6 +1,6 @@
 use crate::docx_parser::{
-    is_dark_hex_str, DocumentElement, HeaderFooterInfo, PageSetup, ParagraphInfo, RunInfo, TableCellData, TableInfo,
-    PAGE_BREAK,
+    is_dark_hex_str, DocumentElement, HeaderFooterInfo, ImageRef, PageSetup, ParagraphInfo, RunInfo, TableCellData,
+    TableInfo, PAGE_BREAK,
 };
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -152,6 +152,8 @@ pub struct LineRange {
 pub struct LayoutEngine {
     pub page_width: f64,
     pub page_height: f64,
+    /// Pixels (data URLs) of the body's pictures by relationship id
+    images: HashMap<String, String>,
 }
 
 impl LayoutEngine {
@@ -159,7 +161,14 @@ impl LayoutEngine {
         Self {
             page_width: PAGE_WIDTH,
             page_height: PAGE_HEIGHT,
+            images: HashMap::new(),
         }
+    }
+
+    /// Provides the pixels of the body's pictures (relationship id → data URL)
+    pub fn with_images(mut self, images: HashMap<String, String>) -> Self {
+        self.images = images;
+        self
     }
 
     /// Computes the layout with estimated glyph widths (native builds and tests)
@@ -206,6 +215,13 @@ impl LayoutEngine {
         let margin_right = page_setup.margin_right.max(20.0);
         let margin_top = page_setup.margin_top.max(24.0);
         let margin_bottom = page_setup.margin_bottom.max(24.0);
+        let header_inline_bottom = header_footer
+            .header_images
+            .iter()
+            .filter(|p| !p.image.anchored)
+            .map(|p| page_setup.header_margin + p.image.height)
+            .fold(0.0, f64::max);
+        let body_top = margin_top.max(header_inline_bottom);
 
         let geo = PageGeometry {
             page_w,
@@ -213,9 +229,8 @@ impl LayoutEngine {
             margin_left,
             margin_right,
             printable_w: (page_w - margin_left - margin_right).max(100.0),
-            // If a header logo is present, page 1 content starts below the logo area
-            top_first: if header_footer.header_image_data_url.is_some() { margin_top.max(120.0) } else { margin_top },
-            top: margin_top,
+            top_first: body_top,
+            top: body_top,
             bottom: page_h - margin_bottom,
             bg: css_color(bg_color, "#FFFFFF"),
         };
@@ -231,7 +246,7 @@ impl LayoutEngine {
             })
             .collect();
 
-        let mut pag = Paginator::new(&geo, watermark, watermark_opacity);
+        let mut pag = Paginator::new(&geo, watermark, watermark_opacity, &self.images);
         let mut flow = FlowState::default();
         for (i, block) in blocks.iter().enumerate() {
             match block {
@@ -246,7 +261,7 @@ impl LayoutEngine {
         for (page_idx, page) in pages.iter_mut().enumerate() {
             let page_num = page_idx + 1;
 
-            // 1. Full page background image (e.g. diploma / certificate)
+            // 1. Full page background chosen in the editor ("Fondo / Marca de agua")
             if let Some(bg_url) = bg_image_data_url {
                 page.items.insert(
                     0,
@@ -262,17 +277,27 @@ impl LayoutEngine {
                 );
             }
 
-            // 2. Header logo & text (top-left placement matching OpenXML)
-            if let Some(ref header_img) = header_footer.header_image_data_url {
-                page.items.push(RenderCommand::Image {
-                    data_url: header_img.clone(),
-                    x: 20.0,
-                    y: 15.0,
-                    width: 140.0,
-                    height: 95.0,
-                    is_background: false,
-                    opacity: 1.0,
-                });
+            // 2. Header and footer pictures, positioned like the paragraph that anchors them
+            let column = (geo.margin_left, page_w - geo.margin_right);
+            let header_top = page_setup.header_margin;
+            let footer_top = page_h - page_setup.footer_margin;
+            for (placed, para_top) in header_footer
+                .header_images
+                .iter()
+                .map(|p| (p, header_top))
+                .chain(header_footer.footer_images.iter().map(|p| (p, footer_top - p.image.height)))
+            {
+                let (x, y) = if placed.image.anchored {
+                    anchored_position(&placed.image, &geo, column, para_top)
+                } else {
+                    (column.0, para_top)
+                };
+                let cmd = image_command(&placed.image, &placed.data_url, x, y);
+                if placed.image.behind_text {
+                    page.items.insert(0, cmd);
+                } else {
+                    page.items.push(cmd);
+                }
             }
 
             if !header_footer.header_text.is_empty() {
@@ -476,8 +501,11 @@ struct LineBox {
 
 struct ParagraphBox<'a> {
     p: &'a ParagraphInfo,
-    /// Left edge of the paragraph's column (page margin, or a table cell's content box)
+    /// Left edge and width of the paragraph's column (page margin, or a table cell's content box)
     left: f64,
+    width: f64,
+    /// Where the first line's inline pictures start (x) when the paragraph has any
+    inline_images_x: f64,
     lines: Vec<LineBox>,
     font_size: f64,
     font_weight: &'static str,
@@ -549,7 +577,7 @@ fn prepare_paragraph<'a>(
     let lines = layout_paragraph_lines(p, font_size, &color, &font_family, left, width, m);
     let label = list_label_geometry(p, font_size, &font_family, m);
 
-    let lines = lines
+    let lines: Vec<LineBox> = lines
         .into_iter()
         .map(|line| {
             // The tallest run sets the line's natural height
@@ -581,9 +609,34 @@ fn prepare_paragraph<'a>(
     };
     let top_border_h = p.borders.top.as_ref().map_or(0.0, |b| b.space.max(3.0) + b.sz_px);
 
+    // Inline pictures sit on the first line (approximation: before its text), which grows
+    // to fit them with the text on the baseline, as in Word
+    let inline: Vec<&ImageRef> = p.images.iter().filter(|i| !i.anchored).collect();
+    let mut lines = lines;
+    let mut inline_images_x = left;
+    if !inline.is_empty() {
+        let total_w: f64 = inline.iter().map(|i| i.width).sum();
+        let tallest = inline.iter().map(|i| i.height).fold(0.0, f64::max);
+        if let Some(first) = lines.first_mut() {
+            if tallest > first.height {
+                first.baseline += tallest - first.height;
+                first.height = tallest;
+            }
+            let indent = (p.indent_left + p.indent_first_line).max(0.0);
+            let free = (width - indent - total_w).max(0.0);
+            inline_images_x = left + indent + match p.align.as_str() {
+                "center" => free / 2.0,
+                "right" => free,
+                _ => 0.0,
+            };
+        }
+    }
+
     ParagraphBox {
         p,
         left,
+        width,
+        inline_images_x,
         lines,
         font_size,
         font_weight,
@@ -660,14 +713,32 @@ struct Paginator<'a> {
     geo: &'a PageGeometry,
     watermark: Option<&'a str>,
     watermark_opacity: f64,
+    /// Body pictures by relationship id
+    images: &'a HashMap<String, String>,
     pages: Vec<PageLayout>,
     items: Vec<RenderCommand>,
+    /// Pictures in front of the text, drawn after everything else on the page
+    front: Vec<RenderCommand>,
     cursor_y: f64,
 }
 
 impl<'a> Paginator<'a> {
-    fn new(geo: &'a PageGeometry, watermark: Option<&'a str>, watermark_opacity: f64) -> Self {
-        Paginator { geo, watermark, watermark_opacity, pages: Vec::new(), items: Vec::new(), cursor_y: geo.top_first }
+    fn new(
+        geo: &'a PageGeometry,
+        watermark: Option<&'a str>,
+        watermark_opacity: f64,
+        images: &'a HashMap<String, String>,
+    ) -> Self {
+        Paginator {
+            geo,
+            watermark,
+            watermark_opacity,
+            images,
+            pages: Vec::new(),
+            items: Vec::new(),
+            front: Vec::new(),
+            cursor_y: geo.top_first,
+        }
     }
 
     fn page_top(&self) -> f64 {
@@ -692,6 +763,7 @@ impl<'a> Paginator<'a> {
 
     fn new_page(&mut self) {
         let mut items = std::mem::take(&mut self.items);
+        items.append(&mut self.front);
         if let Some(wm) = self.watermark {
             add_watermark_command(&mut items, wm, self.watermark_opacity, self.geo.page_w, self.geo.page_h);
         }
@@ -709,7 +781,7 @@ impl<'a> Paginator<'a> {
     }
 
     fn finish(mut self) -> Vec<PageLayout> {
-        if !self.items.is_empty() || self.pages.is_empty() {
+        if !self.items.is_empty() || !self.front.is_empty() || self.pages.is_empty() {
             self.new_page();
         }
         self.pages
@@ -862,8 +934,79 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
 }
 
 fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
+    if idx == 0 {
+        place_paragraph_images(pag, b, pag.cursor_y);
+    }
     push_line_items(&mut pag.items, b, idx, pag.cursor_y);
     pag.cursor_y += b.lines[idx].height;
+}
+
+/// Puts a paragraph's pictures on the current page: floating ones where they are anchored
+/// (behind or in front of the text), inline ones on the first line
+fn place_paragraph_images(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
+    let mut inline_x = b.inline_images_x;
+    for img in &b.p.images {
+        let Some(data_url) = pag.images.get(&img.rel_id) else { continue };
+        let (x, y) = if img.anchored {
+            anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top)
+        } else {
+            let first = &b.lines[0];
+            let pos = (inline_x, para_top + first.height - img.height);
+            inline_x += img.width;
+            pos
+        };
+        let cmd = image_command(img, data_url, x, y);
+        if img.behind_text {
+            pag.items.insert(0, cmd);
+        } else if img.anchored {
+            pag.front.push(cmd);
+        } else {
+            pag.items.push(cmd);
+        }
+    }
+}
+
+/// Top-left corner of a floating picture, from what its position is relative to
+fn anchored_position(img: &ImageRef, geo: &PageGeometry, column: (f64, f64), para_top: f64) -> (f64, f64) {
+    let (left, right) = match img.h_relative.as_str() {
+        "page" => (0.0, geo.page_w),
+        "leftMargin" | "insideMargin" => (0.0, geo.margin_left),
+        "rightMargin" | "outsideMargin" => (geo.page_w - geo.margin_right, geo.page_w),
+        "column" | "character" => column,
+        _ => (geo.margin_left, geo.page_w - geo.margin_right),
+    };
+    let x = match img.h_align.as_deref() {
+        Some("center") => left + (right - left - img.width) / 2.0,
+        Some("right") | Some("outside") => right - img.width,
+        Some(_) => left,
+        None => left + img.h_offset,
+    };
+    let (top, bottom) = match img.v_relative.as_str() {
+        "page" => (0.0, geo.page_h),
+        "topMargin" => (0.0, geo.top),
+        "bottomMargin" => (geo.bottom, geo.page_h),
+        "paragraph" | "line" => (para_top, para_top),
+        _ => (geo.top, geo.bottom),
+    };
+    let y = match img.v_align.as_deref() {
+        Some("center") => top + (bottom - top - img.height) / 2.0,
+        Some("bottom") | Some("outside") => bottom - img.height,
+        Some(_) => top,
+        None => top + img.v_offset,
+    };
+    (x, y)
+}
+
+fn image_command(img: &ImageRef, data_url: &str, x: f64, y: f64) -> RenderCommand {
+    RenderCommand::Image {
+        data_url: data_url.to_string(),
+        x,
+        y,
+        width: img.width,
+        height: img.height,
+        is_background: img.behind_text,
+        opacity: 1.0,
+    }
 }
 
 /// Render commands for one line of a paragraph whose line box starts at `top`
@@ -991,6 +1134,7 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
             let mut y = top + CELL_PAD_Y;
             for b in &cell.paragraphs {
                 y += b.space_before;
+                place_paragraph_images(pag, b, y);
                 for idx in 0..b.lines.len() {
                     push_line_items(&mut pag.items, b, idx, y);
                     y += b.lines[idx].height;
@@ -1727,4 +1871,88 @@ mod tests {
         // Each 3-letter word is 300px wide and the line holds 670px: one word per line... plus a space
         assert_eq!(placed(&l, 0).len(), 3);
     }
+
+    fn picture(behind: bool) -> ImageRef {
+        ImageRef {
+            rel_id: "rId7".into(),
+            width: 300.0,
+            height: 200.0,
+            anchored: true,
+            behind_text: behind,
+            h_relative: "page".into(),
+            h_offset: 10.0,
+            v_relative: "paragraph".into(),
+            v_offset: -20.0,
+            ..Default::default()
+        }
+    }
+
+    fn images_per_page(l: &DocumentLayout) -> Vec<Vec<(f64, f64, bool, usize)>> {
+        l.pages
+            .iter()
+            .map(|page| {
+                page.items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, item)| match item {
+                        RenderCommand::Image { x, y, is_background, .. } => Some((*x, *y, *is_background, i)),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_anchored_picture_only_on_its_page() {
+        // The picture is anchored in paragraph 1, which sits on page 2 of 3
+        let mut anchor = para(1, "con imagen");
+        anchor.images = vec![picture(true)];
+        let elements: Vec<DocumentElement> = vec![lines(0, 60), anchor, lines(2, 60)]
+            .into_iter()
+            .map(DocumentElement::Paragraph)
+            .collect();
+        let images = HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
+        let l = LayoutEngine::new().with_images(images).compute_layout(
+            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+        );
+        let per_page = images_per_page(&l);
+        assert_eq!(per_page.iter().map(|p| p.len()).collect::<Vec<_>>(), vec![0, 1, 0], "one page only");
+
+        // Positioned from the page edge and the paragraph's top, and drawn before the text
+        let (x, y, behind, index) = per_page[1][0];
+        let para_top = l.pages[1]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                RenderCommand::Text { paragraph_index: 1, line: Some(range), .. } => Some(range.top),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(x, 10.0, "10px from the page edge");
+        assert!((y - (para_top - 20.0)).abs() < 1e-9, "20px above its paragraph");
+        assert!(behind);
+        assert_eq!(index, 0, "behind the text: first thing drawn on the page");
+    }
+
+    #[test]
+    fn test_header_pictures_repeat_on_every_page_at_their_position() {
+        use crate::docx_parser::PlacedImage;
+        let header = HeaderFooterInfo {
+            has_header: true,
+            header_images: vec![PlacedImage { image: picture(false), data_url: "data:image/png;base64,AAAA".into() }],
+            ..Default::default()
+        };
+        let elements: Vec<DocumentElement> = vec![lines(0, 120)].into_iter().map(DocumentElement::Paragraph).collect();
+        let l = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &header, None, None, 0.0);
+        let per_page = images_per_page(&l);
+        assert!(per_page.len() >= 3);
+        let setup = PageSetup::default();
+        for page in per_page {
+            assert_eq!(page.len(), 1);
+            let (x, y, behind, _) = page[0];
+            assert_eq!((x, y, behind), (10.0, setup.header_margin - 20.0, false));
+        }
+    }
 }
+

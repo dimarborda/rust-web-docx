@@ -118,7 +118,7 @@ impl DocxSession {
         let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
         let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
         let layout = with_measurer(&mut self.measure_cache, measure, |m| {
-            LayoutEngine::new().compute_layout_with(
+            LayoutEngine::new().with_images(inputs.body_images.clone()).compute_layout_with(
                 &elements,
                 &inputs.background_color,
                 &inputs.page_setup,
