@@ -39,6 +39,9 @@ struct Line<'a> {
     page: usize,
     paragraph: usize,
     x: f64,
+    /// Horizontal bounds of the line box (the paragraph's column)
+    left: f64,
+    right: f64,
     top: f64,
     height: f64,
     start: usize,
@@ -134,8 +137,12 @@ impl Line<'_> {
         self.caret_end()
     }
 
-    fn contains_y(&self, y: f64) -> bool {
-        y >= self.top && y < self.top + self.height
+    fn distance_x(&self, x: f64) -> f64 {
+        if x < self.left {
+            self.left - x
+        } else {
+            (x - self.right).max(0.0)
+        }
     }
 
     fn distance_y(&self, y: f64) -> f64 {
@@ -168,6 +175,8 @@ fn lines(layout: &DocumentLayout) -> Vec<Line<'_>> {
                     page: page.page_number,
                     paragraph: *paragraph_index,
                     x: *x,
+                    left: range.left,
+                    right: range.right.max(range.left),
                     top: range.top,
                     height: *height,
                     start: range.start,
@@ -204,14 +213,14 @@ fn line_index(lines: &[Line], pos: TextPosition) -> Option<usize> {
     at_end.or(last)
 }
 
-/// Text position under a point of a page (`page` is 1-based, coordinates in page px)
+/// Text position under a point of a page (`page` is 1-based, coordinates in page px).
+/// Lines in the clicked column win over closer lines in other columns (table cells side by
+/// side share the same height band); clicks in a margin go to the line at that height.
 pub fn hit_test(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dyn TextMeasurer) -> Option<TextPosition> {
     let all = lines(layout);
-    let on_page: Vec<&Line> = all.iter().filter(|l| l.page == page).collect();
-    let line = on_page.iter().find(|l| l.contains_y(y)).or_else(|| {
-        on_page
-            .iter()
-            .min_by(|a, b| a.distance_y(y).partial_cmp(&b.distance_y(y)).unwrap_or(std::cmp::Ordering::Equal))
+    let score = |l: &Line| (l.distance_x(x) > 0.5, l.distance_y(y), l.distance_x(x));
+    let line = all.iter().filter(|l| l.page == page).min_by(|a, b| {
+        score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
     })?;
     Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
 }
@@ -230,7 +239,10 @@ pub fn caret_box(layout: &DocumentLayout, pos: TextPosition, m: &mut dyn TextMea
     })
 }
 
-/// Caret one line up (`direction < 0`) or down, keeping the horizontal position `goal_x`
+/// Caret one line up (`direction < 0`) or down, keeping the horizontal position `goal_x`.
+/// The next line is found geometrically: the nearest line above/below whose column contains
+/// `goal_x` (so inside a table ↓ goes to the cell below, not the neighbour), else simply
+/// the nearest line in that direction.
 pub fn move_vertical(
     layout: &DocumentLayout,
     pos: TextPosition,
@@ -239,10 +251,38 @@ pub fn move_vertical(
     m: &mut dyn TextMeasurer,
 ) -> Option<TextPosition> {
     let all = lines(layout);
-    let current = line_index(&all, pos)?;
-    let target = if direction < 0 { current.checked_sub(1)? } else { current + 1 };
-    let line = all.get(target)?;
-    Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(goal_x, m) })
+    let current = &all[line_index(&all, pos)?];
+    let here = (current.page, current.top);
+    let beyond = |l: &&Line| {
+        let there = (l.page, l.top);
+        if direction < 0 {
+            there.0 < here.0 || (there.0 == here.0 && there.1 < here.1 - 0.5)
+        } else {
+            there.0 > here.0 || (there.0 == here.0 && there.1 > here.1 + 0.5)
+        }
+    };
+    let nearest = |candidates: Vec<&Line<'_>>| -> Option<usize> {
+        let mut best: Option<(usize, (usize, f64))> = None;
+        for (i, l) in candidates.iter().enumerate() {
+            let key = (l.page, l.top);
+            let better = match best {
+                None => true,
+                Some((_, b)) if direction < 0 => key.0 > b.0 || (key.0 == b.0 && key.1 > b.1),
+                Some((_, b)) => key.0 < b.0 || (key.0 == b.0 && key.1 < b.1),
+            };
+            if better {
+                best = Some((i, key));
+            }
+        }
+        best.map(|(i, _)| i)
+    };
+    let candidates: Vec<&Line> = all.iter().filter(beyond).collect();
+    let in_column: Vec<&Line> = candidates.iter().copied().filter(|l| l.distance_x(goal_x) == 0.0).collect();
+    let target = match nearest(in_column.clone()) {
+        Some(i) => in_column[i],
+        None => candidates[nearest(candidates.clone())?],
+    };
+    Some(TextPosition { paragraph: target.paragraph, offset: target.offset_at(goal_x, m) })
 }
 
 /// Highlight rectangles for the characters `start..end` of a paragraph
@@ -445,4 +485,64 @@ mod tests {
             }
         }
     }
+
+    /// Body paragraph 0, a 2×2 table (paragraphs 1–4, row by row), body paragraph 5
+    fn table_layout() -> DocumentLayout {
+        use crate::docx_parser::{TableCellData, TableInfo, TableRowData};
+        let cell = |i: usize, text: &str| TableCellData { paragraphs: vec![para(i, text, "left")], ..Default::default() };
+        let table = TableInfo {
+            index: 0,
+            rows: vec![],
+            rich_rows: vec![
+                TableRowData { cells: vec![cell(1, "a1 primera línea larga"), cell(2, "b1")], is_header: false },
+                TableRowData { cells: vec![cell(3, "a2"), cell(4, "b2")], is_header: false },
+            ],
+            // Two 3000-twip (200px) columns
+            grid_cols: vec![3000.0, 3000.0],
+            header_row: false,
+        };
+        let elements = vec![
+            DocumentElement::Paragraph(para(0, "antes", "left")),
+            DocumentElement::Table(table),
+            DocumentElement::Paragraph(para(5, "después", "left")),
+        ];
+        LayoutEngine::new().compute_layout_with(
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
+            &mut Mono,
+        )
+    }
+
+    #[test]
+    fn test_table_cells_get_their_own_caret_positions() {
+        let l = table_layout();
+        let a1 = caret_box(&l, pos(1, 0), &mut Mono).unwrap();
+        let b1 = caret_box(&l, pos(2, 0), &mut Mono).unwrap();
+        assert_eq!(a1.y, b1.y, "cells of a row share the line band");
+        assert_eq!(a1.x, LEFT + 7.2, "text starts after the cell margin");
+        assert_eq!(b1.x, LEFT + 200.0 + 7.2, "second column starts 200px later");
+
+        // A click picks the cell under the pointer, not the first line at that height
+        let y = a1.y + 1.0;
+        assert_eq!(hit_test(&l, 1, LEFT + 230.0, y, &mut Mono), Some(pos(2, 2)));
+        assert_eq!(hit_test(&l, 1, LEFT + 27.0, y, &mut Mono), Some(pos(1, 2)));
+    }
+
+    #[test]
+    fn test_vertical_moves_stay_in_the_column() {
+        let l = table_layout();
+        let x_b = LEFT + 200.0 + 7.2 + 10.0;
+        // ↓ from b1 goes to b2 (below), not to a2 (next in reading order)
+        assert_eq!(move_vertical(&l, pos(2, 1), 1, x_b, &mut Mono), Some(pos(4, 1)));
+        // ↓ from the last row leaves the table into the following paragraph
+        assert_eq!(move_vertical(&l, pos(4, 1), 1, x_b, &mut Mono).map(|p| p.paragraph), Some(5));
+        // ↑ from the paragraph above the table enters the column under the caret
+        assert_eq!(move_vertical(&l, pos(0, 1), 1, x_b, &mut Mono).map(|p| p.paragraph), Some(2));
+    }
 }
+

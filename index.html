@@ -17,15 +17,7 @@
     <header class="navbar">
       <div class="navbar-left">
         <div class="brand">
-          <div class="brand-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-              <polyline points="10 9 9 9 8 9"></polyline>
-            </svg>
-          </div>
+          <img class="brand-logo" src="/src_web/assets/logo-dimar-borda.png" alt="Dimar Borda" />
           <div class="brand-text">
             <span class="brand-title">Rust DOCX <span class="badge-wasm">GPU / WASM</span></span>
           </div>
@@ -350,16 +342,10 @@
       <!-- Welcome / Dropzone State (When no document is loaded) -->
       <section id="empty-state-view" class="empty-state">
         <div class="drop-card" id="drop-target">
-          <div class="drop-icon">
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
-              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
-              <path d="M12 12v9"></path>
-              <path d="m8 17 4-4 4 4"></path>
-            </svg>
-          </div>
+          <img class="hero-logo" src="/src_web/assets/logo-dimar-borda.png" alt="Dimar Borda" />
           <h2>Arrastra tu documento <span class="accent-text">.DOCX</span> aquí</h2>
-          <p class="drop-hint">Visualización multi-página fiel a Word con edición directa por párrafos y aceleración WebAssembly.</p>
-          
+          <p class="drop-hint">Vista multipágina fiel a Word y edición directa sobre la página, con Rust + WebAssembly en tu navegador.</p>
+
           <div class="drop-cta-group">
             <label for="file-input-welcome" class="btn btn-primary btn-lg">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -367,52 +353,43 @@
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
-              Seleccionar Archivo .DOCX
+              Seleccionar archivo .DOCX
               <input type="file" id="file-input-welcome" accept=".docx" style="display:none;" />
             </label>
 
             <button id="btn-welcome-demo" class="btn btn-outline btn-lg">
-              Probar Demo Básico
+              Probar demo básico
             </button>
           </div>
 
-          <div class="examples-showcase">
-            <span class="examples-showcase-title">📁 O prueba con los documentos reales de la carpeta examples:</span>
-            <div class="examples-grid">
-              <button class="example-card-btn" data-example="CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx" title="Cargar Contrato de Compraventa (11 Páginas)">
-                <div class="example-card-icon">📜</div>
-                <div class="example-card-info">
-                  <strong>Contrato Compraventa</strong>
-                  <span>11 páginas · Cláusulas legales, sangrías y tabuladores</span>
-                </div>
-              </button>
-
-              <button class="example-card-btn" data-example="costo-eficiencia-modelos-llm-rag.docx" title="Cargar Informe Técnico con 6 Tablas">
-                <div class="example-card-icon">📊</div>
-                <div class="example-card-info">
-                  <strong>Costo-Eficiencia LLM</strong>
-                  <span>6 tablas · Matrices, números alineados a la derecha</span>
-                </div>
-              </button>
-
-              <button class="example-card-btn" data-example="plantilla-ejemplo-vead.docx" title="Cargar Plantilla Certificado Landscape">
-                <div class="example-card-icon">🎓</div>
-                <div class="example-card-info">
-                  <strong>Plantilla Certificado</strong>
-                  <span>Horizontal (Landscape) · Variables {name}, {asset_name}</span>
-                </div>
-              </button>
+          <div class="examples-showcase" id="examples-showcase">
+            <div class="examples-showcase-header">
+              <span class="examples-showcase-title">Abrir desde una carpeta</span>
+              <label for="examples-folder-input" class="btn btn-outline btn-sm" title="Muestra aquí los .docx de una carpeta de tu equipo">
+                📂 Elegir carpeta…
+                <input type="file" id="examples-folder-input" webkitdirectory directory multiple style="display:none;" />
+              </label>
             </div>
+            <div id="document-folders" class="document-folders"></div>
           </div>
 
           <div class="tech-pills">
             <span class="tech-pill">⚡ Rust + WebAssembly</span>
-            <span class="tech-pill">📄 Vista Multi-Página Fiel a Word</span>
-            <span class="tech-pill">📝 Edición por Párrafos Completos</span>
-            <span class="tech-pill">📊 Soporte de Tablas OpenXML</span>
-            <span class="tech-pill">🎨 Alineación &amp; Colores</span>
-            <span class="tech-pill">🔒 100% Client-Side Privado</span>
+            <span class="tech-pill">📄 Vista multipágina fiel a Word</span>
+            <span class="tech-pill">✍️ Edición directa sobre la página</span>
+            <span class="tech-pill">📊 Tablas editables</span>
+            <span class="tech-pill">↩️ Deshacer / rehacer</span>
+            <span class="tech-pill">🔒 100% en tu navegador</span>
           </div>
+
+          <footer class="author-signature">
+            <img class="author-qr" src="/src_web/assets/firma-qr.png" alt="Código QR de Dimar Borda" />
+            <div class="author-text">
+              <span class="author-label">Hecho por</span>
+              <strong>Dimar Borda</strong>
+              <span class="author-hint">Escanea el código para conocer más</span>
+            </div>
+          </footer>
         </div>
       </section>
 
@@ -425,7 +402,6 @@
         <!-- Global In-Place Seamless Paragraph Block Editor Overlay -->
 
         <!-- Global In-Place Table Cell Editor Overlay -->
-        <div id="canvas-cell-editor" class="canvas-cell-overlay" contenteditable="true" spellcheck="false" style="display: none;"></div>
       </section>
 
     </main>

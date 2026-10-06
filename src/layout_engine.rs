@@ -1,4 +1,7 @@
-use crate::docx_parser::{DocumentElement, HeaderFooterInfo, PageSetup, ParagraphInfo, RunInfo, TableInfo, PAGE_BREAK};
+use crate::docx_parser::{
+    is_dark_hex_str, DocumentElement, HeaderFooterInfo, PageSetup, ParagraphInfo, RunInfo, TableCellData, TableInfo,
+    PAGE_BREAK,
+};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +142,11 @@ pub struct LineRange {
     pub top: f64,
     /// Extra px added to each space on justified lines
     pub space_extra: f64,
+    /// Horizontal bounds of the line box (the paragraph's column, e.g. a table cell)
+    #[serde(default)]
+    pub left: f64,
+    #[serde(default)]
+    pub right: f64,
 }
 
 pub struct LayoutEngine {
@@ -216,7 +224,9 @@ impl LayoutEngine {
         let blocks: Vec<Block> = elements
             .iter()
             .map(|el| match el {
-                DocumentElement::Paragraph(p) => Block::Paragraph(prepare_paragraph(p, &geo, measurer)),
+                DocumentElement::Paragraph(p) => {
+                    Block::Paragraph(prepare_paragraph(p, geo.margin_left, geo.printable_w, None, measurer))
+                }
                 DocumentElement::Table(t) => Block::Table(prepare_table(t, &geo, measurer)),
             })
             .collect();
@@ -378,6 +388,20 @@ impl<M: TextMeasurer> CachedMeasurer<M> {
     pub fn new(inner: M) -> Self {
         CachedMeasurer { inner, cache: HashMap::new() }
     }
+
+    /// Reuses measurements from earlier layouts
+    pub fn with_cache(inner: M, cache: HashMap<String, f64>) -> Self {
+        CachedMeasurer { inner, cache }
+    }
+
+    /// Hands the measurements back for the next layout (dropped when they grow too large)
+    pub fn into_cache(self) -> HashMap<String, f64> {
+        if self.cache.len() > 300_000 {
+            HashMap::new()
+        } else {
+            self.cache
+        }
+    }
 }
 
 impl<M: TextMeasurer> TextMeasurer for CachedMeasurer<M> {
@@ -452,6 +476,8 @@ struct LineBox {
 
 struct ParagraphBox<'a> {
     p: &'a ParagraphInfo,
+    /// Left edge of the paragraph's column (page margin, or a table cell's content box)
+    left: f64,
     lines: Vec<LineBox>,
     font_size: f64,
     font_weight: &'static str,
@@ -470,17 +496,29 @@ impl ParagraphBox<'_> {
     }
 }
 
-struct RowBox {
+/// A table cell: its box and its paragraphs laid out inside it
+struct CellBox<'a> {
+    x: f64,
+    width: f64,
+    cell: &'a TableCellData,
+    paragraphs: Vec<ParagraphBox<'a>>,
+    content_height: f64,
+}
+
+struct RowBox<'a> {
     height: f64,
-    cell_lines: Vec<Vec<String>>,
+    cells: Vec<CellBox<'a>>,
     is_header: bool,
 }
 
 struct TableBox<'a> {
     tbl: &'a TableInfo,
-    col_widths: Vec<f64>,
-    rows: Vec<RowBox>,
+    rows: Vec<RowBox<'a>>,
 }
+
+/// Word's default cell margins: 0.08" left/right, none top/bottom
+const CELL_PAD_X: f64 = 7.2;
+const CELL_PAD_Y: f64 = 1.0;
 
 enum Block<'a> {
     Paragraph(ParagraphBox<'a>),
@@ -497,10 +535,18 @@ fn css_color(c: &str, fallback: &str) -> String {
     }
 }
 
-fn prepare_paragraph<'a>(p: &'a ParagraphInfo, geo: &PageGeometry, m: &mut dyn TextMeasurer) -> ParagraphBox<'a> {
+/// Lays out a paragraph in the column starting at `left` with `width` px. `auto_color`
+/// replaces the default text color (e.g. white text in dark table cells, like Word's "auto").
+fn prepare_paragraph<'a>(
+    p: &'a ParagraphInfo,
+    left: f64,
+    width: f64,
+    auto_color: Option<&str>,
+    m: &mut dyn TextMeasurer,
+) -> ParagraphBox<'a> {
     let (font_size, _, font_weight, font_family, default_color) = get_paragraph_typography(p);
-    let color = css_color(&p.color, &default_color);
-    let lines = layout_paragraph_lines(p, font_size, &color, &font_family, geo.margin_left, geo.printable_w, m);
+    let color = css_color(&p.color, auto_color.unwrap_or(&default_color));
+    let lines = layout_paragraph_lines(p, font_size, &color, &font_family, left, width, m);
     let label = list_label_geometry(p, font_size, &font_family, m);
 
     let lines = lines
@@ -537,6 +583,7 @@ fn prepare_paragraph<'a>(p: &'a ParagraphInfo, geo: &PageGeometry, m: &mut dyn T
 
     ParagraphBox {
         p,
+        left,
         lines,
         font_size,
         font_weight,
@@ -551,55 +598,61 @@ fn prepare_paragraph<'a>(p: &'a ParagraphInfo, geo: &PageGeometry, m: &mut dyn T
 }
 
 fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMeasurer) -> TableBox<'a> {
-    let printable_w = geo.printable_w;
-    let num_cols = if !tbl.grid_cols.is_empty() {
-        tbl.grid_cols.len()
+    // Column widths come from the grid (twips → px); tables wider than the text area shrink
+    let columns = tbl
+        .rich_rows
+        .iter()
+        .map(|r| r.cells.len())
+        .max()
+        .unwrap_or(0)
+        .max(tbl.grid_cols.len())
+        .max(1);
+    let grid_px: Vec<f64> = tbl.grid_cols.iter().map(|w| w / 15.0).collect();
+    let grid_total: f64 = grid_px.iter().sum();
+    let col_widths: Vec<f64> = if grid_total > 0.0 {
+        let scale = if grid_total > geo.printable_w * 1.05 { geo.printable_w / grid_total } else { 1.0 };
+        let mut widths: Vec<f64> = grid_px.iter().map(|w| w * scale).collect();
+        while widths.len() < columns {
+            widths.push(geo.printable_w / columns as f64);
+        }
+        widths
     } else {
-        tbl.rows.first().map(|r| r.len()).unwrap_or(1).max(1)
-    };
-    let col_widths: Vec<f64> = if !tbl.grid_cols.is_empty() {
-        let total: f64 = tbl.grid_cols.iter().sum::<f64>().max(1.0);
-        tbl.grid_cols.iter().map(|w| (w / total) * printable_w).collect()
-    } else {
-        vec![printable_w / num_cols as f64; num_cols]
+        vec![geo.printable_w / columns as f64; columns]
     };
 
     let rows = tbl
-        .rows
+        .rich_rows
         .iter()
-        .enumerate()
-        .map(|(row_idx, row_strings)| {
-            let rich_row = tbl.rich_rows.get(row_idx);
-            let is_header = rich_row.map(|r| r.is_header).unwrap_or(row_idx == 0 && tbl.header_row);
-            let cell_lines: Vec<Vec<String>> = row_strings
+        .map(|row| {
+            let mut x = geo.margin_left;
+            let cells: Vec<CellBox> = row
+                .cells
                 .iter()
                 .enumerate()
-                .map(|(col_idx, cell_text)| {
-                    let col_w = col_widths.get(col_idx).copied().unwrap_or(printable_w / num_cols as f64);
-                    let cell = rich_row.and_then(|r| r.cells.get(col_idx));
-                    let size = cell.map(|c| c.font_size * PX_PER_PT).unwrap_or(if is_header { 13.33 } else { 12.0 });
-                    let family = cell.map(|c| c.font_family.as_str()).unwrap_or("Calibri, Inter, sans-serif");
-                    let bold = cell.map(|c| c.bold).unwrap_or(is_header);
-                    let font = FontSpec { family, size, bold, italic: false };
-                    let mut lines: Vec<String> = cell_text
-                        .split('\n')
-                        .flat_map(|part| wrap_text(part, (col_w - 16.0).max(10.0), &font, m))
+                .map(|(col, cell)| {
+                    let width = col_widths.get(col).copied().unwrap_or(geo.printable_w / columns as f64);
+                    let dark = cell.bg_color.as_deref().is_some_and(is_dark_hex_str);
+                    let paragraphs: Vec<ParagraphBox> = cell
+                        .paragraphs
+                        .iter()
+                        .map(|p| {
+                            let inner = (width - 2.0 * CELL_PAD_X).max(10.0);
+                            prepare_paragraph(p, x + CELL_PAD_X, inner, dark.then_some("#FFFFFF"), m)
+                        })
                         .collect();
-                    if lines.is_empty() {
-                        lines.push(String::new());
-                    }
-                    lines
+                    let content_height = 2.0 * CELL_PAD_Y
+                        + paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
+                    let cell_box = CellBox { x, width, cell, paragraphs, content_height };
+                    x += width;
+                    cell_box
                 })
                 .collect();
-            let max_lines = cell_lines.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
-            // Must match the renderer's cell line height (font size × 1.35)
-            let base_fs = rich_row.and_then(|r| r.cells.first()).map(|c| c.font_size * PX_PER_PT).unwrap_or(13.33);
-            let height = ((max_lines as f64) * base_fs * 1.35 + 14.0).max(28.0);
-            RowBox { height, cell_lines, is_header }
+            let height = cells.iter().map(|c| c.content_height).fold(8.0, f64::max);
+            RowBox { height, cells, is_header: row.is_header }
         })
         .collect();
 
-    TableBox { tbl, col_widths, rows }
+    TableBox { tbl, rows }
 }
 
 /// Places content top to bottom and starts new pages as needed
@@ -809,11 +862,17 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
 }
 
 fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
+    push_line_items(&mut pag.items, b, idx, pag.cursor_y);
+    pag.cursor_y += b.lines[idx].height;
+}
+
+/// Render commands for one line of a paragraph whose line box starts at `top`
+fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize, top: f64) {
     let lb = &b.lines[idx];
-    let baseline_y = pag.cursor_y + lb.baseline;
+    let baseline_y = top + lb.baseline;
     // Empty lines are emitted too, so the caret can be placed on them
     {
-        pag.items.push(RenderCommand::Text {
+        items.push(RenderCommand::Text {
             text: lb.line.text.clone(),
             x: lb.line.x,
             y: baseline_y,
@@ -833,8 +892,10 @@ fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
             line: Some(LineRange {
                 start: lb.line.start,
                 end: lb.line.end,
-                top: pag.cursor_y,
+                top,
                 space_extra: lb.line.space_extra,
+                left: lb.line.box_left,
+                right: lb.line.box_right,
             }),
         });
     }
@@ -842,9 +903,9 @@ fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
     // List number / bullet, drawn in the hanging indent of the first line
     if idx == 0 {
         if let (Some(label), Some(geo)) = (b.p.list_label.as_ref(), b.label.as_ref()) {
-            pag.items.push(RenderCommand::Text {
+            items.push(RenderCommand::Text {
                 text: label.text.clone(),
-                x: pag.geo.margin_left + geo.label_offset,
+                x: b.left + geo.label_offset,
                 y: baseline_y,
                 width: geo.label_width,
                 height: lb.height,
@@ -867,14 +928,13 @@ fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
                     font_size: Some(geo.font_size),
                     font_family: label.font_family.clone(),
                     width: geo.label_width,
-                    x: pag.geo.margin_left + geo.label_offset,
+                    x: b.left + geo.label_offset,
                     start: 0,
                 }],
                 line: None,
             });
         }
     }
-    pag.cursor_y += lb.height;
 }
 
 /// Vertical accent bar for the part of the paragraph on the current page
@@ -883,7 +943,7 @@ fn draw_left_border(pag: &mut Paginator, b: &ParagraphBox, seg_top: f64) {
     if pag.cursor_y <= seg_top {
         return;
     }
-    let x = (pag.geo.margin_left + b.p.indent_left.max(0.0) - 7.0).max(10.0);
+    let x = (b.left + b.p.indent_left.max(0.0) - 7.0).max(10.0);
     pag.items.push(RenderCommand::Line {
         x1: x,
         y1: seg_top + 1.0,
@@ -898,46 +958,50 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
     if !pag.at_top() {
         pag.cursor_y += flow.pending_after;
     }
-    pag.cursor_y += 8.0;
+    pag.cursor_y += 4.0;
     let tbl = t.tbl;
-    let num_cols = t.col_widths.len().max(1);
 
     for (row_idx, row) in t.rows.iter().enumerate() {
+        // Rows are not split across pages
         if row.height > pag.remaining() && !pag.at_top() {
             pag.new_page();
         }
-        let rich_row = tbl.rich_rows.get(row_idx);
-        let mut x = pag.geo.margin_left;
-        for (col_idx, cell_text) in tbl.rows[row_idx].iter().enumerate() {
-            let col_w = t.col_widths.get(col_idx).copied().unwrap_or(pag.geo.printable_w / num_cols as f64);
-            let cell = rich_row.and_then(|r| r.cells.get(col_idx));
+        let top = pag.cursor_y;
+        for (col_idx, cell) in row.cells.iter().enumerate() {
+            // Background and borders; the text is drawn as paragraph lines below
             pag.items.push(RenderCommand::TableCell {
                 table_index: tbl.index,
                 row: row_idx,
                 col: col_idx,
-                x,
-                y: pag.cursor_y,
-                width: col_w,
+                x: cell.x,
+                y: top,
+                width: cell.width,
                 height: row.height,
-                text: cell_text.clone(),
-                lines: row.cell_lines.get(col_idx).cloned().unwrap_or_else(|| vec![cell_text.clone()]),
+                text: String::new(),
+                lines: Vec::new(),
                 is_header: row.is_header,
-                bg_color: cell.and_then(|c| c.bg_color.clone()),
-                color: cell
-                    .map(|c| c.color.clone())
-                    .unwrap_or_else(|| if row.is_header { "FAF7F0".to_string() } else { "1B1F1E".to_string() }),
-                font_size: cell.map(|c| c.font_size * PX_PER_PT).unwrap_or(if row.is_header { 13.33 } else { 12.0 }),
-                font_family: cell.map(|c| c.font_family.clone()).unwrap_or_else(|| "Calibri, Inter, sans-serif".to_string()),
-                font_weight: if cell.map(|c| c.bold).unwrap_or(row.is_header) { "700" } else { "400" }.to_string(),
-                align: cell.map(|c| c.align.clone()).unwrap_or_else(|| "left".to_string()),
-                border_color: cell.map(|c| c.border_color.clone()).unwrap_or_else(|| "DDD5C2".to_string()),
+                bg_color: cell.cell.bg_color.clone(),
+                color: cell.cell.color.clone(),
+                font_size: cell.cell.font_size * PX_PER_PT,
+                font_family: cell.cell.font_family.clone(),
+                font_weight: if cell.cell.bold { "700" } else { "400" }.to_string(),
+                align: cell.cell.align.clone(),
+                border_color: cell.cell.border_color.clone(),
             });
-            x += col_w;
+            let mut y = top + CELL_PAD_Y;
+            for b in &cell.paragraphs {
+                y += b.space_before;
+                for idx in 0..b.lines.len() {
+                    push_line_items(&mut pag.items, b, idx, y);
+                    y += b.lines[idx].height;
+                }
+                y += b.space_after;
+            }
         }
         pag.cursor_y += row.height;
     }
 
-    flow.pending_after = 16.0;
+    flow.pending_after = 12.0;
     flow.prev_style = None;
     flow.prev_contextual = false;
 }
@@ -957,6 +1021,9 @@ struct LayoutLine {
     pub end: usize,
     /// Extra px added to every space when the line is justified
     pub space_extra: f64,
+    /// Horizontal bounds of the line box
+    pub box_left: f64,
+    pub box_right: f64,
     pub runs: Vec<TextRun>,
 }
 
@@ -1180,6 +1247,8 @@ fn layout_paragraph_lines(
             start: range.0,
             end: range.1,
             space_extra,
+            box_left: margin_left + indent,
+            box_right: margin_left + indent + max_w,
             runs,
         }
     };
@@ -1454,33 +1523,6 @@ fn list_label_geometry(
         (label_end / DEFAULT_TAB).ceil() * DEFAULT_TAB
     };
     Some(ListLabelGeometry { label_offset, label_width, text_offset, font_size })
-}
-
-/// Greedy word wrapping for table cells
-fn wrap_text(text: &str, max_width: f64, font: &FontSpec, m: &mut dyn TextMeasurer) -> Vec<String> {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current_line = String::new();
-    for word in words {
-        let test_line = if current_line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{} {}", current_line, word)
-        };
-        if m.measure(&test_line, font) > max_width && !current_line.is_empty() {
-            lines.push(std::mem::replace(&mut current_line, word.to_string()));
-        } else {
-            current_line = test_line;
-        }
-    }
-    if !current_line.is_empty() {
-        lines.push(current_line);
-    }
-    lines
 }
 
 /// Estimates text width with proportional font metrics

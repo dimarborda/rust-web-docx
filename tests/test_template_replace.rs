@@ -1,5 +1,6 @@
+mod common;
+
 use rust_web_docx::docx_parser::{DocxModifier, KeyValuePair};
-use std::fs;
 
 fn pair(key: &str, value: &str) -> KeyValuePair {
     KeyValuePair { key: key.to_string(), value: value.to_string() }
@@ -7,7 +8,7 @@ fn pair(key: &str, value: &str) -> KeyValuePair {
 
 #[test]
 fn test_vead_template_variables_split_across_runs() {
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").expect("Should read plantilla");
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse docx");
 
     let text_before = modifier.extract_raw_text().unwrap();
@@ -43,7 +44,7 @@ fn test_vead_template_variables_split_across_runs() {
 
 #[test]
 fn test_vead_template_find_and_replace_single_variable() {
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").expect("Should read plantilla");
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse docx");
 
     let result = modifier.find_and_replace("{EMAIL}", "x@y.co", false, false).unwrap();

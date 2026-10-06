@@ -15,12 +15,12 @@ const TYPING_GROUP_MS = 1500;
 /**
  * @param {object} env
  * @param {() => any} env.session            current DocxSession
- * @param {() => any[]} env.elements         document elements in body order
+ * @param {() => {list: any[], byIndex: Map}} env.paragraphs  every paragraph (body and table
+ *        cells) in document order, each with `index`, `text` and `container`
  * @param {() => number} env.zoom
  * @param {Function} env.measure             text measurer passed to Rust
  * @param {() => void} env.documentChanged   re-render after an edit
  * @param {(sel) => void} env.selectionChanged
- * @param {(page, point, card, canvas) => boolean} env.handleTableClick  true when a cell took the click
  * @param {(msg: string) => void} env.hint
  */
 export function createCanvasEditor(env) {
@@ -56,7 +56,7 @@ export function createCanvasEditor(env) {
   // ---------- Text helpers ----------
 
   function paragraph(index) {
-    return env.elements().find(el => el.type === 'paragraph' && el.index === index);
+    return env.paragraphs().byIndex.get(index);
   }
 
   function chars(index) {
@@ -65,19 +65,27 @@ export function createCanvasEditor(env) {
   }
 
   function lastParagraphIndex() {
-    let last = -1;
-    env.elements().forEach(el => {
-      if (el.type === 'paragraph') last = Math.max(last, el.index);
-    });
-    return last;
+    const list = env.paragraphs().list;
+    return list.length ? list[list.length - 1].index : -1;
   }
 
-  /** True when paragraphs `a` and `a + 1` are next to each other (no table between) */
+  /** True when paragraphs `a` and `a + 1` can be joined: same container, nothing between */
   function adjacent(a) {
-    const els = env.elements();
-    const i = els.findIndex(el => el.type === 'paragraph' && el.index === a);
-    const next = els[i + 1];
-    return i >= 0 && next?.type === 'paragraph' && next.index === a + 1;
+    const p = paragraph(a);
+    const next = paragraph(a + 1);
+    return !!p && !!next && p.container === next.container;
+  }
+
+  /** First paragraph of the next (dir > 0) or previous table cell, for Tab / Shift+Tab */
+  function neighbourCell(index, dir) {
+    const current = paragraph(index);
+    if (!current || current.container === 'body') return null;
+    const table = current.container.split(':')[0];
+    const list = env.paragraphs().list;
+    const inTable = list.filter(p => p.container !== 'body' && p.container.split(':')[0] === table);
+    const cells = [...new Set(inTable.map(p => p.container))];
+    const target = cells[cells.indexOf(current.container) + dir];
+    return target ? inTable.find(p => p.container === target) : null;
   }
 
   const before = (a, b) => a.paragraph < b.paragraph || (a.paragraph === b.paragraph && a.offset < b.offset);
@@ -305,13 +313,6 @@ export function createCanvasEditor(env) {
   function onMouseDown(e, page, card, canvas) {
     if (e.button !== 0) return;
     const pt = pagePoint(canvas, e);
-    if (env.handleTableClick(page, pt, card, canvas)) {
-      // Keep focus in the cell editor that just opened
-      e.preventDefault();
-      anchor = focus = null;
-      paint();
-      return;
-    }
     const pos = hitTest(page.page_number, pt.x, pt.y);
     if (!pos) return;
     e.preventDefault();
@@ -412,10 +413,20 @@ export function createCanvasEditor(env) {
         edit(e.shiftKey ? LINE_BREAK : '\n', 'enter');
         moved = false;
         break;
-      case 'Tab':
-        edit('\t', 'type');
-        moved = false;
+      case 'Tab': {
+        // In a table Tab moves between cells, as in Word; elsewhere it inserts a tab
+        const cell = neighbourCell(focus.paragraph, e.shiftKey ? -1 : 1);
+        if (cell) {
+          anchor = { paragraph: cell.index, offset: 0 };
+          focus = { paragraph: cell.index, offset: chars(cell.index).length };
+        } else if (paragraph(focus.paragraph)?.container !== 'body') {
+          // Last cell (or first with Shift): stay put rather than typing a tab
+        } else {
+          edit('\t', 'type');
+          moved = false;
+        }
         break;
+      }
       case 'Escape':
         anchor = focus = null;
         input.blur();
@@ -504,6 +515,12 @@ export function createCanvasEditor(env) {
 
     /** Registers a freshly rendered page canvas */
     attachPage(page, card, canvas) {
+      const existing = card.querySelector('.canvas-overlay');
+      if (existing && canvas.dataset.editorAttached) {
+        pages.set(page.page_number, { canvas, overlay: existing }); // unchanged page kept as is
+        return;
+      }
+      canvas.dataset.editorAttached = '1';
       card.style.position = 'relative';
       const overlay = document.createElement('div');
       overlay.className = 'canvas-overlay';

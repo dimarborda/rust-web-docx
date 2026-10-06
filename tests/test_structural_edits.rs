@@ -111,7 +111,8 @@ fn test_backspace_and_delete_join_paragraphs() {
 #[test]
 fn test_multi_paragraph_selection_delete_removes_what_is_between() {
     let mut m = docx(r#"<w:p><w:r><w:t>primero</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>medio</w:t></w:r></w:p><w:p><w:r><w:t>último</w:t></w:r></w:p>"#);
-    assert_eq!(m.replace_range(0, 4, 2, 2, "X").unwrap(), (0, 5));
+    // Paragraph numbers are document-wide: 0 primero, 1 celda (in the table), 2 medio, 3 último
+    assert_eq!(m.replace_range(0, 4, 3, 2, "X").unwrap(), (0, 5));
     assert_eq!(texts(&m), vec!["primXtimo"]);
     assert!(m.extract_elements().unwrap().iter().all(|e| matches!(e, DocumentElement::Paragraph(_))), "the table inside the selection is gone");
 
@@ -169,10 +170,59 @@ fn test_structural_edits_export_valid_documents() {
     let before = m.extract_paragraphs().unwrap().len();
     m.replace_range(1, 3, 1, 3, "\nnuevo\n").unwrap();
     m.replace_range(0, 0, 0, 0, "inicio\n").unwrap();
-    let last = m.extract_paragraphs().unwrap().len() - 1;
+    let last = m.extract_paragraphs().unwrap().last().unwrap().index;
     m.replace_range(1, 2, last, 1, "").unwrap();
 
     let reloaded = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
     assert_eq!(texts(&reloaded), texts(&m));
     assert!(texts(&m).len() < before + 3);
+
+    // A selection from the body into the middle of a table cell cannot be cut out
+    let mut m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+    assert!(m.replace_range(0, 2, 1, 2, "").is_err());
+}
+
+#[test]
+fn test_table_cell_paragraphs_are_editable_like_any_other() {
+    let mut m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>uno</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>después</w:t></w:r></w:p>"#);
+    let table_paragraphs = || match &m.extract_elements().unwrap()[1] {
+        DocumentElement::Table(t) => t.rich_rows[0].cells.iter().flat_map(|c| c.paragraphs.clone()).collect::<Vec<_>>(),
+        _ => panic!("expected a table"),
+    };
+    let cells = table_paragraphs();
+    assert_eq!(cells.iter().map(|p| p.index).collect::<Vec<_>>(), vec![1, 2], "cells continue the numbering");
+    let _ = cells;
+
+    // Typing, Enter and formatting work inside cells through the same primitives
+    let mut m = m;
+    m.replace_range(1, 3, 1, 3, " dos").unwrap();
+    m.replace_range(2, 0, 2, 0, "vacía").unwrap();
+    m.replace_range(1, 3, 1, 3, "\n").unwrap();
+    let cell_texts: Vec<(usize, String, bool)> = match &m.extract_elements().unwrap()[1] {
+        DocumentElement::Table(t) => t.rich_rows[0]
+            .cells
+            .iter()
+            .flat_map(|c| c.paragraphs.iter().map(|p| (p.index, p.text.clone(), p.runs.first().is_some_and(|r| r.bold))))
+            .collect(),
+        _ => panic!("expected a table"),
+    };
+    assert_eq!(
+        cell_texts,
+        vec![(1, "uno".into(), true), (2, " dos".into(), true), (3, "vacía".into(), false)],
+        "Enter split the first cell's paragraph inside the cell"
+    );
+    assert_eq!(m.extract_paragraphs().unwrap().iter().map(|p| p.index).collect::<Vec<_>>(), vec![0, 4]);
+
+    // Cells never merge with each other or with the body
+    assert!(m.merge_with_next(2).is_err());
+    assert!(m.merge_with_next(0).is_err());
+}
+
+#[test]
+fn test_enter_at_end_keeps_typing_in_the_same_format() {
+    let mut m = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:b/></w:rPr><w:t>código</w:t></w:r></w:p>"#);
+    m.replace_range(0, 6, 0, 6, "\n").unwrap();
+    m.replace_range(1, 0, 1, 0, "más").unwrap();
+    let run = &m.extract_paragraphs().unwrap()[1].runs[0];
+    assert_eq!((run.text.as_str(), run.bold, run.font_family.as_deref()), ("más", true, Some("Consolas")));
 }

@@ -1,16 +1,17 @@
+mod common;
+
 use rust_web_docx::docx_parser::DocxModifier;
 use rust_web_docx::layout_engine::{LayoutEngine, RenderCommand};
-use std::fs;
 
-const CONTRATO: &str = "examples/CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx";
+const CONTRATO: &str = "CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx";
 
-fn load(path: &str) -> DocxModifier {
-    DocxModifier::from_bytes(&fs::read(path).expect("example")).expect("docx")
+fn load(name: &str) -> Option<DocxModifier> {
+    common::example(name).map(|bytes| DocxModifier::from_bytes(&bytes).expect("docx"))
 }
 
 #[test]
 fn test_contract_list_labels_follow_numbering_xml() {
-    let m = load(CONTRATO);
+    let Some(m) = load(CONTRATO) else { return };
     let labels: Vec<(String, String)> = m
         .extract_paragraphs()
         .unwrap()
@@ -25,7 +26,7 @@ fn test_contract_list_labels_follow_numbering_xml() {
 
 #[test]
 fn test_style_cascade_gives_real_typography() {
-    let m = load("examples/costo-eficiencia-modelos-llm-rag.docx");
+    let Some(m) = load("costo-eficiencia-modelos-llm-rag.docx") else { return };
     let paragraphs = m.extract_paragraphs().unwrap();
     let bullets: Vec<_> = paragraphs.iter().filter(|p| p.style == "723").collect();
     // 11 "List Bullet" paragraphs; 4 of them remove the bullet with a direct numId="0"
@@ -46,7 +47,7 @@ fn test_style_cascade_gives_real_typography() {
 
 #[test]
 fn test_layout_draws_label_in_hanging_indent() {
-    let m = load(CONTRATO);
+    let Some(m) = load(CONTRATO) else { return };
     let elements = m.extract_elements().unwrap();
     let stats = m.get_statistics().unwrap();
     let layout = LayoutEngine::new().compute_layout(

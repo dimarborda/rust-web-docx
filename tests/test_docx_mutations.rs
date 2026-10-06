@@ -1,9 +1,10 @@
-use std::fs;
+mod common;
+
 use rust_web_docx::docx_parser::{DocxModifier, ParagraphUpdate};
 
 #[test]
 fn test_preserve_sectpr_and_drawings_in_plantilla() {
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").expect("Should read plantilla");
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse docx");
 
     let stats_before = modifier.get_statistics().expect("Should get stats before");
@@ -76,7 +77,7 @@ fn test_preserve_sectpr_and_drawings_in_plantilla() {
 
 #[test]
 fn test_rich_paragraph_formatting_preserves_sectpr() {
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").expect("Should read plantilla");
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse docx");
 
     // Apply rich formatting to paragraph 1
@@ -94,7 +95,7 @@ fn test_rich_paragraph_formatting_preserves_sectpr() {
 
 #[test]
 fn test_update_paragraph_runs_per_word() {
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").expect("Should read plantilla");
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse docx");
 
     // Paragraph 1: Set 3 words with different formatting:

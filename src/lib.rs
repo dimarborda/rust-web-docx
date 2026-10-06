@@ -7,6 +7,8 @@ pub mod styles;
 
 use docx_parser::{DocxModifier, KeyValuePair, ParagraphUpdate};
 use caret::TextPosition;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use layout_engine::{CachedMeasurer, DocumentLayout, EstimateMeasurer, FontSpec, LayoutEngine, TextMeasurer};
 use wasm_bindgen::prelude::*;
 
@@ -51,12 +53,27 @@ pub struct DocxSession {
     modifier: DocxModifier,
     /// Last computed layout, used for caret geometry
     layout: Option<DocumentLayout>,
+    /// Text widths measured by the frontend, kept across layouts (cleared when fonts change)
+    measure_cache: HashMap<String, f64>,
+    /// Hash of each page's render commands from the last layout sent to the frontend
+    page_hashes: Vec<u64>,
 }
 
-fn measurer_for(measure: Option<js_sys::Function>) -> Box<dyn TextMeasurer> {
+/// Runs `f` with a measurer: the JS callback behind the session's measurement cache, or
+/// the built-in estimate when no callback is given
+fn with_measurer<R>(
+    cache: &mut HashMap<String, f64>,
+    measure: Option<js_sys::Function>,
+    f: impl FnOnce(&mut dyn TextMeasurer) -> R,
+) -> R {
     match measure {
-        Some(func) => Box::new(CachedMeasurer::new(JsMeasurer { func })),
-        None => Box::new(CachedMeasurer::new(EstimateMeasurer)),
+        Some(func) => {
+            let mut measurer = CachedMeasurer::with_cache(JsMeasurer { func }, std::mem::take(cache));
+            let result = f(&mut measurer);
+            *cache = measurer.into_cache();
+            result
+        }
+        None => f(&mut CachedMeasurer::new(EstimateMeasurer)),
     }
 }
 
@@ -74,7 +91,7 @@ impl DocxSession {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<DocxSession, JsValue> {
         let modifier = DocxModifier::from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
-        Ok(DocxSession { modifier, layout: None })
+        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
     }
 
     /// Creates a session with sample contract docx
@@ -82,56 +99,88 @@ impl DocxSession {
     pub fn new_sample() -> Result<DocxSession, JsValue> {
         let bytes = sample_generator::generate_sample_docx().map_err(|e| JsValue::from_str(&e))?;
         let modifier = DocxModifier::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
-        Ok(DocxSession { modifier, layout: None })
+        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
     }
 
     /// Computes multi-page layout and render commands for high-performance Canvas rendering.
     /// `measure(text, family, sizePx, bold, italic) => width` should measure with the same
     /// canvas font the renderer uses; without it, glyph widths are estimated.
+    /// With `only_changed`, pages identical to the previous call are sent as
+    /// `{"page_number": n, "unchanged": true}` so the frontend can keep their canvases.
     #[wasm_bindgen]
     pub fn compute_canvas_layout_json(
         &mut self,
         watermark_text: Option<String>,
         watermark_opacity: f64,
         measure: Option<js_sys::Function>,
+        only_changed: Option<bool>,
     ) -> Result<String, JsValue> {
-        let elements = self.modifier.extract_elements().map_err(|e| JsValue::from_str(&e))?;
-        let stats = self.modifier.get_statistics().map_err(|e| JsValue::from_str(&e))?;
-        let mut measurer = measurer_for(measure);
-        let layout = LayoutEngine::new().compute_layout_with(
-            &elements,
-            &stats.background_color,
-            &stats.page_setup,
-            &stats.header_footer,
-            stats.bg_image_data_url.as_deref(),
-            watermark_text.as_deref(),
-            watermark_opacity,
-            measurer.as_mut(),
+        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
+        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let layout = with_measurer(&mut self.measure_cache, measure, |m| {
+            LayoutEngine::new().compute_layout_with(
+                &elements,
+                &inputs.background_color,
+                &inputs.page_setup,
+                &inputs.header_footer,
+                inputs.bg_image_data_url.as_deref(),
+                watermark_text.as_deref(),
+                watermark_opacity,
+                m,
+            )
+        });
+
+        let mut pages_json = Vec::with_capacity(layout.pages.len());
+        let mut hashes = Vec::with_capacity(layout.pages.len());
+        for (i, page) in layout.pages.iter().enumerate() {
+            let json = to_json(page)?;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            json.hash(&mut hasher);
+            let hash = hasher.finish();
+            if only_changed.unwrap_or(false) && self.page_hashes.get(i) == Some(&hash) {
+                pages_json.push(format!(r#"{{"page_number":{},"unchanged":true}}"#, page.page_number));
+            } else {
+                pages_json.push(json);
+            }
+            hashes.push(hash);
+        }
+        self.page_hashes = hashes;
+        let json = format!(
+            r#"{{"total_pages":{},"page_width":{},"page_height":{},"pages":[{}]}}"#,
+            layout.total_pages,
+            layout.page_width,
+            layout.page_height,
+            pages_json.join(",")
         );
-        let json = to_json(&layout)?;
         self.layout = Some(layout);
         Ok(json)
     }
 
+    /// Forgets cached text measurements (call after web fonts finish loading)
+    #[wasm_bindgen]
+    pub fn reset_measurements(&mut self) {
+        self.measure_cache.clear();
+    }
+
     /// Text position `{paragraph, offset}` under a point of a page (1-based), or `null`
     #[wasm_bindgen]
-    pub fn hit_test(&self, page: usize, x: f64, y: f64, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
+    pub fn hit_test(&mut self, page: usize, x: f64, y: f64, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
-        to_json(&caret::hit_test(layout, page, x, y, measurer_for(measure).as_mut()))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::hit_test(layout, page, x, y, m)))
     }
 
     /// Caret box `{page, x, y, height, line_start, line_end}` for a text position, or `null`
     #[wasm_bindgen]
-    pub fn caret_box(&self, paragraph: usize, offset: usize, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
+    pub fn caret_box(&mut self, paragraph: usize, offset: usize, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
         let pos = TextPosition { paragraph, offset };
-        to_json(&caret::caret_box(layout, pos, measurer_for(measure).as_mut()))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::caret_box(layout, pos, m)))
     }
 
     /// Position one line up (`direction` < 0) or down at horizontal position `goal_x`, or `null`
     #[wasm_bindgen]
     pub fn move_vertical(
-        &self,
+        &mut self,
         paragraph: usize,
         offset: usize,
         direction: i32,
@@ -140,20 +189,20 @@ impl DocxSession {
     ) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
         let pos = TextPosition { paragraph, offset };
-        to_json(&caret::move_vertical(layout, pos, direction, goal_x, measurer_for(measure).as_mut()))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::move_vertical(layout, pos, direction, goal_x, m)))
     }
 
     /// Highlight rectangles `[{page, x, y, width, height}]` for characters `start..end`
     #[wasm_bindgen]
     pub fn selection_rects(
-        &self,
+        &mut self,
         paragraph: usize,
         start: usize,
         end: usize,
         measure: Option<js_sys::Function>,
     ) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("[]".into()) };
-        to_json(&caret::selection_rects(layout, paragraph, start, end, measurer_for(measure).as_mut()))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects(layout, paragraph, start, end, m)))
     }
 
     /// Replaces characters `start..end` of a body paragraph with `text` (offsets in Unicode
@@ -220,7 +269,7 @@ impl DocxSession {
     /// Highlight rectangles for a selection spanning paragraphs
     #[wasm_bindgen]
     pub fn selection_rects_range(
-        &self,
+        &mut self,
         p1: usize,
         o1: usize,
         p2: usize,
@@ -230,14 +279,14 @@ impl DocxSession {
         let Some(layout) = &self.layout else { return Ok("[]".into()) };
         let from = TextPosition { paragraph: p1, offset: o1 };
         let to = TextPosition { paragraph: p2, offset: o2 };
-        to_json(&caret::selection_rects_range(layout, from, to, measurer_for(measure).as_mut()))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects_range(layout, from, to, m)))
     }
 
     /// Gets all document elements (paragraphs and tables in order) as JSON
     #[wasm_bindgen]
     pub fn get_document_elements_json(&self) -> Result<String, JsValue> {
-        let elements = self.modifier.extract_elements().map_err(|e| JsValue::from_str(&e))?;
-        serde_json::to_string(&elements).map_err(|e| JsValue::from_str(&e.to_string()))
+        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
+        to_json(&*elements)
     }
 
     /// Gets paragraphs list in JSON format

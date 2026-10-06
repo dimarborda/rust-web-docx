@@ -7,7 +7,6 @@ let currentSession = null;
 let currentFileName = 'documento.docx';
 let activeDocumentElements = [];
 let activeParagraphIndex = null;
-let activeTarget = null; // { type: 'paragraph' | 'cell', paragraphIndex?, tableIndex?, row?, col?, item? }
 let detectedVariables = [];
 let updateDebounceTimer = null;
 let currentZoom = 1.0; // 0.75, 1.0, 1.25, 1.5
@@ -24,7 +23,6 @@ let currentPageBgColor = '#FFFFFF';
 const emptyStateView = document.getElementById('empty-state-view');
 const canvasDocumentView = document.getElementById('canvas-document-view');
 const canvasPagesWrapper = document.getElementById('canvas-pages-wrapper');
-const canvasCellEditor = document.getElementById('canvas-cell-editor');
 
 const docStatusContainer = document.getElementById('doc-status-container');
 const docToolbar = document.getElementById('doc-toolbar');
@@ -155,23 +153,97 @@ async function loadSampleDocx() {
   }
 }
 
-// Load Real Document from examples/
-async function loadExampleDocx(filename) {
-  await initializeWasm();
+// Folders of documents shown on the welcome screen like a file browser: examples/ (listed
+// by the dev server on every page load, see vite.config.js) and any folder the user picks
+// with "Elegir carpeta…". Nothing is uploaded; files are read in the browser.
+const documentFolders = { examples: null, picked: null };
+
+const isDocx = name => /\.docx$/i.test(name) && !name.startsWith('~$'); // skip Word lock files
+
+async function loadExamplesFolder() {
   try {
-    showToast(`Cargando "${filename}"...`);
-    const res = await fetch(`/examples/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const arrayBuffer = await res.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    currentFileName = filename;
-    currentSession = new DocxSession(bytes);
-    onDocumentLoaded();
-    showToast(`"${filename}" cargado con éxito en vista multi-página.`);
-  } catch (err) {
-    console.error('Error loading real example:', err);
-    showToast('Error al cargar archivo de ejemplo: ' + err, true);
+    const res = await fetch('/__examples.json', { cache: 'no-store' });
+    if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) return null;
+    const { folder, files } = await res.json();
+    return {
+      name: folder,
+      hint: 'Coloca aquí tus archivos .docx y recarga la página.',
+      files: files.filter(f => isDocx(f.name)).map(f => ({
+        ...f,
+        open: async () => new File([await (await fetch(`/${folder}/${encodeURIComponent(f.name)}`)).blob()], f.name),
+      })),
+    };
+  } catch {
+    return null; // production build: there is no examples/ listing
   }
+}
+
+function usePickedFolder(fileList) {
+  const name = (fileList[0]?.webkitRelativePath || '').split('/')[0] || 'Carpeta seleccionada';
+  const files = [...fileList]
+    .filter(f => isDocx(f.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(file => ({ name: file.name, size: file.size, modified: file.lastModified, open: async () => file }));
+  documentFolders.picked = { name, hint: 'Esta carpeta no tiene archivos .docx.', files };
+  renderDocumentFolders();
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const fileDateFormat = new Intl.DateTimeFormat('es', { day: 'numeric', month: 'short', year: 'numeric' });
+
+function renderDocumentFolders() {
+  const container = document.getElementById('document-folders');
+  if (!container) return;
+  const folders = [documentFolders.picked, documentFolders.examples].filter(Boolean);
+
+  container.replaceChildren(...folders.map(folder => {
+    const block = document.createElement('div');
+    block.className = 'folder-block';
+    const count = folder.files.length;
+    block.innerHTML = `
+      <div class="folder-header">
+        <span class="folder-name">📁 ${escapeHtml(folder.name)}/</span>
+        <span class="folder-count">${count} archivo${count === 1 ? '' : 's'}</span>
+      </div>`;
+    if (count === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'folder-empty';
+      empty.textContent = folder.hint;
+      block.appendChild(empty);
+    }
+    const list = document.createElement('ul');
+    list.className = 'folder-files';
+    folder.files.forEach(file => {
+      const item = document.createElement('li');
+      const row = document.createElement('button');
+      row.className = 'folder-file';
+      row.title = `Abrir ${file.name}`;
+      row.innerHTML = `
+        <span class="file-icon">📄</span>
+        <span class="file-name">${escapeHtml(file.name)}</span>
+        <span class="file-meta">${formatFileSize(file.size)}</span>
+        <span class="file-meta">${file.modified ? fileDateFormat.format(new Date(file.modified)) : ''}</span>`;
+      row.addEventListener('click', async () => loadDocxFile(await file.open()));
+      item.appendChild(row);
+      list.appendChild(item);
+    });
+    block.appendChild(list);
+    return block;
+  }));
+
+  if (folders.length === 0) {
+    container.innerHTML = '<p class="folder-empty">Elige una carpeta con documentos <code>.docx</code> para verlos aquí.</p>';
+  }
+}
+
+async function initDocumentFolders() {
+  documentFolders.examples = await loadExamplesFolder();
+  renderDocumentFolders();
 }
 
 // 3. Document Loaded Transition
@@ -210,7 +282,10 @@ function refreshDocumentView() {
 }
 
 // 5. Render Multi-Page A4 Canvas Layout from Rust WASM
-function renderCanvasPagesFromWasm() {
+// What the page canvases currently show, to redraw only pages whose content changed
+let renderedState = { session: null, zoom: null, cards: new Map() };
+
+function renderCanvasPagesFromWasm({ full = false } = {}) {
   if (!currentSession) return;
 
   try {
@@ -220,63 +295,85 @@ function renderCanvasPagesFromWasm() {
     const wmText = currentWatermark.type === 'preset' ? currentWatermark.text : null;
     const wmOpacity = currentWatermark.opacity || 0.2;
 
-    const layoutJson = currentSession.compute_canvas_layout_json(wmText, wmOpacity, measureTextForLayout);
-    canvasPagesLayout = JSON.parse(layoutJson);
+    // Zoom, a new document or new fonts change every page: redraw them all
+    const redrawAll = full || renderedState.session !== currentSession || renderedState.zoom !== currentZoom;
+    const previous = canvasPagesLayout;
+    const layoutJson = currentSession.compute_canvas_layout_json(wmText, wmOpacity, measureTextForLayout, !redrawAll);
+    const layout = JSON.parse(layoutJson);
+    const freshPages = new Set(layout.pages.filter(p => !p.unchanged).map(p => p.page_number));
+    layout.pages = layout.pages.map((page, i) => (page.unchanged ? previous.pages[i] : page));
+    canvasPagesLayout = layout;
 
-    statPages.textContent = canvasPagesLayout.total_pages;
+    statPages.textContent = layout.total_pages;
     canvasEditor.beginRender();
-    canvasPagesWrapper.innerHTML = '';
+    if (redrawAll) {
+      canvasPagesWrapper.innerHTML = '';
+      renderedState = { session: currentSession, zoom: currentZoom, cards: new Map() };
+    }
 
     const dpr = window.devicePixelRatio || 1;
 
-    canvasPagesLayout.pages.forEach(page => {
-      const pageCard = document.createElement('div');
-      pageCard.className = 'canvas-page-card';
-      pageCard.dataset.pageNumber = page.page_number;
-
-      const pageHeader = document.createElement('div');
-      pageHeader.className = 'canvas-page-header';
-      pageHeader.innerHTML = `<span class="page-badge">Página ${page.page_number} de ${canvasPagesLayout.total_pages}</span>`;
-      pageCard.appendChild(pageHeader);
-
-      const canvas = document.createElement('canvas');
-      canvas.className = 'page-canvas';
-      canvas.dataset.pageNum = page.page_number;
-
-      // Scaled dimensions with Retina High-DPI support
-      const scaledW = page.width * currentZoom;
-      const scaledH = page.height * currentZoom;
-
-      canvas.width = Math.round(scaledW * dpr);
-      canvas.height = Math.round(scaledH * dpr);
-      canvas.style.width = `${scaledW}px`;
-      canvas.style.height = `${scaledH}px`;
-
-      const ctx = canvas.getContext('2d');
-      disableLigatures(ctx);
-      ctx.scale(dpr * currentZoom, dpr * currentZoom);
-
-      // 1. Draw page background
-      ctx.fillStyle = page.bg_color || currentPageBgColor || '#FFFFFF';
-      ctx.fillRect(0, 0, page.width, page.height);
-
-      // 2. Draw page content items
-      drawCanvasPageItems(ctx, page.items);
-
-      pageCard.appendChild(canvas);
-      canvasPagesWrapper.appendChild(pageCard);
-
-      // 3. Caret, selection and table cell editing on top of the canvas
-      canvasEditor.attachPage(page, pageCard, canvas);
+    layout.pages.forEach(page => {
+      let card = renderedState.cards.get(page.page_number);
+      if (!card || freshPages.has(page.page_number)) {
+        const fresh = buildPageCard(page, layout.total_pages, dpr);
+        if (card) card.replaceWith(fresh);
+        else canvasPagesWrapper.appendChild(fresh);
+        card = fresh;
+        renderedState.cards.set(page.page_number, card);
+      }
+      // Caret, selection and table cell editing on top of the canvas
+      canvasEditor.attachPage(page, card, card.querySelector('canvas'));
     });
 
-    ensureLayoutFonts(canvasPagesLayout);
+    // The document got shorter: drop the extra pages
+    renderedState.cards.forEach((card, number) => {
+      if (number > layout.total_pages) {
+        card.remove();
+        renderedState.cards.delete(number);
+      }
+    });
+
+    ensureLayoutFonts(layout);
     canvasEditor.endRender();
 
   } catch (err) {
     console.error('Error rendering Canvas layout:', err);
     showToast('Error al renderizar páginas: ' + err, true);
   }
+}
+
+function buildPageCard(page, totalPages, dpr) {
+  const pageCard = document.createElement('div');
+  pageCard.className = 'canvas-page-card';
+  pageCard.dataset.pageNumber = page.page_number;
+
+  const pageHeader = document.createElement('div');
+  pageHeader.className = 'canvas-page-header';
+  pageHeader.innerHTML = `<span class="page-badge">Página ${page.page_number} de ${totalPages}</span>`;
+  pageCard.appendChild(pageHeader);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'page-canvas';
+  canvas.dataset.pageNum = page.page_number;
+
+  // Scaled dimensions with Retina High-DPI support
+  const scaledW = page.width * currentZoom;
+  const scaledH = page.height * currentZoom;
+  canvas.width = Math.round(scaledW * dpr);
+  canvas.height = Math.round(scaledH * dpr);
+  canvas.style.width = `${scaledW}px`;
+  canvas.style.height = `${scaledH}px`;
+
+  const ctx = canvas.getContext('2d');
+  disableLigatures(ctx);
+  ctx.scale(dpr * currentZoom, dpr * currentZoom);
+  ctx.fillStyle = page.bg_color || currentPageBgColor || '#FFFFFF';
+  ctx.fillRect(0, 0, page.width, page.height);
+  drawCanvasPageItems(ctx, page.items);
+
+  pageCard.appendChild(canvas);
+  return pageCard;
 }
 
 // Rust lays out text with these measurements, so line breaks match what the canvas draws
@@ -317,7 +414,11 @@ function ensureLayoutFonts(layout) {
 
   Promise.all(pending.map(face => document.fonts.load(face).catch(() => [])))
     .then(results => {
-      if (results.some(loaded => loaded.length > 0)) renderCanvasPagesFromWasm();
+      if (results.some(loaded => loaded.length > 0) && currentSession) {
+        // Widths measured with fallback fonts are stale now
+        currentSession.reset_measurements();
+        renderCanvasPagesFromWasm({ full: true });
+      }
     });
 }
 
@@ -378,8 +479,8 @@ function drawCanvasPageItems(ctx, items) {
           img = new Image();
           img.src = item.data_url;
           img.onload = () => {
-            // Redraw canvas when image finishes loading
-            renderCanvasPagesFromWasm();
+            // Redraw the pages once the image can be drawn
+            renderCanvasPagesFromWasm({ full: true });
           };
           imageElementCache.set(item.data_url, img);
         }
@@ -498,39 +599,6 @@ function drawCanvasPageItems(ctx, items) {
   });
 }
 
-let blurTimeout = null;
-
-// 7. Table cells keep their in-place cell editor. Returns true when a cell took the click
-function handleTableClick(page, point, pageCard, canvas) {
-  if (blurTimeout) {
-    clearTimeout(blurTimeout);
-    blurTimeout = null;
-  }
-
-  for (const item of page.items) {
-    if (
-      item.type === 'table_cell' &&
-      point.x >= item.x && point.x <= item.x + item.width &&
-      point.y >= item.y && point.y <= item.y + item.height
-    ) {
-      const sameCell = activeTarget?.type === 'cell' && activeTarget.tableIndex === item.table_index &&
-        activeTarget.row === item.row && activeTarget.col === item.col;
-      if (!sameCell) {
-        commitCurrentEditor();
-        openInPlaceCellEditor(item, pageCard, canvas);
-      }
-      return true;
-    }
-  }
-
-  // Leaving a cell for the text: save it and refresh the pages once this click is handled
-  if (activeTarget?.type === 'cell') {
-    commitCurrentEditor();
-    setTimeout(renderCanvasPagesFromWasm, 0);
-  }
-  return false;
-}
-
 function escapeHtml(str) {
   if (!str) return '';
   return str
@@ -539,173 +607,6 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-// 9. Open In-Place Table Cell Editor
-function openInPlaceCellEditor(cellItem, pageCard, canvas) {
-  if (blurTimeout) {
-    clearTimeout(blurTimeout);
-    blurTimeout = null;
-  }
-  clearTimeout(updateDebounceTimer);
-
-  const pageCardRect = pageCard.getBoundingClientRect();
-  const containerRect = canvasDocumentView.getBoundingClientRect();
-
-  const cardOffsetLeft = pageCardRect.left - containerRect.left + canvasDocumentView.scrollLeft;
-  const cardOffsetTop = pageCardRect.top - containerRect.top + canvasDocumentView.scrollTop;
-
-  const canvasLeft = canvas.offsetLeft;
-  const canvasTop = canvas.offsetTop;
-
-  const textColor = cellItem.color ? (cellItem.color.startsWith('#') ? cellItem.color : `#${cellItem.color}`) : '#1E293B';
-  const bgColor = cellItem.bg_color ? (cellItem.bg_color.startsWith('#') ? cellItem.bg_color : `#${cellItem.bg_color}`) : '#FFFFFF';
-  const borderColor = cellItem.border_color ? (cellItem.border_color.startsWith('#') ? cellItem.border_color : `#${cellItem.border_color}`) : '#DDD5C2';
-
-  canvasCellEditor.style.left = `${cardOffsetLeft + canvasLeft + cellItem.x * currentZoom}px`;
-  canvasCellEditor.style.top = `${cardOffsetTop + canvasTop + cellItem.y * currentZoom}px`;
-  canvasCellEditor.style.width = `${cellItem.width * currentZoom}px`;
-  canvasCellEditor.style.minHeight = `${cellItem.height * currentZoom}px`;
-  canvasCellEditor.style.fontSize = `${cellItem.font_size * currentZoom}px`;
-  canvasCellEditor.style.fontFamily = formatFontFamily(cellItem.font_family);
-  canvasCellEditor.style.fontWeight = cellItem.font_weight || '400';
-  canvasCellEditor.style.color = textColor;
-  canvasCellEditor.style.caretColor = textColor;
-  canvasCellEditor.style.background = bgColor;
-  canvasCellEditor.style.border = 'none';
-  canvasCellEditor.style.outline = 'none';
-  canvasCellEditor.style.boxShadow = 'none';
-  canvasCellEditor.style.textAlign = cellItem.align || 'left';
-  canvasCellEditor.style.lineHeight = '1.35';
-
-  canvasCellEditor.innerText = cellItem.text;
-  canvasCellEditor.style.display = 'flex';
-
-  activeTarget = {
-    type: 'cell',
-    tableIndex: cellItem.table_index,
-    row: cellItem.row,
-    col: cellItem.col,
-    item: cellItem
-  };
-
-  canvasCellEditor.focus();
-  placeCaretAtEnd(canvasCellEditor);
-}
-
-function handleCellEditorInput() {
-  if (!canvasCellEditor || !activeTarget || activeTarget.type !== 'cell' || !currentSession) return;
-
-  const newText = canvasCellEditor.innerText;
-  const { tableIndex, row, col } = activeTarget;
-  setSyncStatus(false);
-
-  clearTimeout(updateDebounceTimer);
-  updateDebounceTimer = setTimeout(() => {
-    try {
-      currentSession.update_table_cell(tableIndex, row, col, newText);
-      setSyncStatus(true);
-      updateLiveStats();
-    } catch (err) {
-      console.error('Error syncing cell:', err);
-    }
-  }, 250);
-}
-
-// 11. Commit and Close Active Editors
-function commitCurrentEditor() {
-  clearTimeout(updateDebounceTimer);
-
-  if (canvasCellEditor && canvasCellEditor.style.display !== 'none') {
-    if (activeTarget && activeTarget.type === 'cell' && currentSession) {
-      const finalVal = canvasCellEditor.innerText;
-      try {
-        currentSession.update_table_cell(activeTarget.tableIndex, activeTarget.row, activeTarget.col, finalVal);
-      } catch (err) {
-        console.error('Error committing cell:', err);
-      }
-    }
-    canvasCellEditor.style.display = 'none';
-  }
-
-  setSyncStatus(true);
-  activeTarget = null;
-}
-
-function closeActiveEditors() {
-  commitCurrentEditor();
-  renderCanvasPagesFromWasm();
-}
-
-function navigateToAdjacentCell(direction) {
-  if (!activeTarget || activeTarget.type !== 'cell' || !canvasPagesLayout) return;
-  const { tableIndex, row, col } = activeTarget;
-  commitCurrentEditor();
-
-  const allCells = [];
-  const cellPageMap = new Map();
-  canvasPagesLayout.pages.forEach(p => {
-    p.items.forEach(it => {
-      if (it.type === 'table_cell' && it.table_index === tableIndex) {
-        allCells.push(it);
-        cellPageMap.set(it, p.page_number);
-      }
-    });
-  });
-
-  const curIdx = allCells.findIndex(c => c.row === row && c.col === col);
-  if (curIdx !== -1) {
-    const nextIdx = curIdx + direction;
-    if (nextIdx >= 0 && nextIdx < allCells.length) {
-      const nextCell = allCells[nextIdx];
-      const pageNum = cellPageMap.get(nextCell);
-      const pageCard = document.querySelector(`.canvas-page-card[data-page-number="${pageNum}"]`);
-      const canvas = pageCard?.querySelector('.page-canvas');
-      if (pageCard && canvas) {
-        openInPlaceCellEditor(nextCell, pageCard, canvas);
-        return;
-      }
-    }
-  }
-  renderCanvasPagesFromWasm();
-}
-
-function navigateToNextRowCell() {
-  if (!activeTarget || activeTarget.type !== 'cell' || !canvasPagesLayout) return;
-  const { tableIndex, row, col } = activeTarget;
-  commitCurrentEditor();
-
-  let targetCell = null;
-  let targetPageNum = null;
-  canvasPagesLayout.pages.forEach(p => {
-    p.items.forEach(it => {
-      if (it.type === 'table_cell' && it.table_index === tableIndex && it.row === row + 1 && it.col === col) {
-        targetCell = it;
-        targetPageNum = p.page_number;
-      }
-    });
-  });
-
-  if (targetCell) {
-    const pageCard = document.querySelector(`.canvas-page-card[data-page-number="${targetPageNum}"]`);
-    const canvas = pageCard?.querySelector('.page-canvas');
-    if (pageCard && canvas) {
-      openInPlaceCellEditor(targetCell, pageCard, canvas);
-      return;
-    }
-  }
-  renderCanvasPagesFromWasm();
-}
-
-function placeCaretAtEnd(el) {
-  if (typeof window.getSelection !== 'undefined' && typeof document.createRange !== 'undefined') {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
 }
 
 function setSyncStatus(isSynced) {
@@ -720,8 +621,30 @@ function setSyncStatus(isSynced) {
 
 // 12. Formatting: applies to the selected characters (across paragraphs), or to the whole
 // paragraph at the caret when nothing is selected. Each action is one undo step.
+// Every paragraph of the document in order (body and table cells), each tagged with its
+// container ("body" or "table:row:col") so the editor never joins paragraphs across cells
+let paragraphListCache = { source: null, list: [], byIndex: new Map() };
+
+function documentParagraphs() {
+  if (paragraphListCache.source !== activeDocumentElements) {
+    const list = [];
+    activeDocumentElements.forEach(el => {
+      if (el.type === 'paragraph') {
+        list.push({ ...el, container: 'body' });
+      } else if (el.type === 'table') {
+        (el.rich_rows || []).forEach((row, r) => row.cells.forEach((cell, c) => {
+          (cell.paragraphs || []).forEach(p => list.push({ ...p, container: `${el.index}:${r}:${c}` }));
+        }));
+      }
+    });
+    list.sort((a, b) => a.index - b.index);
+    paragraphListCache = { source: activeDocumentElements, list, byIndex: new Map(list.map(p => [p.index, p])) };
+  }
+  return paragraphListCache;
+}
+
 function paragraphElement(index) {
-  return activeDocumentElements.find(el => el.type === 'paragraph' && el.index === index);
+  return documentParagraphs().byIndex.get(index);
 }
 
 /** One entry per character, carrying the formatting of its run */
@@ -890,7 +813,6 @@ function executeSearchAndReplace() {
   }
 
   try {
-    commitCurrentEditor();
     const resultJson = currentSession.find_and_replace(search, replace, matchCase, useRegex);
     const result = JSON.parse(resultJson);
 
@@ -974,7 +896,6 @@ function applyVariablesFromModal() {
   }
 
   try {
-    commitCurrentEditor();
     const resultJson = currentSession.batch_replace(JSON.stringify(pairs));
     const result = JSON.parse(resultJson);
     showToast(result.message);
@@ -998,7 +919,6 @@ function handleCreateTableConfirm() {
   }
 
   try {
-    commitCurrentEditor();
     currentSession.add_table(rows, cols, JSON.stringify(headers));
     tableModal.style.display = 'none';
     showToast(`Tabla de ${rows}x${cols} insertada exitosamente.`);
@@ -1014,7 +934,6 @@ function downloadDocx() {
   if (!currentSession) return;
 
   try {
-    commitCurrentEditor();
     const bytes = currentSession.export_bytes();
     const blob = new Blob([bytes], {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -1064,7 +983,7 @@ function setupEventListeners() {
     if (currentZoom < 1.5) {
       currentZoom += 0.25;
       zoomLevelLabel.textContent = `${Math.round(currentZoom * 100)}%`;
-      closeActiveEditors();
+      renderCanvasPagesFromWasm();
     }
   });
 
@@ -1072,40 +991,8 @@ function setupEventListeners() {
     if (currentZoom > 0.5) {
       currentZoom -= 0.25;
       zoomLevelLabel.textContent = `${Math.round(currentZoom * 100)}%`;
-      closeActiveEditors();
+      renderCanvasPagesFromWasm();
     }
-  });
-
-  // Table cell editor input and keyboard shortcuts
-  canvasCellEditor.addEventListener('input', handleCellEditorInput);
-
-  canvasCellEditor.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeActiveEditors();
-    } else if (e.key === 'Tab') {
-      e.preventDefault();
-      navigateToAdjacentCell(e.shiftKey ? -1 : 1);
-    } else if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      navigateToNextRowCell();
-    }
-  });
-
-  // Commit the cell editor when clicking away
-  canvasCellEditor.addEventListener('blur', () => {
-    if (blurTimeout) clearTimeout(blurTimeout);
-    blurTimeout = setTimeout(() => {
-      const activeEl = document.activeElement;
-      if (
-        activeEl !== canvasCellEditor &&
-        !activeEl?.closest('.formatting-ribbon') &&
-        !activeEl?.closest('.modal-card') &&
-        !activeEl?.closest('.modal-backdrop')
-      ) {
-        closeActiveEditors();
-      }
-    }, 100);
   });
 
   // Prevent ribbon buttons from stealing focus from the active paragraph editor
@@ -1133,14 +1020,11 @@ function setupEventListeners() {
     btn.addEventListener('click', loadSampleDocx);
   });
 
-  // Real Example Cards
-  document.querySelectorAll('.example-card-btn').forEach(card => {
-    card.addEventListener('click', () => {
-      const docName = card.dataset.example;
-      if (docName) {
-        loadExampleDocx(docName);
-      }
-    });
+  // Document folders: examples/ (dev server) and any folder chosen by the user
+  initDocumentFolders();
+  document.getElementById('examples-folder-input')?.addEventListener('change', e => {
+    if (e.target.files?.length) usePickedFolder(e.target.files);
+    e.target.value = '';
   });
 
   // Download
@@ -1332,7 +1216,6 @@ function setupEventListeners() {
       variablesModal.style.display = 'none';
       backgroundModal.style.display = 'none';
       tableModal.style.display = 'none';
-      closeActiveEditors();
     }
   });
 }
@@ -1340,7 +1223,7 @@ function setupEventListeners() {
 // Canvas-native caret and selection (replaces the per-paragraph edit box)
 const canvasEditor = createCanvasEditor({
   session: () => currentSession,
-  elements: () => activeDocumentElements,
+  paragraphs: () => documentParagraphs(),
   zoom: () => currentZoom,
   measure: measureTextForLayout,
   documentChanged: () => {
@@ -1349,7 +1232,6 @@ const canvasEditor = createCanvasEditor({
     setSyncStatus(true);
   },
   selectionChanged: updateRibbonForSelection,
-  handleTableClick,
   hint: msg => showToast(msg),
 });
 

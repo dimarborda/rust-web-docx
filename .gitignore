@@ -3,3 +3,7 @@ node_modules/
 dist/
 .DS_Store
 *.swp
+
+# Test documents: each developer drops their own Word files here (see examples/README.md)
+examples/*
+!examples/README.md

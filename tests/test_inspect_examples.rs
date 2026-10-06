@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -125,7 +127,7 @@ fn inspect_single_file(filename: &str) {
 #[test]
 fn test_inspect_contrato() {
     inspect_single_file("CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx");
-    let bytes = fs::read("examples/CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx").unwrap();
+    let Some(bytes) = common::example("CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx") else { return };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
     assert!(stats.bg_image_data_url.is_none(), "Contrato should not have background image");
@@ -141,7 +143,7 @@ fn test_inspect_contrato() {
 #[test]
 fn test_inspect_costo_eficiencia() {
     inspect_single_file("costo-eficiencia-modelos-llm-rag.docx");
-    let bytes = fs::read("examples/costo-eficiencia-modelos-llm-rag.docx").unwrap();
+    let Some(bytes) = common::example("costo-eficiencia-modelos-llm-rag.docx") else { return };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
     assert!(stats.bg_image_data_url.is_none(), "Costo-eficiencia should NOT have background image!");
@@ -181,7 +183,7 @@ fn test_inspect_costo_eficiencia() {
 #[test]
 fn test_inspect_plantilla() {
     inspect_single_file("plantilla-ejemplo-vead.docx");
-    let bytes = fs::read("examples/plantilla-ejemplo-vead.docx").unwrap();
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
     assert!(stats.bg_image_data_url.is_some(), "Plantilla diploma MUST have full background image!");

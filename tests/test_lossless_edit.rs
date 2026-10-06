@@ -1,16 +1,9 @@
+mod common;
+
 use rust_web_docx::docx_parser::{DocumentElement, DocxModifier, ParagraphUpdate};
-use std::fs;
 
 fn examples() -> Vec<(String, Vec<u8>)> {
-    let mut out: Vec<(String, Vec<u8>)> = fs::read_dir("examples")
-        .expect("examples dir")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("docx"))
-        .map(|p| (p.file_name().unwrap().to_string_lossy().to_string(), fs::read(&p).unwrap()))
-        .collect();
-    out.sort();
-    out
+    common::all_examples()
 }
 
 /// Re-submitting every paragraph exactly as the editor sees it must not change a single byte
@@ -50,9 +43,11 @@ fn test_appending_text_keeps_all_markup() {
         for tag in ["<w:hyperlink", "<w:highlight", "<w:numPr", "<w:drawing", "<w:rStyle", "<w:sz ", "<w:sectPr", "<w:bookmarkStart"] {
             assert_eq!(before.matches(tag).count(), after.matches(tag).count(), "{}: lost {} markup", name, tag);
         }
-        let texts: Vec<String> = modifier.extract_paragraphs().unwrap().into_iter().map(|p| p.text).collect();
+        // Paragraph indices are document-wide (table cells included), not positions in this list
+        let texts: std::collections::HashMap<usize, String> =
+            modifier.extract_paragraphs().unwrap().into_iter().map(|p| (p.index, p.text)).collect();
         for u in &updates {
-            assert_eq!(texts[u.index], u.text, "{}: paragraph {}", name, u.index);
+            assert_eq!(texts[&u.index], u.text, "{}: paragraph {}", name, u.index);
         }
 
         // Still a valid package after export

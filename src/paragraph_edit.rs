@@ -191,7 +191,8 @@ fn escape_attr(s: &str) -> String {
     escape_text(s).replace('"', "&quot;")
 }
 
-/// Byte ranges of the body paragraphs, indexed exactly like `parse_document_elements`
+/// Byte ranges of every paragraph of the body in document order, including those inside
+/// table cells, indexed exactly like `parse_document_elements` numbers them
 pub fn body_paragraph_ranges(xml: &str) -> Result<Vec<Range<usize>>, String> {
     let tokens = tokenize(xml)?;
     let mut ranges = Vec::new();
@@ -201,10 +202,6 @@ pub fn body_paragraph_ranges(xml: &str) -> Result<Vec<Range<usize>>, String> {
         match &tokens[i].ev {
             Event::Start(e) if tag_is(e.name().as_ref(), "body") => in_body = true,
             Event::End(e) if tag_is(e.name().as_ref(), "body") => in_body = false,
-            Event::Start(e) if in_body && tag_is(e.name().as_ref(), "tbl") => {
-                i = element_end(&tokens, i) + 1;
-                continue;
-            }
             Event::Start(e) | Event::Empty(e) if in_body && tag_is(e.name().as_ref(), "p") => {
                 let end = element_end(&tokens, i);
                 ranges.push(tokens[i].span.start..tokens[end].span.end);
@@ -340,12 +337,45 @@ pub fn split_paragraph(p_xml: &str, styles: &StyleSheet, offset: usize) -> Resul
     )?;
     let mut second = strip_unique_markers(&second)?;
     if offset == len {
+        // Typing in the new paragraph continues with the formatting of the last character
+        if let Some(rpr) = last_text_run_rpr(p_xml)? {
+            second = set_paragraph_property(&second, "rPr", Some(&rpr))?;
+        }
         if let Some(next) = styles.next_style(&info.style).filter(|n| *n != info.style) {
             let element = format!(r#"<w:pStyle w:val="{}"/>"#, escape_attr(next));
             second = set_paragraph_property(&second, "pStyle", Some(&element))?;
         }
     }
     Ok((first, second))
+}
+
+/// Raw `w:rPr` of the last run that has text, if it has one
+fn last_text_run_rpr(p_xml: &str) -> Result<Option<String>, String> {
+    let tokens = tokenize(p_xml)?;
+    let mut last = None;
+    let mut i = 1;
+    while i < tokens.len() {
+        if matches!(tokens[i].ev, Event::Start(_)) && is_element(&tokens[i], "r") {
+            let end = element_end(&tokens, i);
+            let run = &tokens[i + 1..end];
+            let has_text = run.iter().any(|t| matches!(t.ev, Event::Text(_)));
+            if has_text {
+                last = run
+                    .iter()
+                    .position(|t| is_element(t, "rPr"))
+                    .map(|j| {
+                        let first = i + 1 + j;
+                        let rpr_end = element_end(&tokens, first);
+                        p_xml[tokens[first].span.start..tokens[rpr_end].span.end].to_string()
+                    })
+                    .or(Some(String::new()));
+            }
+            i = end + 1;
+            continue;
+        }
+        i += 1;
+    }
+    Ok(last.filter(|r| !r.is_empty()))
 }
 
 /// Joins two adjacent paragraphs (Backspace at the start of `b`, Delete at the end of `a`).

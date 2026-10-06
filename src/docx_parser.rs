@@ -5,7 +5,10 @@ use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -106,7 +109,7 @@ pub struct TableCellInfo {
     pub text: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TableCellData {
     pub text: String,
     pub bg_color: Option<String>,
@@ -117,6 +120,9 @@ pub struct TableCellData {
     pub font_size: f64,
     pub font_family: String,
     pub border_color: String,
+    /// The cell's paragraphs, numbered in the same document-wide sequence as body paragraphs
+    #[serde(default)]
+    pub paragraphs: Vec<ParagraphInfo>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -234,6 +240,47 @@ pub struct DocxModifier {
     background_image_ext: String,
     styles: StyleSheet,
     history: History,
+    /// Bumped on every change of any part; `parts_revision` only for parts other than
+    /// document.xml (headers, media, relationships), which typing never touches
+    revision: u64,
+    parts_revision: u64,
+    cache: RefCell<ModelCache>,
+}
+
+/// Inputs of the page layout besides the body content
+#[derive(Debug, Clone)]
+pub struct LayoutInputs {
+    pub background_color: String,
+    pub page_setup: PageSetup,
+    pub header_footer: HeaderFooterInfo,
+    pub bg_image_data_url: Option<String>,
+}
+
+/// Derived data reused until the document changes (parsing and image encoding are the
+/// expensive parts of every keystroke otherwise)
+#[derive(Default)]
+struct ModelCache {
+    elements: Option<(u64, Rc<Vec<DocumentElement>>)>,
+    /// Keyed by (signature of the layout-relevant bits of document.xml, parts revision)
+    inputs: Option<(u64, u64, Rc<LayoutInputs>)>,
+}
+
+/// Hash of what page setup, background and images depend on in document.xml: section
+/// properties, the page background and image references (not the text)
+fn layout_inputs_signature(doc: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hash_spans = |open: &str, close: &str| {
+        let mut from = 0;
+        while let Some(start) = doc[from..].find(open).map(|i| i + from) {
+            let end = doc[start..].find(close).map(|i| start + i + close.len()).unwrap_or(doc.len());
+            doc[start..end].hash(&mut hasher);
+            from = end;
+        }
+    };
+    hash_spans("<w:sectPr", "</w:sectPr>");
+    hash_spans("<w:background", ">");
+    hash_spans("r:embed=\"", "\"");
+    hasher.finish()
 }
 
 /// One undoable step: previous contents of every part it changed, plus the editor selection
@@ -310,6 +357,9 @@ impl DocxModifier {
 
         Ok(DocxModifier {
             history: History::default(),
+            revision: 0,
+            parts_revision: 0,
+            cache: RefCell::new(ModelCache::default()),
             styles,
             files,
             original_order,
@@ -322,6 +372,10 @@ impl DocxModifier {
 
     /// Writes a package part, remembering its previous content for undo when a step is open
     fn put_file(&mut self, name: String, bytes: Vec<u8>) {
+        self.revision += 1;
+        if name != "word/document.xml" {
+            self.parts_revision += 1;
+        }
         if let Some(step) = self.history.recording.as_mut() {
             if !step.parts.iter().any(|(n, _)| *n == name) {
                 step.parts.push((name.clone(), self.files.get(&name).cloned()));
@@ -362,6 +416,8 @@ impl DocxModifier {
 
     /// Swaps the stored part contents with the current ones and returns the inverse step
     fn apply_step(&mut self, step: UndoStep) -> UndoStep {
+        self.revision += 1;
+        self.parts_revision += 1;
         let parts = step
             .parts
             .into_iter()
@@ -438,7 +494,7 @@ impl DocxModifier {
         };
         // Cutting must not tear apart a content control or other wrapper element
         if !is_balanced(&xml[r1.end..r2.start]) {
-            return Err("La selección cruza un control de contenido; no se puede borrar de una vez.".to_string());
+            return Err("La selección cruza el borde de una tabla o de un control de contenido; no se puede borrar de una vez.".to_string());
         }
         let head = edit_paragraph_range(&xml[r1.clone()], &self.styles, o1, usize::MAX, "")?;
         let tail = edit_paragraph_range(&xml[r2.clone()], &self.styles, 0, o2, "")?;
@@ -493,8 +549,43 @@ impl DocxModifier {
 
     /// Extracts list of document elements (paragraphs and tables) in sequential order
     pub fn extract_elements(&self) -> Result<Vec<DocumentElement>, String> {
+        Ok((*self.elements_shared()?).clone())
+    }
+
+    /// Parsed document elements, parsed once per revision of the document
+    pub fn elements_shared(&self) -> Result<Rc<Vec<DocumentElement>>, String> {
+        if let Some((rev, elements)) = &self.cache.borrow().elements {
+            if *rev == self.revision {
+                return Ok(elements.clone());
+            }
+        }
         let doc_xml = self.get_file_string("word/document.xml")?;
-        Ok(parse_document_elements_with(&doc_xml, &self.styles))
+        let elements = Rc::new(parse_document_elements_with(&doc_xml, &self.styles));
+        self.cache.borrow_mut().elements = Some((self.revision, elements.clone()));
+        Ok(elements)
+    }
+
+    /// Page setup, headers/footers and background, recomputed only when they can change
+    pub fn layout_inputs(&self) -> Result<Rc<LayoutInputs>, String> {
+        let doc = self
+            .files
+            .get("word/document.xml")
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .ok_or("No se encontró 'word/document.xml' en el archivo DOCX.")?;
+        let signature = layout_inputs_signature(doc);
+        if let Some((sig, parts, inputs)) = &self.cache.borrow().inputs {
+            if *sig == signature && *parts == self.parts_revision {
+                return Ok(inputs.clone());
+            }
+        }
+        let inputs = Rc::new(LayoutInputs {
+            background_color: self.background_color.clone(),
+            page_setup: extract_page_setup_quick_xml(doc),
+            header_footer: self.get_header_footer(),
+            bg_image_data_url: self.get_bg_image_data_url(),
+        });
+        self.cache.borrow_mut().inputs = Some((signature, self.parts_revision, inputs.clone()));
+        Ok(inputs)
     }
 
     /// Extracts list of paragraphs from word/document.xml
@@ -783,6 +874,7 @@ impl DocxModifier {
 
     /// Sets page background color (HEX)
     pub fn set_background_color(&mut self, hex_color: &str) -> Result<(), String> {
+        self.parts_revision += 1;
         let clean_hex = hex_color.trim_start_matches('#').to_uppercase();
         self.background_color = clean_hex.clone();
 
@@ -794,6 +886,7 @@ impl DocxModifier {
 
     /// Sets background/watermark image bytes
     pub fn set_background_image(&mut self, image_bytes: Vec<u8>, ext: &str) -> Result<(), String> {
+        self.parts_revision += 1;
         let clean_ext = if ext.contains("jpg") || ext.contains("jpeg") { "jpeg" } else { "png" };
         let image_filename = format!("word/media/background.{}", clean_ext);
         
@@ -843,13 +936,13 @@ impl DocxModifier {
 
     /// Retrieves document statistics
     pub fn get_statistics(&self) -> Result<DocxStats, String> {
-        let elements = self.extract_elements()?;
+        let elements = self.elements_shared()?;
         let mut paragraph_count = 0;
         let mut table_count = 0;
         let mut word_count = 0;
         let mut char_count = 0;
 
-        for el in elements {
+        for el in elements.iter() {
             match el {
                 DocumentElement::Paragraph(p) => {
                     paragraph_count += 1;
@@ -858,7 +951,7 @@ impl DocxModifier {
                 }
                 DocumentElement::Table(t) => {
                     table_count += 1;
-                    for row in t.rows {
+                    for row in &t.rows {
                         for cell in row {
                             char_count += cell.chars().count();
                             word_count += cell.split_whitespace().count();
@@ -868,23 +961,19 @@ impl DocxModifier {
             }
         }
 
-        let files_in_zip = self.original_order.clone();
-        let page_setup = self.get_page_setup();
-        let header_footer = self.get_header_footer();
-        let bg_image_data_url = self.get_bg_image_data_url();
-
+        let inputs = self.layout_inputs()?;
         Ok(DocxStats {
             paragraph_count,
             table_count,
             word_count,
             char_count,
-            files_in_zip,
+            files_in_zip: self.original_order.clone(),
             original_size_bytes: self.original_size,
-            background_color: self.background_color.clone(),
-            has_background_image: self.background_image.is_some() || bg_image_data_url.is_some(),
-            page_setup,
-            header_footer,
-            bg_image_data_url,
+            background_color: inputs.background_color.clone(),
+            has_background_image: self.background_image.is_some() || inputs.bg_image_data_url.is_some(),
+            page_setup: inputs.page_setup.clone(),
+            header_footer: inputs.header_footer.clone(),
+            bg_image_data_url: inputs.bg_image_data_url.clone(),
         })
     }
 
@@ -1310,7 +1399,7 @@ pub fn parse_document_elements_with(xml: &str, styles: &StyleSheet) -> Vec<Docum
                     elements.push(DocumentElement::Paragraph(p));
                     p_index += 1;
                 } else if in_body && tag_is(name.as_ref(), "tbl") {
-                    let tbl = parse_table_with(&mut reader, tbl_index, styles, Some(&mut counters));
+                    let tbl = parse_table_with(&mut reader, tbl_index, styles, Some(&mut counters), &mut p_index);
                     elements.push(DocumentElement::Table(tbl));
                     tbl_index += 1;
                 }
@@ -1717,7 +1806,7 @@ pub fn is_dark_hex_str(hex: &str) -> bool {
 }
 
 pub fn parse_table_from_reader(reader: &mut Reader<&[u8]>, index: usize) -> TableInfo {
-    parse_table_with(reader, index, &StyleSheet::default(), None)
+    parse_table_with(reader, index, &StyleSheet::default(), None, &mut 0)
 }
 
 /// Parses the table whose `<w:tbl>` start tag was just read, resolving cell paragraph styles
@@ -1726,6 +1815,7 @@ pub fn parse_table_with(
     index: usize,
     styles: &StyleSheet,
     mut counters: Option<&mut NumberingCounters>,
+    p_index: &mut usize,
 ) -> TableInfo {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut rich_rows: Vec<TableRowData> = Vec::new();
@@ -1748,7 +1838,6 @@ pub fn parse_table_with(
     let mut in_tc = false;
     let mut in_tc_pr = false;
     let mut in_tc_borders = false;
-    let mut dummy_p_idx = 0;
     let mut row_idx = 0;
 
     let mut buf = Vec::new();
@@ -1792,13 +1881,25 @@ pub fn parse_table_with(
                         }
                     }
                 } else if in_tc && tag_is(name.as_ref(), "p") {
-                    let p = parse_paragraph_with(reader, dummy_p_idx, styles, counters.as_deref_mut());
-                    dummy_p_idx += 1;
+                    let p = parse_paragraph_with(reader, *p_index, styles, counters.as_deref_mut());
+                    *p_index += 1;
                     current_cell_paragraphs.push(p);
                 }
             }
             Ok(Event::Empty(ref e)) => {
                 let name = e.name();
+                if in_tc && tag_is(name.as_ref(), "p") {
+                    current_cell_paragraphs.push(resolve_paragraph(
+                        *p_index,
+                        styles,
+                        None,
+                        None,
+                        &ParaProps::default(),
+                        &RunProps::default(),
+                        Vec::new(),
+                    ));
+                    *p_index += 1;
+                }
                 if in_tbl_borders {
                     if let Some(col) = get_attr_value(e, "color") {
                         if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
@@ -1896,6 +1997,7 @@ pub fn parse_table_with(
                         font_size,
                         font_family,
                         border_color,
+                        paragraphs: current_cell_paragraphs.clone(),
                     });
                 } else if in_tr && tag_is(name.as_ref(), "tr") {
                     in_tr = false;
