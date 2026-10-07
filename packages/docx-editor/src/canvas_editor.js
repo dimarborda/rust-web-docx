@@ -287,10 +287,13 @@ export function createCanvasEditor(env) {
       });
       page.overlay.appendChild(caret);
 
-      // Keep the hidden input at the caret so IME candidate windows open in place
-      const rect = page.canvas.getBoundingClientRect();
-      input.style.left = `${rect.left + box.x * zoom}px`;
-      input.style.top = `${rect.top + box.y * zoom}px`;
+      // Keep the hidden input at the caret so IME candidate windows open in place. It is
+      // positioned inside the root (not the viewport), so transformed or contained ancestors
+      // cannot push it away, and focusing or typing scrolls to the caret, not elsewhere.
+      const canvasRect = page.canvas.getBoundingClientRect();
+      const rootRect = env.root.getBoundingClientRect();
+      input.style.left = `${canvasRect.left - rootRect.left - env.root.clientLeft + env.root.scrollLeft + box.x * zoom}px`;
+      input.style.top = `${canvasRect.top - rootRect.top - env.root.clientTop + env.root.scrollTop + box.y * zoom}px`;
       // Only a visible caret can be scrolled to (with a selection it is hidden)
       if (reveal && collapsed()) caret.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
@@ -559,8 +562,16 @@ export function createCanvasEditor(env) {
     /** `{ anchor, focus, start, end, collapsed }` with start ≤ end, or null */
     selection,
 
+    /** Focuses the editor; without a caret yet, puts it at the start of the document */
     focus() {
-      if (focus) input.focus({ preventScroll: true });
+      if (!focus) {
+        const first = env.paragraphs().list[0];
+        if (!first) return;
+        anchor = focus = { paragraph: first.index, offset: 0 };
+        goalX = null;
+        paint({ reveal: true });
+      }
+      input.focus({ preventScroll: true });
     },
 
     clear() {

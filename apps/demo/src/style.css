@@ -1562,7 +1562,8 @@ body {
 
 
 /* ---------- @dimarborda/docx-editor inside the demo's dark shell ---------- */
-.canvas-pages-wrapper.docx-editor {
+.canvas-pages-wrapper > .docx-editor {
+  height: auto;
   overflow: visible;
   --docx-page-gap: 2.5rem;
   --docx-page-shadow: var(--paper-shadow);

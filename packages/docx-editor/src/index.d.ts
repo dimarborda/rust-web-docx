@@ -54,7 +54,11 @@ export interface DocxEditorLabels {
   nothingToUndo: string;
   nothingToRedo: string;
   clickToFormat: string;
+  /** Default file name for `openBlank()` */
+  untitled: string;
 }
+
+export type PageSize = 'a4' | 'letter' | 'legal';
 
 export interface DocxEditorOptions {
   /** 1 = 100 % (default) */
@@ -83,6 +87,9 @@ export class DocxEditor extends EventTarget {
   /** Requires the engine to be initialized already (see initEngine) */
   constructor(container: HTMLElement, options?: DocxEditorOptions);
 
+  /** The element passed to `create()`; the editor never changes it */
+  readonly container: HTMLElement;
+  /** The editor's own element (class `docx-editor`), created inside `container` and removed by `destroy()` */
   readonly root: HTMLElement;
   readonly options: Required<Omit<DocxEditorOptions, 'labels' | 'wasmUrl'>> & DocxEditorOptions;
   readonly labels: DocxEditorLabels;
@@ -93,6 +100,8 @@ export class DocxEditor extends EventTarget {
 
   open(source: Uint8Array | ArrayBuffer | Blob, options?: { fileName?: string }): Promise<void>;
   openSample(): void;
+  /** New empty document (A4 by default) with the caret at its start */
+  openBlank(options?: { fileName?: string; pageSize?: PageSize; focus?: boolean }): void;
   close(): void;
   /** The edited document as .docx bytes */
   save(): Uint8Array;
@@ -121,7 +130,11 @@ export class DocxEditor extends EventTarget {
   /** View-only diagonal watermark; pass null to remove it */
   setWatermark(text: string | null, options?: { opacity?: number }): void;
 
+  /** Places a caret (or a selection from `anchor` to `focus`) and scrolls it into view */
+  select(anchor: TextPosition, focus?: TextPosition): void;
+
   setZoom(zoom: number): void;
+  /** Focuses the editor; when there is no caret yet it goes to the start of the document */
   focus(): void;
   destroy(): void;
 

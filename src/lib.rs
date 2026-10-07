@@ -1,3 +1,4 @@
+pub mod blank_generator;
 pub mod caret;
 pub mod docx_parser;
 pub mod layout_engine;
@@ -98,6 +99,16 @@ impl DocxSession {
     #[wasm_bindgen]
     pub fn new_sample() -> Result<DocxSession, JsValue> {
         let bytes = sample_generator::generate_sample_docx().map_err(|e| JsValue::from_str(&e))?;
+        let modifier = DocxModifier::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
+        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
+    }
+
+    /// Creates a session with an empty document: one empty paragraph and Word's default
+    /// styles. `page_size` is "a4" (default), "letter" or "legal".
+    #[wasm_bindgen]
+    pub fn new_blank(page_size: Option<String>) -> Result<DocxSession, JsValue> {
+        let page = blank_generator::PageSize::parse(page_size.as_deref()).map_err(|e| JsValue::from_str(&e))?;
+        let bytes = blank_generator::generate_blank_docx(page).map_err(|e| JsValue::from_str(&e))?;
         let modifier = DocxModifier::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
         Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
     }

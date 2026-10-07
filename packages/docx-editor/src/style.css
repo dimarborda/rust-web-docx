@@ -1,5 +1,6 @@
 /* @dimarborda/docx-editor — import once: import '@dimarborda/docx-editor/style.css';
-   Customize with the --docx-* variables on .docx-editor / .docx-toolbar or any ancestor. */
+   Customize with the --docx-* variables on the editor's container or any ancestor; each
+   default lives in its var() fallback so a value set higher up is never overridden. */
 
 docx-editor,
 docx-toolbar {
@@ -7,14 +8,8 @@ docx-toolbar {
 }
 
 .docx-editor {
-  --docx-page-gap: 2rem;
-  --docx-page-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), 0 8px 24px rgba(15, 23, 42, 0.12);
-  --docx-page-border: rgba(15, 23, 42, 0.08);
-  --docx-label-color: #64748b;
-  --docx-caret-color: #111827;
-  --docx-selection: rgba(59, 130, 246, 0.28);
-  --docx-selection-inactive: rgba(148, 163, 184, 0.3);
   position: relative;
+  height: 100%;
   overflow: auto;
 }
 
@@ -22,8 +17,8 @@ docx-toolbar {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--docx-page-gap);
-  padding: var(--docx-page-gap) 0;
+  gap: var(--docx-page-gap, 2rem);
+  padding: var(--docx-page-gap, 2rem) 0;
   min-width: min-content;
 }
 
@@ -37,14 +32,14 @@ docx-toolbar {
 .docx-editor-page-label {
   margin-bottom: 0.5rem;
   font: 500 0.72rem/1.4 system-ui, sans-serif;
-  color: var(--docx-label-color);
+  color: var(--docx-label-color, #64748b);
 }
 
 .docx-editor-canvas {
   display: block;
   background: #ffffff;
-  border: 1px solid var(--docx-page-border);
-  box-shadow: var(--docx-page-shadow);
+  border: 1px solid var(--docx-page-border, rgba(15, 23, 42, 0.08));
+  box-shadow: var(--docx-page-shadow, 0 1px 3px rgba(15, 23, 42, 0.12), 0 8px 24px rgba(15, 23, 42, 0.12));
   cursor: text;
 }
 
@@ -59,7 +54,7 @@ docx-toolbar {
   position: absolute;
   width: 1.5px;
   margin-left: -0.75px;
-  background: var(--docx-caret-color);
+  background: var(--docx-caret-color, #111827);
   animation: docx-caret-blink 1.06s steps(1) infinite;
 }
 
@@ -70,11 +65,11 @@ docx-toolbar {
 
 .docx-editor .canvas-selection {
   position: absolute;
-  background: var(--docx-selection);
+  background: var(--docx-selection, rgba(59, 130, 246, 0.28));
 }
 
 .docx-editor .canvas-overlay.inactive .canvas-selection {
-  background: var(--docx-selection-inactive);
+  background: var(--docx-selection-inactive, rgba(148, 163, 184, 0.3));
 }
 
 @keyframes docx-caret-blink {
@@ -84,7 +79,7 @@ docx-toolbar {
 
 /* Receives keyboard, IME and clipboard input; sits at the caret but stays invisible */
 .docx-editor .canvas-editor-input {
-  position: fixed;
+  position: absolute;
   width: 1px;
   height: 1em;
   padding: 0;
@@ -101,21 +96,15 @@ docx-toolbar {
 /* ---------- Optional toolbar ---------- */
 
 .docx-toolbar {
-  --docx-toolbar-bg: #ffffff;
-  --docx-toolbar-border: #e2e8f0;
-  --docx-toolbar-color: #334155;
-  --docx-toolbar-hover: #f1f5f9;
-  --docx-toolbar-active-bg: #e0e7ff;
-  --docx-toolbar-active-color: #3730a3;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   padding: 4px 6px;
-  background: var(--docx-toolbar-bg);
-  border: 1px solid var(--docx-toolbar-border);
+  background: var(--docx-toolbar-bg, #ffffff);
+  border: 1px solid var(--docx-toolbar-border, #e2e8f0);
   border-radius: 8px;
-  color: var(--docx-toolbar-color);
+  color: var(--docx-toolbar-color, #334155);
 }
 
 .docx-toolbar-button {
@@ -143,19 +132,19 @@ docx-toolbar {
 }
 
 .docx-toolbar-button:hover {
-  background: var(--docx-toolbar-hover);
+  background: var(--docx-toolbar-hover, #f1f5f9);
 }
 
 .docx-toolbar-button.active {
-  background: var(--docx-toolbar-active-bg);
-  color: var(--docx-toolbar-active-color);
+  background: var(--docx-toolbar-active-bg, #e0e7ff);
+  color: var(--docx-toolbar-active-color, #3730a3);
 }
 
 .docx-toolbar-separator {
   width: 1px;
   height: 20px;
   margin: 0 4px;
-  background: var(--docx-toolbar-border);
+  background: var(--docx-toolbar-border, #e2e8f0);
 }
 
 .docx-toolbar-color {
@@ -169,7 +158,7 @@ docx-toolbar {
 }
 
 .docx-toolbar-color:hover {
-  background: var(--docx-toolbar-hover);
+  background: var(--docx-toolbar-hover, #f1f5f9);
 }
 
 .docx-toolbar-color input {

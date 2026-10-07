@@ -486,6 +486,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_blank_document_has_a_caret_at_the_start() {
+        use crate::blank_generator::{generate_blank_docx, PageSize};
+        let m = crate::docx_parser::DocxModifier::from_bytes(&generate_blank_docx(PageSize::Letter).unwrap()).unwrap();
+        let elements = m.extract_elements().unwrap();
+        let s = m.get_statistics().unwrap();
+        let mut est = EstimateMeasurer;
+        let l = LayoutEngine::new().compute_layout_with(
+            &elements, &s.background_color, &s.page_setup, &s.header_footer, None, None, 0.0, &mut est,
+        );
+        let caret = caret_box(&l, pos(0, 0), &mut est).expect("an empty paragraph still has a caret");
+        assert_eq!(caret.page, 1);
+        assert!(caret.height > 0.0);
+        let hit = hit_test(&l, 1, caret.x + 200.0, caret.y + caret.height / 2.0, &mut est).unwrap();
+        assert_eq!(hit, pos(0, 0), "clicking anywhere on the empty line lands on it");
+    }
+
     /// Body paragraph 0, a 2×2 table (paragraphs 1–4, row by row), body paragraph 5
     fn table_layout() -> DocumentLayout {
         use crate::docx_parser::{TableCellData, TableInfo, TableRowData};

@@ -28,7 +28,7 @@ npm install @dimarborda/docx-editor
 </script>
 ```
 
-Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"` y `wasm-url`.
+Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `blank` (documento nuevo vacío, con `page-size="a4|letter|legal"` y `autofocus` opcionales), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"` y `wasm-url`.
 
 `<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items="undo redo | bold italic underline color | left center right both | zoom"`.
 
@@ -41,6 +41,7 @@ import '@dimarborda/docx-editor/style.css';
 const editor = await DocxEditor.create(document.querySelector('#editor'), { locale: 'es' });
 
 await editor.open(file);                 // File, Blob, ArrayBuffer o Uint8Array
+editor.openBlank({ pageSize: 'letter' }); // o un documento nuevo vacío, con el cursor listo
 editor.variables();                      // ['{{CLIENTE}}', '{{FECHA}}']
 editor.replaceVariables({ CLIENTE: 'Acme' });
 editor.findReplace('Bogota', 'Bogotá', { matchCase: true });
@@ -52,14 +53,17 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 
 | Método | Qué hace |
 | :--- | :--- |
-| `open(source, { fileName })` / `openSample()` / `close()` | Abrir y cerrar documentos |
+| `open(source, { fileName })` / `openBlank({ fileName, pageSize, focus })` / `openSample()` / `close()` | Abrir, crear y cerrar documentos. `pageSize`: `a4` (predeterminado), `letter` o `legal` |
 | `save()` / `saveBlob()` / `download(name)` | Exportar el `.docx` editado |
 | `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
 | `undo()` / `redo()` | Historial |
 | `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `setColor(hex)` / `setAlignment(align)` | Formato de la selección |
 | `insertTable(rows, cols, headers)` / `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Contenido y apariencia |
-| `setZoom(z)` / `focus()` / `destroy()` | Vista y ciclo de vida |
+| `select(anchor, focus)` | Coloca el cursor o una selección (`{ paragraph, offset }`) |
+| `setZoom(z)` / `focus()` / `destroy()` | Vista y ciclo de vida. Sin cursor previo, `focus()` lo pone al inicio del documento |
+
+El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro del contenedor y `destroy()` lo elimina sin tocar el contenedor (`editor.container`).
 
 | Evento | `detail` |
 | :--- | :--- |
@@ -81,12 +85,19 @@ export function DocxView({ file, onChange }) {
   const ref = useRef(null);
   useEffect(() => {
     let editor;
+    let disposed = false;
     DocxEditor.create(ref.current).then(async e => {
+      // En StrictMode el efecto se monta dos veces: descarta el editor que llega tarde
+      if (disposed) return e.destroy();
       editor = e;
       editor.addEventListener('change', () => onChange?.(editor));
       if (file) await editor.open(file);
+      else editor.openBlank();
     });
-    return () => editor?.destroy();
+    return () => {
+      disposed = true;
+      editor?.destroy();
+    };
   }, [file]);
   return <div ref={ref} style={{ height: '80vh' }} />;
 }
@@ -122,11 +133,11 @@ await registerFont(fileInput.files[0]);  // .ttf/.otf/.woff/.woff2; queda guarda
 
 ## Estilos
 
-Los estilos se personalizan con variables CSS:
+Los estilos se personalizan con variables CSS, definidas en el contenedor del editor o en cualquier ancestro:
 - **Editor:** `--docx-page-gap`, `--docx-page-shadow`, `--docx-page-border`, `--docx-label-color`, `--docx-caret-color`, `--docx-selection`.
 - **Barra de herramientas:** `--docx-toolbar-bg`, `--docx-toolbar-border`, `--docx-toolbar-color`, `--docx-toolbar-hover`, `--docx-toolbar-active-bg`, `--docx-toolbar-active-color`.
 
-El contenedor del editor necesita una altura (por ejemplo `height: 80vh`); dentro de esa altura hace su propio scroll.
+El contenedor del editor necesita una altura (por ejemplo `height: 80vh`, o ser un elemento flex/grid con altura definida); el editor ocupa el 100 % y dentro de esa altura hace su propio scroll.
 
 ## Bundlers
 

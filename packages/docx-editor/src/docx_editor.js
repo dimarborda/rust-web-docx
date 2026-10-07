@@ -13,6 +13,7 @@ const LABELS = {
     nothingToUndo: 'No hay nada para deshacer.',
     nothingToRedo: 'No hay nada para rehacer.',
     clickToFormat: 'Haz clic en el texto para aplicar formato.',
+    untitled: 'documento.docx',
   },
   en: {
     editor: 'Document editor',
@@ -20,6 +21,7 @@ const LABELS = {
     nothingToUndo: 'Nothing to undo.',
     nothingToRedo: 'Nothing to redo.',
     clickToFormat: 'Click in the text to apply formatting.',
+    untitled: 'document.docx',
   },
 };
 
@@ -67,18 +69,23 @@ export class DocxEditor extends EventTarget {
   constructor(container, options = {}) {
     super();
     if (!engineReady()) throw new Error('docx-editor: await initEngine() or use DocxEditor.create()');
-    this.root = container;
     this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', ...options };
     this.labels = { ...(LABELS[this.options.locale] || LABELS.en), ...options.labels };
     this.#zoom = this.options.zoom;
 
-    container.classList.add('docx-editor');
+    // The editor lives in its own element inside `container` and only ever touches that
+    // element: several editors (or a destroyed one and its replacement, as with React's
+    // StrictMode) can share a container without breaking each other.
+    this.container = container;
+    this.root = document.createElement('div');
+    this.root.className = 'docx-editor';
     this.#pages = document.createElement('div');
     this.#pages.className = 'docx-editor-pages';
-    container.appendChild(this.#pages);
+    this.root.appendChild(this.#pages);
+    container.appendChild(this.root);
 
     this.#canvasEditor = createCanvasEditor({
-      root: container,
+      root: this.root,
       labels: this.labels,
       session: () => this.#session,
       paragraphs: () => this.#paragraphs(),
@@ -98,7 +105,7 @@ export class DocxEditor extends EventTarget {
         this[action]();
       }
     };
-    container.addEventListener('keydown', this.#onKeyDown);
+    this.root.addEventListener('keydown', this.#onKeyDown);
 
     // Uploaded fonts change text widths: measure and lay out again
     this.#unsubscribeFonts = onFontsChanged(() => {
@@ -125,6 +132,16 @@ export class DocxEditor extends EventTarget {
   /** Opens the built-in demo contract */
   openSample() {
     this.#replaceSession(DocxSession.new_sample(), 'contrato_ejemplo.docx');
+  }
+
+  /**
+   * Opens a new empty document (one empty paragraph, Calibri 11) and puts the caret in it.
+   * @param {{fileName?: string, pageSize?: 'a4'|'letter'|'legal', focus?: boolean}} [options]
+   */
+  openBlank({ fileName = this.labels.untitled, pageSize = 'a4', focus = true } = {}) {
+    this.#replaceSession(DocxSession.new_blank(pageSize), fileName);
+    this.#canvasEditor.select({ paragraph: 0, offset: 0 });
+    if (focus) this.focus();
   }
 
   /** Closes the current document */
@@ -302,13 +319,22 @@ export class DocxEditor extends EventTarget {
     this.#canvasEditor.focus();
   }
 
+  /**
+   * Places the selection (a collapsed caret when `focus` is omitted) and scrolls it into view.
+   * Positions are `{ paragraph, offset }` as in `selection`.
+   */
+  select(anchor, focus = anchor) {
+    this.#require();
+    this.#canvasEditor.select(anchor, focus);
+  }
+
+  /** Removes the editor's element from the container; the container itself is left as it was */
   destroy() {
     this.close();
     this.#canvasEditor.destroy();
     this.#unsubscribeFonts();
     this.root.removeEventListener('keydown', this.#onKeyDown);
-    this.#pages.remove();
-    this.root.classList.remove('docx-editor');
+    this.root.remove();
   }
 
   // ---------- Internals ----------

@@ -1,6 +1,7 @@
 // Custom elements for HTML-first and framework projects (React, Vue, Svelte, Angular...):
 //
 //   <docx-editor id="doc" src="/plantilla.docx" locale="es"></docx-editor>
+//   <docx-editor blank page-size="letter"></docx-editor>   (new empty document)
 //   <docx-toolbar for="doc"></docx-toolbar>
 //
 // `element.editor` is the DocxEditor (null until the `ready` event). Editor events (load,
@@ -52,6 +53,9 @@ export class DocxEditorElement extends HTMLElement {
     const src = this.getAttribute('src');
     if (src) await this.#openUrl(src);
     else if (this.hasAttribute('sample')) editor.openSample();
+    else if (this.hasAttribute('blank')) {
+      editor.openBlank({ pageSize: this.getAttribute('page-size') || undefined, focus: this.hasAttribute('autofocus') });
+    }
   }
 
   async #openUrl(url) {
