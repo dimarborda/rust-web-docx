@@ -4,7 +4,10 @@
 
 Abre un `.docx`, edítalo directamente sobre la página, rellena variables de plantilla `{{...}}` y descárgalo de nuevo. Ningún archivo sale de tu equipo: no hay servidor.
 
-### ▶ [Probar la demo](https://rust-web-docx.dimarborda.workers.dev/?demo)
+[![npm](https://img.shields.io/npm/v/@dimarborda/docx-editor?color=cb3837&label=npm)](https://www.npmjs.com/package/@dimarborda/docx-editor)
+[![Licencia MIT](https://img.shields.io/badge/licencia-MIT-blue)](LICENSE)
+
+### ▶ [Probar la demo](https://rust-web-docx.dimarborda.workers.dev/?demo) · 📦 [`npm install @dimarborda/docx-editor`](https://www.npmjs.com/package/@dimarborda/docx-editor)
 
 <p align="center">
   <img src="./docs/demo.gif" alt="Edición directa de un contrato y reemplazo de variables de plantilla en Rust DOCX" width="860" />
@@ -41,9 +44,29 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 | [`src/caret.rs`](src/caret.rs) | Hit-testing, posición del cursor y rectángulos de selección |
 | [`src/paragraph_edit.rs`](src/paragraph_edit.rs) | Ediciones de texto, división y unión de párrafos sin pérdidas |
 | [`src/sample_generator.rs`](src/sample_generator.rs) | Documento de demostración generado en memoria |
-| [`src_web/`](src_web) | Interfaz en JavaScript sin framework (Vite) |
+| [`packages/docx-editor/`](packages/docx-editor) | Paquete npm reutilizable: `DocxEditor`, `<docx-editor>` y barra de herramientas opcional |
+| [`apps/demo/`](apps/demo) | La demo publicada, construida sobre el paquete |
 
 Solo se vuelven a maquetar y dibujar las páginas que cambian, y las medidas de texto se guardan en caché, así que escribir sigue siendo fluido en documentos largos.
+
+## Usarlo en tus proyectos
+
+El editor está publicado en npm como [`@dimarborda/docx-editor`](https://www.npmjs.com/package/@dimarborda/docx-editor): un web component que funciona en cualquier frontend y dentro de apps Tauri.
+
+```bash
+npm install @dimarborda/docx-editor
+```
+
+```html
+<docx-toolbar for="doc"></docx-toolbar>
+<docx-editor id="doc" src="/plantilla.docx" style="height: 80vh"></docx-editor>
+<script type="module">
+  import '@dimarborda/docx-editor';
+  import '@dimarborda/docx-editor/style.css';
+</script>
+```
+
+La API completa, los ejemplos con React y Tauri y las opciones de fuentes están en el [README del paquete](packages/docx-editor/README.md). Un ejemplo mínimo de integración está en [`apps/demo/embed.html`](apps/demo/embed.html).
 
 ## Limitaciones conocidas
 
@@ -72,7 +95,8 @@ npm run dev
 Abre `http://localhost:5173`. Si cambias código en `src/`, vuelve a ejecutar `npm run build:wasm`.
 
 - **Pruebas:** `cargo test`
-- **Compilación de producción:** `npm run build` (sale en `dist/`)
+- **Compilación de producción:** `npm run build` (sale en `apps/demo/dist/`)
+- **Ejemplo de integración:** `http://localhost:5173/embed.html`
 - **Documentos propios:** copia tus `.docx` en [`examples/`](examples) y aparecerán en la pantalla de inicio. Esa carpeta está ignorada por git, para que tus documentos nunca terminen en el repositorio.
 
 ## Despliegue
@@ -110,7 +134,7 @@ npm run deploy
 ## Autor
 
 <p align="center">
-  <img src="./src_web/assets/firma-qr.png" alt="Código QR de Dimar Borda" width="130" />
+  <img src="./apps/demo/src/assets/firma-qr.png" alt="Código QR de Dimar Borda" width="130" />
 </p>
 
 <p align="center">

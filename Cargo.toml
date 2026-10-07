@@ -19,7 +19,6 @@ regex = "1.10"
 quick-xml = { version = "0.37", features = ["serialize"] }
 base64 = "0.22"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
 
 [profile.release]
 opt-level = "s"

@@ -1,0 +1,189 @@
+/* @dimarborda/docx-editor — import once: import '@dimarborda/docx-editor/style.css';
+   Customize with the --docx-* variables on .docx-editor / .docx-toolbar or any ancestor. */
+
+docx-editor,
+docx-toolbar {
+  display: block;
+}
+
+.docx-editor {
+  --docx-page-gap: 2rem;
+  --docx-page-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), 0 8px 24px rgba(15, 23, 42, 0.12);
+  --docx-page-border: rgba(15, 23, 42, 0.08);
+  --docx-label-color: #64748b;
+  --docx-caret-color: #111827;
+  --docx-selection: rgba(59, 130, 246, 0.28);
+  --docx-selection-inactive: rgba(148, 163, 184, 0.3);
+  position: relative;
+  overflow: auto;
+}
+
+.docx-editor-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--docx-page-gap);
+  padding: var(--docx-page-gap) 0;
+  min-width: min-content;
+}
+
+.docx-editor-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.docx-editor-page-label {
+  margin-bottom: 0.5rem;
+  font: 500 0.72rem/1.4 system-ui, sans-serif;
+  color: var(--docx-label-color);
+}
+
+.docx-editor-canvas {
+  display: block;
+  background: #ffffff;
+  border: 1px solid var(--docx-page-border);
+  box-shadow: var(--docx-page-shadow);
+  cursor: text;
+}
+
+/* Caret and selection painted over each page */
+.docx-editor .canvas-overlay {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.docx-editor .canvas-caret {
+  position: absolute;
+  width: 1.5px;
+  margin-left: -0.75px;
+  background: var(--docx-caret-color);
+  animation: docx-caret-blink 1.06s steps(1) infinite;
+}
+
+.docx-editor .canvas-caret.with-selection,
+.docx-editor .canvas-overlay.inactive .canvas-caret {
+  display: none;
+}
+
+.docx-editor .canvas-selection {
+  position: absolute;
+  background: var(--docx-selection);
+}
+
+.docx-editor .canvas-overlay.inactive .canvas-selection {
+  background: var(--docx-selection-inactive);
+}
+
+@keyframes docx-caret-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* Receives keyboard, IME and clipboard input; sits at the caret but stays invisible */
+.docx-editor .canvas-editor-input {
+  position: fixed;
+  width: 1px;
+  height: 1em;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ---------- Optional toolbar ---------- */
+
+.docx-toolbar {
+  --docx-toolbar-bg: #ffffff;
+  --docx-toolbar-border: #e2e8f0;
+  --docx-toolbar-color: #334155;
+  --docx-toolbar-hover: #f1f5f9;
+  --docx-toolbar-active-bg: #e0e7ff;
+  --docx-toolbar-active-color: #3730a3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--docx-toolbar-bg);
+  border: 1px solid var(--docx-toolbar-border);
+  border-radius: 8px;
+  color: var(--docx-toolbar-color);
+}
+
+.docx-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.docx-toolbar-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.docx-toolbar-button:hover {
+  background: var(--docx-toolbar-hover);
+}
+
+.docx-toolbar-button.active {
+  background: var(--docx-toolbar-active-bg);
+  color: var(--docx-toolbar-active-color);
+}
+
+.docx-toolbar-separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--docx-toolbar-border);
+}
+
+.docx-toolbar-color {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.docx-toolbar-color:hover {
+  background: var(--docx-toolbar-hover);
+}
+
+.docx-toolbar-color input {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.docx-toolbar-zoom {
+  min-width: 3.2em;
+  text-align: center;
+  font: 500 0.78rem system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}

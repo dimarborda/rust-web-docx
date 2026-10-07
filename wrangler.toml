@@ -3,4 +3,4 @@ name = "rust-web-docx"
 compatibility_date = "2026-10-01"
 
 [assets]
-directory = "./dist"
+directory = "./apps/demo/dist"

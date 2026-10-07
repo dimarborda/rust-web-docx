@@ -1,0 +1,53 @@
+{
+  "name": "@dimarborda/docx-editor",
+  "version": "0.1.0",
+  "description": "Word (.docx) editor for the browser: Rust + WebAssembly layout engine rendered to canvas, as a framework-agnostic web component",
+  "type": "module",
+  "license": "MIT",
+  "author": "Dimar Borda",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dimarborda/rust-web-docx.git",
+    "directory": "packages/docx-editor"
+  },
+  "homepage": "https://rust-web-docx.dimarborda.workers.dev",
+  "keywords": [
+    "docx",
+    "word",
+    "editor",
+    "webassembly",
+    "wasm",
+    "rust",
+    "canvas",
+    "openxml",
+    "web-component",
+    "template"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./fonts": "./src/fonts.js",
+    "./style.css": "./src/style.css"
+  },
+  "sideEffects": [
+    "./src/index.js",
+    "./src/fonts.js",
+    "*.css"
+  ],
+  "files": [
+    "src",
+    "wasm",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@fontsource/arimo": "^5.3.0",
+    "@fontsource/caladea": "^5.3.0",
+    "@fontsource/carlito": "^5.3.0",
+    "@fontsource/cousine": "^5.3.0",
+    "@fontsource/tinos": "^5.3.0"
+  },
+  "types": "./src/index.d.ts"
+}

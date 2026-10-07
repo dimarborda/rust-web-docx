@@ -22,6 +22,8 @@ const TYPING_GROUP_MS = 1500;
  * @param {() => void} env.documentChanged   re-render after an edit
  * @param {(sel) => void} env.selectionChanged
  * @param {(msg: string) => void} env.hint
+ * @param {HTMLElement} env.root             element that hosts the hidden input
+ * @param {object} env.labels                { editor, nothingToUndo, nothingToRedo }
  */
 export function createCanvasEditor(env) {
   let anchor = null;
@@ -40,8 +42,8 @@ export function createCanvasEditor(env) {
   input.setAttribute('autocorrect', 'off');
   input.setAttribute('autocapitalize', 'off');
   input.setAttribute('spellcheck', 'false');
-  input.setAttribute('aria-label', 'Editor del documento');
-  document.body.appendChild(input);
+  input.setAttribute('aria-label', env.labels.editor);
+  env.root.appendChild(input);
 
   // ---------- Geometry (Rust) ----------
 
@@ -236,7 +238,7 @@ export function createCanvasEditor(env) {
     if (!session()) return;
     const result = parse(redo ? session().redo() : session().undo());
     if (!result?.done) {
-      env.hint(redo ? 'No hay nada para rehacer.' : 'No hay nada para deshacer.');
+      env.hint(redo ? env.labels.nothingToRedo : env.labels.nothingToUndo);
       return;
     }
     restoreSelection(result.selection);
@@ -306,6 +308,7 @@ export function createCanvasEditor(env) {
   function positionAt(clientX, clientY) {
     const el = document.elementFromPoint(clientX, clientY);
     if (!el || el.tagName !== 'CANVAS' || !el.dataset.pageNum) return null;
+    if (![...pages.values()].some(p => p.canvas === el)) return null; // another editor's page
     const pt = pagePoint(el, { clientX, clientY });
     return hitTest(Number(el.dataset.pageNum), pt.x, pt.y);
   }
@@ -335,7 +338,7 @@ export function createCanvasEditor(env) {
     paint();
   }
 
-  document.addEventListener('mousemove', e => {
+  function onMouseMove(e) {
     if (!dragging || !(e.buttons & 1)) {
       dragging = false;
       return;
@@ -345,10 +348,12 @@ export function createCanvasEditor(env) {
       setCaret(pos, true);
       paint();
     }
-  });
-  document.addEventListener('mouseup', () => {
+  }
+  function onMouseUp() {
     dragging = false;
-  });
+  }
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
 
   // ---------- Keyboard input ----------
 
@@ -562,6 +567,24 @@ export function createCanvasEditor(env) {
       anchor = focus = null;
       lastEdit = null;
       paint();
+    },
+
+    /** Selects a range, e.g. to restore a selection or select everything */
+    select(newAnchor, newFocus = newAnchor) {
+      anchor = newAnchor;
+      focus = newFocus;
+      goalX = null;
+      paint({ reveal: true });
+    },
+
+    undo: () => undoRedo(false),
+    redo: () => undoRedo(true),
+
+    destroy() {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      input.remove();
+      pages.clear();
     },
   };
 }

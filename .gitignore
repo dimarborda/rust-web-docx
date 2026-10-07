@@ -2,8 +2,9 @@
 target/
 **/*.rs.bk
 
-# WebAssembly build
+# WebAssembly build (generated into the npm package)
 pkg/
+packages/docx-editor/wasm/
 
 # Node & frontend build
 node_modules/

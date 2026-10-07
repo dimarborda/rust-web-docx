@@ -26,7 +26,7 @@
   <meta name="twitter:title" content="Rust DOCX · Edita documentos Word en tu navegador" />
   <meta name="twitter:description" content="Editor de documentos Word (.docx) que funciona 100% en tu navegador: vista fiel a Word, edición directa sobre la página y cambios sin pérdidas. Hecho en Rust + WebAssembly, sin servidores." />
   <meta name="twitter:image" content="https://rust-web-docx.dimarborda.workers.dev/og-image.png" />
-  <link rel="stylesheet" href="/src_web/style.css" />
+  <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
   <div class="app-layout">
@@ -35,7 +35,7 @@
     <header class="navbar">
       <div class="navbar-left">
         <div class="brand">
-          <img class="brand-logo" src="/src_web/assets/logo-dimar-borda.png" alt="Dimar Borda" />
+          <img class="brand-logo" src="/src/assets/logo-dimar-borda.png" alt="Dimar Borda" />
           <div class="brand-text">
             <span class="brand-title">Rust DOCX <span class="badge-wasm">GPU / WASM</span></span>
           </div>
@@ -437,7 +437,7 @@
       <!-- Welcome / Dropzone State (When no document is loaded) -->
       <section id="empty-state-view" class="empty-state">
         <div class="drop-card" id="drop-target">
-          <img class="hero-logo" src="/src_web/assets/logo-dimar-borda.png" alt="Dimar Borda" />
+          <img class="hero-logo" src="/src/assets/logo-dimar-borda.png" alt="Dimar Borda" />
           <h2>Arrastra tu documento <span class="accent-text">.DOCX</span> aquí</h2>
           <p class="drop-hint">Vista multipágina fiel a Word y edición directa sobre la página, con Rust + WebAssembly en tu navegador.</p>
 
@@ -478,7 +478,7 @@
           </div>
 
           <footer class="author-signature">
-            <img class="author-qr" src="/src_web/assets/firma-qr.png" alt="Código QR de Dimar Borda" />
+            <img class="author-qr" src="/src/assets/firma-qr.png" alt="Código QR de Dimar Borda" />
             <div class="author-text">
               <span class="author-label">Hecho por</span>
               <strong>Dimar Borda</strong>
@@ -528,6 +528,6 @@
 
   </div>
 
-  <script type="module" src="/src_web/main.js"></script>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>

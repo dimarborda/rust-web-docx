@@ -1560,3 +1560,29 @@ body {
   background: rgba(239, 68, 68, 0.15);
 }
 
+
+/* ---------- @dimarborda/docx-editor inside the demo's dark shell ---------- */
+.canvas-pages-wrapper.docx-editor {
+  overflow: visible;
+  --docx-page-gap: 2.5rem;
+  --docx-page-shadow: var(--paper-shadow);
+  --docx-page-border: var(--paper-border);
+}
+
+.canvas-pages-wrapper .docx-editor-pages {
+  padding: 0;
+}
+
+.canvas-pages-wrapper .docx-editor-canvas {
+  border-radius: 6px;
+}
+
+.canvas-pages-wrapper .docx-editor-page-label {
+  font-size: 0.74rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
