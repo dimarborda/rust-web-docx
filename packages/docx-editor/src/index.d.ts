@@ -60,6 +60,19 @@ export interface DocxEditorLabels {
 
 export type PageSize = 'a4' | 'letter' | 'legal';
 
+/** `cursor` falls back to the end of the document when there is no caret */
+export type InsertPosition = 'cursor' | 'start' | 'end';
+
+export interface NewParagraph {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  /** Points */
+  fontSize?: number;
+  align?: Alignment;
+}
+
 export interface DocxEditorOptions {
   /** 1 = 100 % (default) */
   zoom?: number;
@@ -119,12 +132,21 @@ export class DocxEditor extends EventTarget {
   fonts(): DocumentFont[];
 
   undo(): void;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
   redo(): void;
   toggleBold(): void;
   toggleItalic(): void;
   toggleUnderline(): void;
   setColor(hex: string, options?: { refocus?: boolean }): void;
   setAlignment(align: Alignment): void;
+  /**
+   * Inserts paragraphs as one undo step and leaves the caret after them. Existing text before
+   * and after the insertion point keeps its own paragraphs.
+   */
+  insertParagraphs(paragraphs: string | Array<string | NewParagraph>, options?: { at?: InsertPosition }): { first: number; count: number };
+  /** Inserts plain text as one undo step; each line becomes a paragraph */
+  insertText(text: string, options?: { at?: InsertPosition }): { first: number; count: number };
   insertTable(rows: number, cols: number, headers?: string[]): void;
   setBackgroundColor(hex: string): void;
   /** View-only diagonal watermark; pass null to remove it */

@@ -255,6 +255,29 @@ impl DocxSession {
         to_json(&caret)
     }
 
+    /// Inserts paragraphs at a position as one undo step (see `DocxModifier::insert_paragraphs`).
+    /// `paragraphs_json`: `[{ "text": "...", "bold": true, "font_size": 16, "align": "center" }, ...]`.
+    /// Returns `{ "first": n, "count": n, "caret": { "paragraph": n, "offset": n } }`.
+    #[wasm_bindgen]
+    pub fn insert_paragraphs(
+        &mut self,
+        paragraph: usize,
+        offset: usize,
+        paragraphs_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let paragraphs: Vec<docx_parser::NewParagraph> = serde_json::from_str(paragraphs_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before);
+        let (first, (p, o)) = self
+            .modifier
+            .insert_paragraphs(paragraph, offset, &paragraphs)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: p, offset: o };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
+    }
+
     /// Undoes the last step: `{done, selection}` (selection is the JSON given before the step)
     #[wasm_bindgen]
     pub fn undo(&mut self) -> String {

@@ -45,6 +45,10 @@ editor.openBlank({ pageSize: 'letter' }); // o un documento nuevo vacío, con el
 editor.variables();                      // ['{{CLIENTE}}', '{{FECHA}}']
 editor.replaceVariables({ CLIENTE: 'Acme' });
 editor.findReplace('Bogota', 'Bogotá', { matchCase: true });
+editor.insertParagraphs([
+  { text: 'CONTRATO DE SERVICIOS', bold: true, fontSize: 16, align: 'center' },
+  'Entre las partes se acuerda lo siguiente.',
+], { at: 'end' });                        // un solo ⌘Z lo deshace
 const bytes = editor.save();             // Uint8Array del .docx editado
 
 editor.addEventListener('change', () => console.log(editor.stats()));
@@ -57,7 +61,8 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `save()` / `saveBlob()` / `download(name)` | Exportar el `.docx` editado |
 | `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
-| `undo()` / `redo()` | Historial |
+| `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio o al final, como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align }` |
+| `undo()` / `redo()` / `canUndo` / `canRedo` | Historial |
 | `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `setColor(hex)` / `setAlignment(align)` | Formato de la selección |
 | `insertTable(rows, cols, headers)` / `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Contenido y apariencia |
 | `select(anchor, focus)` | Coloca el cursor o una selección (`{ paragraph, offset }`) |

@@ -252,6 +252,15 @@ export class DocxEditor extends EventTarget {
     this.#canvasEditor.undo();
   }
 
+  /** Whether `undo()` / `redo()` have a step to apply */
+  get canUndo() {
+    return !!this.#session?.can_undo();
+  }
+
+  get canRedo() {
+    return !!this.#session?.can_redo();
+  }
+
   redo() {
     this.#canvasEditor.redo();
   }
@@ -279,6 +288,41 @@ export class DocxEditor extends EventTarget {
     const items = this.#selectedRanges();
     if (!items) return this.#emit('message', { message: this.labels.clickToFormat, error: false });
     this.#applyUpdates(items.map(it => ({ index: it.p.index, runs: it.p.runs || [], align })), true);
+  }
+
+  /**
+   * Inserts paragraphs as one undo step and leaves the caret after the last one. Each item is
+   * a string or `{ text, bold, italic, underline, fontSize, align }` (unset properties are
+   * inherited; `fontSize` in points). Text before and after the insertion point keeps its own
+   * paragraphs; a "\n" inside an item is a line break within that paragraph.
+   * @param {string | Array<string | {text: string, bold?: boolean, italic?: boolean, underline?: boolean, fontSize?: number, align?: 'left'|'center'|'right'|'both'}>} paragraphs
+   * @param {{at?: 'cursor'|'start'|'end'}} [options]  `cursor` (default) falls back to the end
+   *        of the document when there is no caret
+   * @returns {{first: number, count: number}} index of the first new paragraph and how many
+   */
+  insertParagraphs(paragraphs, { at = 'cursor' } = {}) {
+    this.#require();
+    const items = (Array.isArray(paragraphs) ? paragraphs : [paragraphs])
+      .map(p => (typeof p === 'string' ? { text: p } : p))
+      .map(({ text = '', bold, italic, underline, fontSize, align }) => ({
+        text: String(text), bold, italic, underline, font_size: fontSize, align,
+      }));
+    if (!items.length) return { first: -1, count: 0 };
+
+    const pos = this.#insertionPoint(at);
+    const selection = this.#canvasEditor.selection();
+    const result = JSON.parse(this.#session.insert_paragraphs(
+      pos.paragraph, pos.offset, JSON.stringify(items),
+      selection ? JSON.stringify({ anchor: selection.anchor, focus: selection.focus }) : undefined,
+    ));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { first: result.first, count: result.count };
+  }
+
+  /** Inserts plain text as one undo step; each line becomes a paragraph, as when pasting */
+  insertText(text, options) {
+    return this.insertParagraphs(String(text).replace(/\r\n?/g, '\n').split('\n'), options);
   }
 
   /** Appends a table at the end of the document */
@@ -510,6 +554,20 @@ export class DocxEditor extends EventTarget {
     }
     this.#changed();
     if (refocus) this.#canvasEditor.focus();
+  }
+
+  /** Where `insertParagraphs` puts new content: the caret, or the start/end of the body */
+  #insertionPoint(at) {
+    if (at === 'cursor') {
+      const selection = this.#canvasEditor.selection();
+      if (selection) return selection.end;
+    }
+    const list = this.#paragraphs().list;
+    const body = list.filter(p => p.container === 'body');
+    if (at === 'start' && body.length) return { paragraph: body[0].index, offset: 0 };
+    const last = body[body.length - 1] ?? list[list.length - 1];
+    if (!last) throw new Error('docx-editor: the document has no paragraphs');
+    return { paragraph: last.index, offset: Array.from(last.text || '').length };
   }
 
   /** Formatting applies to the selected characters, or to the paragraph at the caret */

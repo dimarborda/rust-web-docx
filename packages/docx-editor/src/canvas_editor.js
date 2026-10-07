@@ -585,6 +585,7 @@ export function createCanvasEditor(env) {
       anchor = newAnchor;
       focus = newFocus;
       goalX = null;
+      lastEdit = null; // typing after a programmatic change starts a new undo step
       paint({ reveal: true });
     },
 

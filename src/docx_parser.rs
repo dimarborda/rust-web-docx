@@ -553,6 +553,31 @@ pub struct ReplaceResult {
 }
 
 /// One paragraph edit: new text, optional per-character formatting and alignment
+/// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
+/// whole paragraph (unset properties are inherited) and alignment.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct NewParagraph {
+    pub text: String,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub underline: Option<bool>,
+    /// Points, e.g. 16.0
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    /// "left" | "center" | "right" | "both"
+    #[serde(default)]
+    pub align: Option<String>,
+}
+
+impl NewParagraph {
+    fn has_format(&self) -> bool {
+        self.bold.is_some() || self.italic.is_some() || self.underline.is_some() || self.font_size.is_some()
+    }
+}
+
 struct ParagraphEdit<'a> {
     index: usize,
     text: &'a str,
@@ -850,6 +875,73 @@ impl DocxModifier {
     /// The editor's single edit primitive: replaces the selection (`p1`,`o1`)–(`p2`,`o2`) with
     /// `text`. `\n` in `text` starts a new paragraph and `\u{000B}` is a line break inside
     /// the paragraph (like Word's ^l). Returns the caret position after the inserted text.
+    /// Inserts `paragraphs` at (`index`, `offset`) as paragraphs of their own: text before and
+    /// after the position stays in its own paragraph. Formatting applies to each new paragraph.
+    /// Returns the index of the first inserted paragraph and the caret after the last one.
+    pub fn insert_paragraphs(
+        &mut self,
+        index: usize,
+        offset: usize,
+        paragraphs: &[NewParagraph],
+    ) -> Result<(usize, (usize, usize)), String> {
+        if paragraphs.is_empty() {
+            return Err("No hay párrafos para insertar.".to_string());
+        }
+        let current = {
+            let xml = self.get_file_string("word/document.xml")?;
+            let range = self.body_paragraph(&xml, index)?;
+            parse_paragraph_fragment(&xml[range], &self.styles).text
+        };
+        let len = current.chars().count();
+        let offset = offset.min(len);
+        let break_before = offset > 0;
+        let break_after = offset < len;
+
+        // A line break inside one paragraph travels as U+000B (Word's Shift+Enter)
+        let lines: Vec<String> = paragraphs.iter().map(|p| p.text.replace("\r\n", "\n").replace('\n', "\u{000B}")).collect();
+        let mut text = String::new();
+        if break_before {
+            text.push('\n');
+        }
+        text.push_str(&lines.join("\n"));
+        if break_after {
+            text.push('\n');
+        }
+        self.replace_range(index, offset, index, offset, &text)?;
+
+        let first = index + usize::from(break_before);
+        let texts: Vec<String> = lines.iter().map(|l| l.replace('\u{000B}', "\n")).collect();
+        let edits: Vec<ParagraphEdit> = paragraphs
+            .iter()
+            .zip(&texts)
+            .enumerate()
+            .filter(|(_, (p, text))| p.align.is_some() || (p.has_format() && !text.is_empty()))
+            .map(|(i, (p, text))| ParagraphEdit {
+                index: first + i,
+                text: text.as_str(),
+                formats: p.has_format().then(|| {
+                    vec![
+                        FormatTarget {
+                            bold: p.bold,
+                            italic: p.italic,
+                            underline: p.underline,
+                            font_size: p.font_size,
+                            ..Default::default()
+                        };
+                        text.chars().count()
+                    ]
+                }),
+                align: p.align.as_deref(),
+            })
+            .collect();
+        if !edits.is_empty() {
+            self.edit_body_paragraphs(&edits)?;
+        }
+
+        let last = first + paragraphs.len() - 1;
+        Ok((first, (last, texts.last().map_or(0, |t| t.chars().count()))))
+    }
+
     pub fn replace_range(
         &mut self,
         p1: usize,
