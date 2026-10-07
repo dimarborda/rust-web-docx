@@ -1569,9 +1569,30 @@ fn layout_paragraph_lines(
                         line_w += w;
                     }
                 }
-                for (t, seg, w) in &pieces {
-                    append_segment_to_runs(&mut runs, t, seg, *w);
-                    line_w += w;
+                if word_w <= max_width(idx) {
+                    for (t, seg, w) in &pieces {
+                        append_segment_to_runs(&mut runs, t, seg, *w);
+                        line_w += w;
+                    }
+                } else {
+                    // A word wider than the whole line (a long placeholder in a narrow table
+                    // column, a URL) breaks between characters, as Word does
+                    for (t, seg, _) in &pieces {
+                        for (i, ch) in t.chars().enumerate() {
+                            let offset = seg.start + i;
+                            let text = ch.to_string();
+                            let w = seg_width(m, seg, &text, family_css);
+                            if line_w + w > max_width(idx) && !runs.is_empty() {
+                                lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, offset)));
+                                line_w = 0.0;
+                                line_start = offset;
+                                idx += 1;
+                            }
+                            let piece = LayoutSegment { start: offset, ..seg.clone() };
+                            append_segment_to_runs(&mut runs, &text, &piece, w);
+                            line_w += w;
+                        }
+                    }
                 }
                 just_wrapped = false;
             }

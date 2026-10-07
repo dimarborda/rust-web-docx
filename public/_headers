@@ -1,0 +1,9 @@
+# Cloudflare Pages response headers
+
+# Vite fingerprints everything in /assets (wasm, js, css, fonts): safe to cache for a year
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

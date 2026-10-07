@@ -546,5 +546,17 @@ mod tests {
         // ↑ from the paragraph above the table enters the column under the caret
         assert_eq!(move_vertical(&l, pos(0, 1), 1, x_b, &mut Mono).map(|p| p.paragraph), Some(2));
     }
+
+    #[test]
+    fn test_words_wider_than_the_line_break_between_characters() {
+        // 100 characters without spaces on a 67-character line: 67 + 33, like Word
+        let l = layout(vec![para(0, &"x".repeat(100), "left")]);
+        let first = caret_box(&l, pos(0, 66), &mut Mono).unwrap();
+        let second = caret_box(&l, pos(0, 67), &mut Mono).unwrap();
+        assert!(second.y > first.y, "the word continues on the next line");
+        assert_eq!(second.x, LEFT);
+        assert_eq!(caret_box(&l, pos(0, 100), &mut Mono).unwrap().x, LEFT + 330.0);
+        assert_eq!(hit_test(&l, 1, LEFT + 50.0, second.y + 1.0, &mut Mono), Some(pos(0, 72)));
+    }
 }
 

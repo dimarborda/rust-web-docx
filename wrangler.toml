@@ -1,0 +1,6 @@
+# Cloudflare Workers static assets: serves the Vite build of the Rust/WASM editor (no server code)
+name = "rust-web-docx"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./dist"

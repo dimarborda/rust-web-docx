@@ -7,11 +7,22 @@
     "build:wasm": "npx -y wasm-pack build --target web --out-dir pkg",
     "dev": "vite",
     "build": "npx -y wasm-pack build --target web --out-dir pkg && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && npx -y wrangler deploy"
   },
   "devDependencies": {
     "vite": "^6.2.0",
-    "vite-plugin-wasm": "^3.4.1",
-    "vite-plugin-top-level-await": "^1.4.4"
+    "vite-plugin-top-level-await": "^1.4.4",
+    "vite-plugin-wasm": "^3.4.1"
+  },
+  "dependencies": {
+    "@fontsource/arimo": "^5.3.0",
+    "@fontsource/caladea": "^5.3.0",
+    "@fontsource/carlito": "^5.3.0",
+    "@fontsource/cousine": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/outfit": "^5.3.0",
+    "@fontsource/tinos": "^5.3.0"
   }
 }

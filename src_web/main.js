@@ -1,5 +1,6 @@
 import init, { DocxSession } from '../pkg/rust_web_docx.js';
 import { createCanvasEditor } from './canvas_editor.js';
+import './fonts.js';
 
 // Application State
 let wasmReady = false;
@@ -1661,4 +1662,6 @@ if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   await initFontManager();
   await initializeWasm();
   setupEventListeners();
+  // ?demo opens the demo contract right away (handy for shared links and previews)
+  if (new URLSearchParams(location.search).has('demo')) loadSampleDocx();
 })();
