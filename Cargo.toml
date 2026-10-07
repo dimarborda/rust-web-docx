@@ -2,6 +2,9 @@
 name = "rust-web-docx"
 version = "0.1.0"
 edition = "2021"
+description = "Word (.docx) editor that runs in the browser: Rust + WebAssembly layout engine rendered to canvas"
+repository = "https://github.com/dimarborda/rust-web-docx"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
