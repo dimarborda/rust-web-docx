@@ -124,12 +124,17 @@ npm run deploy
 | `⌘B` `⌘I` `⌘U` | Negrita, cursiva, subrayado |
 | `⌘F` / `Ctrl+F` | Buscar y reemplazar |
 | `⌘S` / `Ctrl+S` | Descargar el `.docx` |
+| Clic en una imagen | Seleccionarla (asas para cambiar el tamaño; las esquinas mantienen la proporción, `Shift` la libera) |
+| Arrastrar una imagen flotante | Moverla |
+| Flechas / `Shift` + flechas | Mover la imagen flotante seleccionada 1 px / 10 px |
+| `Supr` / `Retroceso` | Eliminar la imagen seleccionada |
+| `Esc` | Volver al texto |
 
 ---
 
 ## English
 
-**Rust DOCX** is a Word (`.docx`) editor that runs entirely in the browser: a Rust core compiled to WebAssembly parses the OpenXML, lays out pages the way Word does (style cascade, real font metrics, pagination, tables, anchored images) and renders them to a 2D canvas with its own caret and selection. Edits are lossless: only the XML you touched is rewritten. Template placeholders like `{{FIELD}}` are replaced even when Word splits them across runs. No server is involved, so documents never leave your machine.
+**Rust DOCX** is a Word (`.docx`) editor that runs entirely in the browser: a Rust core compiled to WebAssembly parses the OpenXML, lays out pages the way Word does (style cascade, real font metrics, pagination, tables, inline pictures that flow with the text and floating ones that text wraps around) and renders them to a 2D canvas with its own caret and selection. Pictures can be selected, resized, moved and re-wrapped with the mouse or from code (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`). Edits are lossless: only the XML you touched is rewritten. Template placeholders like `{{FIELD}}` are replaced even when Word splits them across runs. No server is involved, so documents never leave your machine.
 
 [Try the live demo](https://rust-web-docx.dimarborda.workers.dev/?demo). It is a lab prototype; see the [known limitations](#limitaciones-conocidas) above.
 

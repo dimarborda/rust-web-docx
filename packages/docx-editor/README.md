@@ -30,7 +30,7 @@ npm install @dimarborda/docx-editor
 
 Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `blank` (documento nuevo vacío, con `page-size="a4|letter|legal"` y `autofocus` opcionales), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"` y `wasm-url`.
 
-`<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items="undo redo | bold italic underline color | left center right both | zoom"`.
+`<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items="undo redo | bold italic underline color | left center right both | imageWrap | zoom"`. `imageWrap` es un selector del ajuste de texto que se activa al seleccionar una imagen; con una imagen seleccionada, los botones de alineación alinean la imagen.
 
 ## Uso desde JavaScript
 
