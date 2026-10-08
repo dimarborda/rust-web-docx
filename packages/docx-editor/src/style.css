@@ -72,6 +72,47 @@ docx-toolbar {
   background: var(--docx-selection-inactive, rgba(148, 163, 184, 0.3));
 }
 
+/* Selected picture: frame with eight resize handles; floating pictures can be dragged */
+.docx-editor .canvas-image-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--docx-image-frame, #2563eb);
+  pointer-events: auto;
+  cursor: default;
+}
+
+.docx-editor .canvas-image-frame.movable {
+  cursor: move;
+}
+
+.docx-editor .canvas-image-frame.dragging {
+  border-style: dashed;
+  background: var(--docx-image-drag, rgba(37, 99, 235, 0.08));
+}
+
+.docx-editor .canvas-image-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1.5px solid var(--docx-image-frame, #2563eb);
+  border-radius: 2px;
+}
+
+.docx-editor .canvas-image-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.docx-editor .canvas-image-handle.n { left: calc(50% - 4.5px); top: -5px; cursor: ns-resize; }
+.docx-editor .canvas-image-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.docx-editor .canvas-image-handle.e { right: -5px; top: calc(50% - 4.5px); cursor: ew-resize; }
+.docx-editor .canvas-image-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.docx-editor .canvas-image-handle.s { left: calc(50% - 4.5px); bottom: -5px; cursor: ns-resize; }
+.docx-editor .canvas-image-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.docx-editor .canvas-image-handle.w { left: -5px; top: calc(50% - 4.5px); cursor: ew-resize; }
+
+.docx-editor .canvas-overlay.inactive .canvas-image-frame {
+  border-color: var(--docx-image-frame-inactive, #94a3b8);
+}
+
 @keyframes docx-caret-blink {
   0%, 50% { opacity: 1; }
   50.01%, 100% { opacity: 0; }
@@ -175,4 +216,20 @@ docx-toolbar {
   text-align: center;
   font: 500 0.78rem system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
+}
+
+.docx-toolbar-select {
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--docx-toolbar-border, #e2e8f0);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: 500 0.78rem system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.docx-toolbar-select:disabled {
+  opacity: 0.45;
+  cursor: default;
 }

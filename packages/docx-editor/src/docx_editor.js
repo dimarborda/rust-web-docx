@@ -4,7 +4,7 @@
 import { DocxSession, engineReady, initEngine } from './engine.js';
 import { createCanvasEditor } from './canvas_editor.js';
 import { onFontsChanged } from './fonts_registry.js';
-import { disableLigatures, drawPageItems, layoutFontFaces, measureText, usesSubstitute } from './render.js';
+import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
 
 const LABELS = {
   es: {
@@ -42,6 +42,7 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * - `load`             a document was opened
  * - `change`           the document changed (typing, formatting, replacements…)
  * - `selectionchange`  detail: { selection, format } with format = { bold, italic, underline, color, align }
+ * - `imageselect`      detail: { image } the picture selected with the mouse or `selectImage()` (null when none)
  * - `message`          detail: { message, error } hints and errors meant for the user
  */
 export class DocxEditor extends EventTarget {
@@ -63,6 +64,11 @@ export class DocxEditor extends EventTarget {
   #canvasEditor;
   #pages;
   #unsubscribeFonts;
+  #onFontsLoaded;
+  #fontsRelayout = 0;
+  /** Probe widths of the fonts the last layout was measured with */
+  #fontWidths = '';
+  #fontChecks = [];
   #onKeyDown;
 
   /** Use `DocxEditor.create()` unless the engine is already initialized (`initEngine()`) */
@@ -94,6 +100,9 @@ export class DocxEditor extends EventTarget {
       documentChanged: () => this.#changed(),
       selectionChanged: selection => this.#emit('selectionchange', { selection, format: this.#formatAt(selection) }),
       hint: message => this.#emit('message', { message, error: false }),
+      imageSelected: ref => this.#emit('imageselect', { image: ref ? this.#imageInfo(ref) : null }),
+      imageEdited: (ref, change) => this.#userImageEdit(ref, change),
+      imageDeleted: ref => this.#userImageEdit(ref, null),
     });
 
     // Formatting shortcuts while the caret is in this editor
@@ -108,11 +117,12 @@ export class DocxEditor extends EventTarget {
     this.root.addEventListener('keydown', this.#onKeyDown);
 
     // Uploaded fonts change text widths: measure and lay out again
-    this.#unsubscribeFonts = onFontsChanged(() => {
-      if (!this.#session) return;
-      this.#session.reset_measurements();
-      this.#render({ full: true });
-    });
+    this.#unsubscribeFonts = onFontsChanged(() => this.#relayoutForFonts());
+
+    // Any web font that finishes loading (also those a canvas requested on its own, which
+    // Safari does not report to document.fonts.load) may change text widths
+    this.#onFontsLoaded = () => this.#relayoutForFonts();
+    document.fonts?.addEventListener?.('loadingdone', this.#onFontsLoaded);
   }
 
   // ---------- Documents ----------
@@ -356,25 +366,195 @@ export class DocxEditor extends EventTarget {
   }
 
   /**
-   * Inserts a PNG, JPEG or GIF picture in a paragraph of its own as one undo step and leaves
-   * the caret in the paragraph after it. Without a size the picture keeps its pixel size; it
-   * never exceeds the text width of the page.
+   * Inserts a PNG, JPEG or GIF picture as one undo step. Without a size the picture keeps its
+   * pixel size; it never exceeds the text width of the page.
+   * - In line with the text (default `wrap`): in a paragraph of its own, with the caret after it.
+   * - Floating (`wrap` = 'square', 'tight', 'through', 'topAndBottom', 'behind' or 'inFront'):
+   *   anchored to the paragraph at the position, which keeps its text and the caret. Place it
+   *   with `horizontal` / `vertical` (default: at the paragraph's start).
    * @param {Uint8Array | ArrayBuffer | Blob | string} image bytes, a Blob/File or a `data:` URL
-   * @param {{at?: 'cursor'|'start'|'end', width?: number, height?: number, align?: 'left'|'center'|'right', alt?: string}} [options]
+   * @param {{at?: 'cursor'|'start'|'end', width?: number, height?: number, align?: 'left'|'center'|'right', alt?: string,
+   *          wrap?: ImageWrap, wrapSide?: 'bothSides'|'left'|'right'|'largest', horizontal?: object, vertical?: object,
+   *          distance?: number}} [options]
    *        `width` / `height` in CSS px (one is enough: the aspect ratio is kept)
-   * @returns {Promise<{paragraph: number}>} index of the picture's paragraph
+   * @returns {Promise<{paragraph: number, index: number}>} the new picture (see `images()`)
    */
-  async insertImage(image, { at = 'cursor', width, height, align, alt } = {}) {
+  async insertImage(image, { at = 'cursor', width, height, align, alt, wrap, wrapSide, horizontal, vertical, distance } = {}) {
     this.#require();
     const bytes = await toBytes(image);
     this.#require();
     const pos = this.#insertionPoint(at);
+    const floating = wrap && wrap !== 'inline';
+    const payload = {
+      ...(floating ? imageUpdatePayload({ wrap, wrapSide, horizontal, vertical, distance }) : {}),
+      width, height, align, alt,
+    };
     const result = JSON.parse(this.#session.insert_image(
-      pos.paragraph, pos.offset, bytes, JSON.stringify({ width, height, align, alt }), this.#selectionJSON(),
+      pos.paragraph, pos.offset, bytes, JSON.stringify(payload), this.#selectionJSON(),
     ));
     this.#changed();
     this.#canvasEditor.select(result.caret);
-    return { paragraph: result.paragraph };
+    return { paragraph: result.paragraph, index: 0 };
+  }
+
+  // ---------- Pictures ----------
+
+  /**
+   * Every picture of the document body (table cells included) in document order. A picture is
+   * addressed by `{ paragraph, index }` (its paragraph and its position among that paragraph's
+   * pictures); any object with those two fields, such as an item of this list, works as `ref`.
+   * Lengths are CSS px at 100 % zoom.
+   * @returns {ImageInfo[]}
+   */
+  images() {
+    if (!this.#session) return [];
+    return JSON.parse(this.#session.list_images()).map(imageInfo);
+  }
+
+  /** The picture selected with the mouse (or `selectImage()`), or null */
+  get selectedImage() {
+    const ref = this.#canvasEditor.selectedImage();
+    return ref ? this.#imageInfo(ref) : null;
+  }
+
+  /** Selects a picture as if it had been clicked (null goes back to the text caret) */
+  selectImage(ref) {
+    this.#require();
+    if (ref && !this.#imageInfo(ref)) throw new Error('docx-editor: no such picture');
+    this.#canvasEditor.selectImage(ref ? { paragraph: ref.paragraph, index: ref.index } : null);
+  }
+
+  /**
+   * Changes a picture as one undo step and returns it as it is now. Unset fields keep their
+   * value. Moving needs a floating picture: set `wrap` first (or in the same call).
+   * @param {{paragraph: number, index: number}} ref
+   * @param {{width?: number, height?: number, keepRatio?: boolean, wrap?: ImageWrap,
+   *          wrapSide?: 'bothSides'|'left'|'right'|'largest',
+   *          horizontal?: {relativeTo?: string, offset?: number, align?: 'left'|'center'|'right'|'inside'|'outside'},
+   *          vertical?: {relativeTo?: string, offset?: number, align?: 'top'|'center'|'bottom'|'inside'|'outside'},
+   *          distance?: number | {top?: number, bottom?: number, left?: number, right?: number}, alt?: string}} changes
+   *        `keepRatio` (default true) scales the other side when only width or height is given.
+   *        `horizontal.relativeTo`: 'margin' | 'page' | 'column' | 'character' | 'leftMargin' | 'rightMargin' | …
+   *        `vertical.relativeTo`: 'margin' | 'page' | 'paragraph' | 'line' | 'topMargin' | 'bottomMargin' | …
+   *        An `offset` is the distance from the frame's left/top edge; `align` replaces it.
+   * @returns {ImageInfo}
+   */
+  updateImage(ref, changes = {}) {
+    this.#require();
+    const payload = imageUpdatePayload(changes);
+    this.#session.update_image(ref.paragraph, ref.index, JSON.stringify(payload), this.#selectionJSON());
+    this.#changed();
+    return this.#imageChanged(ref);
+  }
+
+  /**
+   * Resizes a picture. With only one side the other follows the aspect ratio.
+   * @param {{paragraph: number, index: number}} ref
+   * @param {{width?: number, height?: number, keepRatio?: boolean, scale?: number}} size
+   *        `scale` multiplies the current size (e.g. 0.5)
+   */
+  resizeImage(ref, { width, height, keepRatio = true, scale } = {}) {
+    if (scale > 0) {
+      const info = this.#requireImage(ref);
+      return this.updateImage(ref, { width: info.width * scale, height: info.height * scale });
+    }
+    return this.updateImage(ref, { width, height, keepRatio });
+  }
+
+  /**
+   * Moves a floating picture: to page coordinates `{x, y}` (its top-left corner, CSS px from
+   * the page's corner) or by `{dx, dy}`. Its position stays relative to the same frame
+   * (margin, paragraph…) when it had an offset; an aligned axis becomes relative to the page.
+   * A picture in line with the text first becomes `square` (text wraps around it).
+   * @param {{paragraph: number, index: number}} ref
+   * @param {{x?: number, y?: number, dx?: number, dy?: number}} to
+   */
+  moveImage(ref, { x, y, dx, dy } = {}) {
+    let info = this.#requireImage(ref);
+    if (!info.anchored) info = this.updateImage(ref, { wrap: 'square' });
+    if (!info.bounds) throw new Error('docx-editor: the picture has not been laid out yet');
+    const deltaX = x != null ? x - info.bounds.x : dx || 0;
+    const deltaY = y != null ? y - info.bounds.y : dy || 0;
+    if (!deltaX && !deltaY) return info;
+    return this.updateImage(ref, moveChanges(info, deltaX, deltaY));
+  }
+
+  /**
+   * How text flows around a picture:
+   * - 'inline'       in line with the text, like a big character
+   * - 'square'       text wraps around its box; 'tight' / 'through' wrap around its contour
+   *                  (drawn as its box)
+   * - 'topAndBottom' text above and below only
+   * - 'behind' / 'inFront'  floats behind or over the text, which ignores it
+   * @param {{paragraph: number, index: number}} ref
+   * @param {ImageWrap} wrap
+   * @param {{side?: 'bothSides'|'left'|'right'|'largest', distance?: number | object}} [options]
+   */
+  setImageWrap(ref, wrap, { side, distance } = {}) {
+    return this.updateImage(ref, { wrap, wrapSide: side, distance });
+  }
+
+  /**
+   * Aligns a picture horizontally: a floating one within the margins, an inline one by
+   * aligning its paragraph.
+   * @param {{paragraph: number, index: number}} ref
+   * @param {'left'|'center'|'right'} align
+   */
+  alignImage(ref, align) {
+    const info = this.#requireImage(ref);
+    if (info.anchored) return this.updateImage(ref, { horizontal: { relativeTo: 'margin', align } });
+    const p = this.#paragraphs().byIndex.get(ref.paragraph);
+    this.#applyUpdates([{ index: ref.paragraph, runs: p?.runs || [], align }], false);
+    return this.#imageChanged(ref);
+  }
+
+  /** Deletes a picture as one undo step */
+  deleteImage(ref) {
+    this.#require();
+    if (sameRef(ref, this.#canvasEditor.selectedImage())) this.#canvasEditor.selectImage(null);
+    this.#session.delete_image(ref.paragraph, ref.index, this.#selectionJSON());
+    this.#changed();
+  }
+
+  #imageInfo(ref) {
+    return this.images().find(img => sameRef(img, ref)) || null;
+  }
+
+  /** The picture after a change; tells listeners when it is the selected one */
+  #imageChanged(ref) {
+    const info = this.#imageInfo(ref);
+    if (sameRef(ref, this.#canvasEditor.selectedImage())) this.#emit('imageselect', { image: info });
+    return info;
+  }
+
+  #requireImage(ref) {
+    this.#require();
+    const info = this.#imageInfo(ref);
+    if (!info) throw new Error('docx-editor: no such picture');
+    return info;
+  }
+
+  /** Resize/move with the mouse or keyboard (`change` = null deletes) */
+  #userImageEdit(ref, change) {
+    try {
+      if (!change) {
+        this.deleteImage(ref);
+        return;
+      }
+      const info = this.#requireImage(ref);
+      const changes = {};
+      let { dx = 0, dy = 0 } = change;
+      if (change.width != null) {
+        Object.assign(changes, { width: change.width, height: change.height });
+        // Resizing keeps an aligned picture aligned (as Word does); offsets keep the far edge
+        if (info.horizontal?.align != null) dx = 0;
+        if (info.vertical?.align != null) dy = 0;
+      }
+      if ((dx || dy) && info.anchored) Object.assign(changes, moveChanges(info, dx, dy));
+      if (Object.keys(changes).length) this.updateImage(ref, changes);
+    } catch (err) {
+      this.#emit('message', { message: String(err), error: true });
+    }
   }
 
   /** Current selection as stored with an undo step */
@@ -428,6 +608,9 @@ export class DocxEditor extends EventTarget {
     this.close();
     this.#canvasEditor.destroy();
     this.#unsubscribeFonts();
+    document.fonts?.removeEventListener?.('loadingdone', this.#onFontsLoaded);
+    cancelAnimationFrame(this.#fontsRelayout);
+    this.#fontChecks.forEach(clearTimeout);
     this.root.removeEventListener('keydown', this.#onKeyDown);
     this.root.remove();
   }
@@ -487,6 +670,7 @@ export class DocxEditor extends EventTarget {
       this.#refreshElements();
       const redrawAll = full || this.#rendered.session !== session || this.#rendered.zoom !== this.#zoom;
       const previous = this.#layout;
+      this.#fontWidths = fontWidthsSignature(this.#requestedFaces);
       const layout = JSON.parse(session.compute_canvas_layout_json(
         this.#watermark?.text ?? null, this.#watermark?.opacity ?? 0.2, measureText, !redrawAll,
       ));
@@ -569,11 +753,32 @@ export class DocxEditor extends EventTarget {
     const pending = [...layoutFontFaces(layout)].filter(face => !this.#requestedFaces.has(face));
     if (!pending.length) return;
     pending.forEach(face => this.#requestedFaces.add(face));
-    Promise.all(pending.map(face => document.fonts.load(face).catch(() => []))).then(results => {
-      if (results.some(loaded => loaded.length > 0) && this.#session) {
-        this.#session.reset_measurements();
-        this.#render({ full: true });
-      }
+    // One request per family: WebKit only loads the first family of a list ("Calibri", which
+    // usually does not exist), never the substitute behind it
+    const requests = pending.flatMap(splitFontFamilies);
+    Promise.all(requests.map(face => document.fonts.load(face).catch(() => []))).then(results => {
+      if (results.some(loaded => loaded.length > 0)) this.#relayoutForFonts();
+    });
+    this.#watchFontWidths();
+  }
+
+  /** A font reported as loaded may still draw with the fallback for a moment (Safari): check
+   *  the measured widths for a few seconds and lay out again as soon as they change */
+  #watchFontWidths() {
+    this.#fontChecks.forEach(clearTimeout);
+    this.#fontChecks = [100, 300, 700, 1500, 3000, 6000].map(ms => setTimeout(() => {
+      if (this.#session && fontWidthsSignature(this.#requestedFaces) !== this.#fontWidths) this.#relayoutForFonts();
+    }, ms));
+  }
+
+  /** Measures and draws everything again with the fonts available now (once per frame) */
+  #relayoutForFonts() {
+    cancelAnimationFrame(this.#fontsRelayout);
+    this.#fontsRelayout = requestAnimationFrame(() => {
+      if (!this.#session) return;
+      this.#session.reset_measurements();
+      this.#render({ full: true });
+      this.#watchFontWidths();
     });
   }
 
@@ -679,6 +884,79 @@ function mergeRuns(chars) {
     else runs.push({ ...c });
   });
   return runs;
+}
+
+const GENERIC_FAMILIES = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui']);
+
+/** `700 16px "Calibri", "Carlito", sans-serif` → ['700 16px "Calibri"', '700 16px "Carlito"'] */
+function splitFontFamilies(face) {
+  const match = face.match(/^(.*?\d+(?:\.\d+)?px)\s+(.*)$/);
+  if (!match) return [face];
+  return match[2]
+    .split(',')
+    .map(f => f.trim())
+    .filter(f => f && !GENERIC_FAMILIES.has(f.replace(/["']/g, '')))
+    .map(f => `${match[1]} ${f}`);
+}
+
+const sameRef = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.index === b.index;
+
+/**
+ * @typedef {'inline'|'square'|'tight'|'through'|'topAndBottom'|'behind'|'inFront'} ImageWrap
+ * @typedef {object} ImageInfo
+ * @property {number} paragraph
+ * @property {number} index         among the paragraph's pictures
+ * @property {number} width
+ * @property {number} height
+ * @property {ImageWrap} wrap
+ * @property {string|null} wrapSide
+ * @property {boolean} anchored     floating (any wrap but 'inline')
+ * @property {{relativeTo: string, offset: number, align: string|null}|null} horizontal  null when inline
+ * @property {{relativeTo: string, offset: number, align: string|null}|null} vertical
+ * @property {{top: number, bottom: number, left: number, right: number}} distance  space kept from the text
+ * @property {string} alt
+ * @property {number} textOffset    character offset in the paragraph where it sits
+ * @property {{page: number, x: number, y: number, width: number, height: number}|null} bounds  where it is drawn
+ */
+function imageInfo(raw) {
+  const axis = (relativeTo, offset, align) => (raw.anchored ? { relativeTo, offset, align: align ?? null } : null);
+  return {
+    paragraph: raw.paragraph,
+    index: raw.index,
+    width: raw.width,
+    height: raw.height,
+    wrap: raw.wrap || (raw.anchored ? (raw.behind_text ? 'behind' : 'inFront') : 'inline'),
+    wrapSide: raw.wrap_side || null,
+    anchored: raw.anchored,
+    horizontal: axis(raw.h_relative, raw.h_offset, raw.h_align),
+    vertical: axis(raw.v_relative, raw.v_offset, raw.v_align),
+    distance: { top: raw.dist_top, bottom: raw.dist_bottom, left: raw.dist_left, right: raw.dist_right },
+    alt: raw.alt || '',
+    textOffset: raw.offset,
+    bounds: raw.bounds ?? null,
+  };
+}
+
+/** `updateImage` changes as the engine's JSON (snake_case, undefined fields left out) */
+function imageUpdatePayload({ width, height, keepRatio, wrap, wrapSide, horizontal, vertical, distance, alt } = {}) {
+  const payload = { width, height, keep_ratio: keepRatio, wrap, wrap_side: wrapSide, alt };
+  if (horizontal) Object.assign(payload, { h_relative: horizontal.relativeTo, h_offset: horizontal.offset, h_align: horizontal.align ?? undefined });
+  if (vertical) Object.assign(payload, { v_relative: vertical.relativeTo, v_offset: vertical.offset, v_align: vertical.align ?? undefined });
+  if (typeof distance === 'number') payload.distance = distance;
+  else if (distance) Object.assign(payload, { dist_top: distance.top, dist_bottom: distance.bottom, dist_left: distance.left, dist_right: distance.right });
+  return payload;
+}
+
+/** Position changes that move a floating picture by (dx, dy) page px: an offset grows in its
+ *  own frame; an aligned axis becomes an offset from the page edge */
+function moveChanges(info, dx, dy) {
+  const axis = (pos, delta, absolute) => (pos.align == null
+    ? { relativeTo: pos.relativeTo, offset: pos.offset + delta }
+    : { relativeTo: 'page', offset: absolute });
+  const changes = {};
+  if (dx) changes.horizontal = axis(info.horizontal, dx, (info.bounds?.x ?? 0) + dx);
+  if (dy) changes.vertical = axis(info.vertical, dy, (info.bounds?.y ?? 0) + dy);
+  return changes;
 }
 
 /** Bytes of an image given as bytes, a Blob/File or a `data:` URL */

@@ -68,7 +68,9 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
 | `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio o al final, como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align }` |
 | `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. `rows` son las celdas como texto (`\n` = salto de línea en la celda); `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
-| `insertImage(image, { at, width, height, align, alt })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) en su propio párrafo, como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. Devuelve una promesa |
+| `insertImage(image, { at, width, height, align, alt, wrap, wrapSide, horizontal, vertical, distance })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. En línea (predeterminado) va en su propio párrafo; con otro `wrap` queda flotante, anclada al párrafo del cursor (ver [Imágenes](#imágenes)). Devuelve una promesa con `{ paragraph, index }` |
+| `images()` / `selectedImage` / `selectImage(ref)` | Imágenes del documento y la seleccionada (ver [Imágenes](#imágenes)) |
+| `updateImage(ref, changes)` / `resizeImage` / `moveImage` / `setImageWrap` / `alignImage` / `deleteImage` | Tamaño, posición y ajuste del texto de una imagen, cada cambio como un paso de deshacer |
 | `undo()` / `redo()` / `canUndo` / `canRedo` | Historial |
 | `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `setColor(hex)` / `setAlignment(align)` | Formato de la selección |
 | `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Apariencia. `insertTable(rows, cols, headers)` de versiones anteriores sigue funcionando (tabla vacía al final) |
@@ -82,9 +84,51 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `load` | `{ fileName }` |
 | `change` | `{}` |
 | `selectionchange` | `{ selection, format: { bold, italic, underline, color, align } }` |
+| `imageselect` | `{ image }`: la imagen seleccionada con el ratón o `selectImage()`, o cambiada mientras está seleccionada (`null` al deseleccionar) |
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
 
 Incluye tipos de TypeScript.
+
+### Imágenes
+
+Con el ratón: un clic selecciona la imagen y muestra ocho asas. Las esquinas cambian el tamaño manteniendo la proporción (`Shift` la libera) y los lados cambian una sola medida. Una imagen flotante se mueve arrastrándola o con las flechas (`Shift` + flecha = 10 px). `Supr` la elimina y `Esc` vuelve al texto. Una imagen detrás del texto solo se selecciona donde no hay texto encima, así que hacer clic sobre el texto de un membrete sigue colocando el cursor.
+
+Desde código, una imagen se identifica con `{ paragraph, index }`: su párrafo y su posición entre las imágenes de ese párrafo. Cualquier elemento de `images()` sirve como referencia. Las medidas están en px CSS a zoom 100 %.
+
+```js
+const [logo] = editor.images();
+// { paragraph, index, width, height, wrap, wrapSide, anchored, horizontal, vertical,
+//   distance: { top, bottom, left, right }, alt, textOffset, bounds: { page, x, y, width, height } }
+
+editor.resizeImage(logo, { width: 180 });            // el alto sigue la proporción
+editor.resizeImage(logo, { scale: 0.5 });
+editor.setImageWrap(logo, 'square', { side: 'bothSides', distance: 12 });
+editor.alignImage(logo, 'right');                    // flotante: dentro de los márgenes
+editor.moveImage(logo, { dx: 0, dy: 40 });           // o { x, y } en coordenadas de la página
+editor.updateImage(logo, {                           // varios cambios en un solo paso de deshacer
+  wrap: 'topAndBottom',
+  horizontal: { relativeTo: 'margin', align: 'center' },
+  vertical: { relativeTo: 'paragraph', offset: 10 },
+  alt: 'Logo de la empresa',
+});
+editor.deleteImage(logo);
+
+await editor.insertImage(file, {                     // flotante desde el inicio
+  width: 160, wrap: 'square',
+  horizontal: { relativeTo: 'margin', align: 'right' },
+  vertical: { relativeTo: 'paragraph', offset: 0 },
+});
+```
+
+| `wrap` | Comportamiento con el texto |
+| :--- | :--- |
+| `inline` | En línea con el texto: se comporta como un carácter grande que se apoya en la línea base y pasa a la línea siguiente si no cabe |
+| `square` | El texto rodea el rectángulo de la imagen. `wrapSide`: `bothSides` (el texto usa el lado más ancho), `left`, `right` o `largest` |
+| `tight` / `through` | Como `square`; se guarda con el contorno de Word, pero se maqueta usando el rectángulo |
+| `topAndBottom` | El texto solo va arriba y abajo de la imagen |
+| `behind` / `inFront` | Flota detrás o delante del texto, que la ignora |
+
+`horizontal.relativeTo` puede ser `margin`, `page`, `column`, `character`, `leftMargin`, `rightMargin`, `insideMargin` u `outsideMargin`; `vertical.relativeTo`, `margin`, `page`, `paragraph`, `line`, `topMargin`, `bottomMargin`, `insideMargin` u `outsideMargin`. En cada eje se usa un `offset` (distancia desde el borde izquierdo o superior del marco) o un `align` (`left`/`center`/`right` o `top`/`center`/`bottom`). Al mover una imagen con offset se conserva su marco; un eje alineado pasa a ser relativo a la página. Para mover una imagen en línea, `moveImage` la convierte antes en `square`.
 
 ### React
 
@@ -146,7 +190,7 @@ await registerFont(fileInput.files[0]);  // .ttf/.otf/.woff/.woff2; queda guarda
 ## Estilos
 
 Los estilos se personalizan con variables CSS, definidas en el contenedor del editor o en cualquier ancestro:
-- **Editor:** `--docx-page-gap`, `--docx-page-shadow`, `--docx-page-border`, `--docx-label-color`, `--docx-caret-color`, `--docx-selection`.
+- **Editor:** `--docx-page-gap`, `--docx-page-shadow`, `--docx-page-border`, `--docx-label-color`, `--docx-caret-color`, `--docx-selection`, `--docx-image-frame` (marco de la imagen seleccionada).
 - **Barra de herramientas:** `--docx-toolbar-bg`, `--docx-toolbar-border`, `--docx-toolbar-color`, `--docx-toolbar-hover`, `--docx-toolbar-active-bg`, `--docx-toolbar-active-color`.
 
 El contenedor del editor necesita una altura (por ejemplo `height: 80vh`, o ser un elemento flex/grid con altura definida); el editor ocupa el 100 % y dentro de esa altura hace su propio scroll.
@@ -158,6 +202,8 @@ El paquete carga `docx_engine_bg.wasm` con `new URL(..., import.meta.url)`. Vite
 ## Limitaciones
 
 Es un prototipo de laboratorio. Todavía no se dibujan el texto de encabezados y pies de página, las celdas combinadas, los cuadros de texto, los comentarios, el control de cambios ni las columnas múltiples. Todo eso se conserva intacto al guardar el documento.
+
+Imágenes flotantes: el texto las rodea por un solo lado (el más ancho con `bothSides`) y usando su rectángulo, no su contorno. Solo desplazan el texto que viene después de su párrafo de anclaje en la misma página, y las tablas no las rodean. Las imágenes de encabezados y pies de página se muestran, pero todavía no se pueden editar.
 
 ## Licencia
 

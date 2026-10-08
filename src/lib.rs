@@ -78,6 +78,23 @@ fn with_measurer<R>(
     }
 }
 
+impl DocxSession {
+    /// Where the last layout drew a body picture: `{ page, x, y, width, height }` or null
+    fn image_bounds(&self, paragraph: usize, index: usize) -> serde_json::Value {
+        let Some(layout) = &self.layout else { return serde_json::Value::Null };
+        for page in &layout.pages {
+            for item in &page.items {
+                if let layout_engine::RenderCommand::Image { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. } = item {
+                    if *p == paragraph && *i == index {
+                        return serde_json::json!({ "page": page.page_number, "x": x, "y": y, "width": width, "height": height });
+                    }
+                }
+            }
+        }
+        serde_json::Value::Null
+    }
+}
+
 fn history_result(result: Option<Option<String>>) -> String {
     serde_json::json!({ "done": result.is_some(), "selection": result.flatten() }).to_string()
 }
@@ -323,6 +340,82 @@ impl DocxSession {
         let caret = TextPosition { paragraph: p, offset: o };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "paragraph": index, "caret": caret }))
+    }
+
+    /// Every picture of the body (table cells included) in document order:
+    /// `[{ paragraph, index, width, height, wrap, wrap_side, anchored, behind_text, h_relative,
+    /// h_offset, h_align, v_relative, v_offset, v_align, dist_top…, offset, alt, doc_pr_id,
+    /// bounds: { page, x, y, width, height } | null }]`. `bounds` is where the last layout drew it.
+    #[wasm_bindgen]
+    pub fn list_images(&self) -> Result<String, JsValue> {
+        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
+        let mut paragraphs: Vec<&docx_parser::ParagraphInfo> = Vec::new();
+        for el in elements.iter() {
+            match el {
+                docx_parser::DocumentElement::Paragraph(p) => paragraphs.push(p),
+                docx_parser::DocumentElement::Table(t) => {
+                    for row in &t.rich_rows {
+                        for cell in &row.cells {
+                            paragraphs.extend(cell.paragraphs.iter());
+                        }
+                    }
+                }
+            }
+        }
+        paragraphs.sort_by_key(|p| p.index);
+        let images: Vec<serde_json::Value> = paragraphs
+            .iter()
+            .flat_map(|p| p.images.iter().enumerate().map(move |(i, img)| (p.index, i, img)))
+            .map(|(paragraph, index, img)| {
+                let mut value = serde_json::to_value(img).unwrap_or_default();
+                if let Some(obj) = value.as_object_mut() {
+                    obj.remove("rel_id");
+                    obj.insert("paragraph".into(), paragraph.into());
+                    obj.insert("index".into(), index.into());
+                    obj.insert("bounds".into(), self.image_bounds(paragraph, index));
+                }
+                value
+            })
+            .collect();
+        to_json(&images)
+    }
+
+    /// Changes size, position, text wrapping, distances or alternative text of picture `index`
+    /// of `paragraph` as one undo step (see `docx_parser::ImageUpdate`).
+    /// `update_json`: `{ "width": 200, "wrap": "square", "h_relative": "margin", "h_align": "right" }`.
+    /// Returns the picture as it is now (same shape as `list_images` items, without `bounds`).
+    #[wasm_bindgen]
+    pub fn update_image(
+        &mut self,
+        paragraph: usize,
+        index: usize,
+        update_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let update: docx_parser::ImageUpdate = serde_json::from_str(update_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before.clone());
+        let image = self
+            .modifier
+            .update_image(paragraph, index, &update)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        let mut value = serde_json::to_value(&image).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("rel_id");
+            obj.insert("paragraph".into(), paragraph.into());
+            obj.insert("index".into(), index.into());
+        }
+        to_json(&value)
+    }
+
+    /// Deletes picture `index` of `paragraph` as one undo step
+    #[wasm_bindgen]
+    pub fn delete_image(&mut self, paragraph: usize, index: usize, selection_before: Option<String>) -> Result<(), JsValue> {
+        self.modifier.checkpoint(selection_before.clone());
+        self.modifier.delete_image(paragraph, index).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        Ok(())
     }
 
     /// Undoes the last step: `{done, selection}` (selection is the JSON given before the step)

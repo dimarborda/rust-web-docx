@@ -24,6 +24,10 @@ const TYPING_GROUP_MS = 1500;
  * @param {(msg: string) => void} env.hint
  * @param {HTMLElement} env.root             element that hosts the hidden input
  * @param {object} env.labels                { editor, nothingToUndo, nothingToRedo }
+ * @param {(ref) => void} env.imageSelected   a picture was selected (ref = { paragraph, index }) or deselected (null)
+ * @param {(ref, change) => void} env.imageEdited  the user resized or moved a picture with the mouse or
+ *        keyboard: change = { width?, height?, dx?, dy? } in page px
+ * @param {(ref) => void} env.imageDeleted    Delete / Backspace on a selected picture
  */
 export function createCanvasEditor(env) {
   let anchor = null;
@@ -32,7 +36,9 @@ export function createCanvasEditor(env) {
   let dragging = false;
   let composing = false;
   let lastEdit = null;     // { kind, caret, time } for grouping keystrokes into one undo step
-  const pages = new Map(); // page number → { canvas, overlay }
+  let image = null;        // selected picture: { paragraph, index }
+  let imageDrag = null;    // { kind: 'move' | 'resize', dir, start: {x, y, width, height}, from: {x, y}, frame, ratio, moved }
+  const pages = new Map(); // page number → { canvas, overlay, page }
 
   // A hidden textarea owns keyboard focus: it receives typing, IME/dead-key composition
   // (´ + e = é) and clipboard events
@@ -251,6 +257,14 @@ export function createCanvasEditor(env) {
 
   function paint({ reveal = false } = {}) {
     pages.forEach(({ overlay }) => overlay.replaceChildren());
+    if (image) {
+      const found = imageItem(image);
+      if (found) {
+        paintImageFrame(found.number, found.item, reveal);
+        return;
+      }
+      selectImage(null);
+    }
     if (!focus) {
       env.selectionChanged(null);
       return;
@@ -300,6 +314,147 @@ export function createCanvasEditor(env) {
     env.selectionChanged(selection());
   }
 
+  // ---------- Pictures ----------
+
+  const sameImage = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.index === b.index;
+  const isBodyImage = item => item.type === 'image' && item.paragraph_index != null && item.image_index != null;
+  const RESIZE_DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const MIN_IMAGE_PX = 8;
+
+  function selectImage(ref) {
+    const next = ref ? { paragraph: ref.paragraph, index: ref.index } : null;
+    if (sameImage(next, image) || (!next && !image)) return;
+    image = next;
+    imageDrag = null;
+    env.imageSelected(image);
+  }
+
+  /** Where the last render drew a picture: { number, item } */
+  function imageItem(ref) {
+    for (const [number, { page }] of pages) {
+      const item = page.items?.find(it => isBodyImage(it) && it.paragraph_index === ref.paragraph && it.image_index === ref.index);
+      if (item) return { number, item };
+    }
+    return null;
+  }
+
+  /** Topmost picture under a page point. Pictures behind the text are only picked where
+   *  there is no text, so clicking on text over a letterhead still places the caret. */
+  function imageAt(page, x, y) {
+    const items = page.items || [];
+    const inside = (it, w, h) => x >= it.x && x <= it.x + w && y >= it.y && y <= it.y + h;
+    const overText = () => items.some(it => it.type === 'text' && it.line &&
+      x >= it.line.left && x <= it.line.right && y >= it.line.top && y <= it.line.top + it.height && it.text.trim());
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (!isBodyImage(it) || !inside(it, it.width, it.height)) continue;
+      if (it.is_background && overText()) continue;
+      return it;
+    }
+    return null;
+  }
+
+  function paintImageFrame(number, item, reveal) {
+    const { overlay } = pages.get(number);
+    const zoom = env.zoom();
+    const frame = document.createElement('div');
+    frame.className = 'canvas-image-frame';
+    if (item.anchored) frame.classList.add('movable');
+    placeFrame(frame, item, zoom);
+    RESIZE_DIRS.forEach(dir => {
+      const handle = document.createElement('div');
+      handle.className = `canvas-image-handle ${dir}`;
+      handle.dataset.dir = dir;
+      frame.appendChild(handle);
+    });
+    frame.addEventListener('mousedown', e => startImageDrag(e, item, frame, zoom));
+    overlay.appendChild(frame);
+    if (reveal) frame.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    env.selectionChanged(selection());
+  }
+
+  function placeFrame(frame, box, zoom) {
+    Object.assign(frame.style, {
+      left: `${box.x * zoom}px`,
+      top: `${box.y * zoom}px`,
+      width: `${box.width * zoom}px`,
+      height: `${box.height * zoom}px`,
+    });
+  }
+
+  function startImageDrag(e, item, frame, zoom) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const dir = e.target.dataset?.dir;
+    // Pictures in line with the text move with it; only floating ones can be dragged
+    if (!dir && !item.anchored) return input.focus({ preventScroll: true });
+    imageDrag = {
+      kind: dir ? 'resize' : 'move',
+      dir,
+      start: { x: item.x, y: item.y, width: item.width, height: item.height },
+      from: { x: e.clientX, y: e.clientY },
+      box: { x: item.x, y: item.y, width: item.width, height: item.height },
+      frame,
+      zoom,
+      ratio: item.height / item.width,
+      moved: false,
+    };
+    frame.classList.add('dragging');
+    input.focus({ preventScroll: true });
+  }
+
+  function dragImage(e) {
+    const d = imageDrag;
+    const dx = (e.clientX - d.from.x) / d.zoom;
+    const dy = (e.clientY - d.from.y) / d.zoom;
+    if (Math.abs(dx) + Math.abs(dy) > 1) d.moved = true;
+    const s = d.start;
+    if (d.kind === 'move') {
+      d.box = { ...s, x: s.x + dx, y: s.y + dy };
+    } else {
+      let { x, y, width, height } = s;
+      const dir = d.dir;
+      if (dir.includes('e')) width = s.width + dx;
+      if (dir.includes('w')) width = s.width - dx;
+      if (dir.includes('s')) height = s.height + dy;
+      if (dir.includes('n')) height = s.height - dy;
+      width = Math.max(MIN_IMAGE_PX, width);
+      height = Math.max(MIN_IMAGE_PX, height);
+      // Corners keep the proportions (Shift frees them)
+      if (dir.length === 2 && !e.shiftKey) {
+        const scale = Math.max(width / s.width, height / s.height);
+        width = Math.max(MIN_IMAGE_PX, s.width * scale);
+        height = Math.max(MIN_IMAGE_PX, s.height * scale);
+      }
+      if (dir.includes('w')) x = s.x + s.width - width;
+      if (dir.includes('n')) y = s.y + s.height - height;
+      d.box = { x, y, width, height };
+    }
+    placeFrame(d.frame, d.box, d.zoom);
+  }
+
+  function endImageDrag() {
+    const d = imageDrag;
+    imageDrag = null;
+    d.frame.classList.remove('dragging');
+    if (!d.moved || !image) return;
+    const round = v => Math.round(v * 100) / 100;
+    const change = {};
+    if (d.kind === 'resize') {
+      change.width = round(d.box.width);
+      change.height = round(d.box.height);
+    }
+    const dx = round(d.box.x - d.start.x);
+    const dy = round(d.box.y - d.start.y);
+    // A floating picture resized from its left or top edge keeps its opposite edge in place
+    if (dx || dy) {
+      const item = imageItem(image)?.item;
+      if (item?.anchored) Object.assign(change, { dx, dy });
+    }
+    env.imageEdited(image, change);
+  }
+
   // ---------- Pointer input ----------
 
   function pagePoint(canvas, e) {
@@ -319,6 +474,20 @@ export function createCanvasEditor(env) {
   function onMouseDown(e, page, card, canvas) {
     if (e.button !== 0) return;
     const pt = pagePoint(canvas, e);
+    const picture = imageAt(pages.get(page.page_number)?.page || page, pt.x, pt.y);
+    if (picture) {
+      e.preventDefault();
+      selectImage({ paragraph: picture.paragraph_index, index: picture.image_index });
+      if (!focus) anchor = focus = { paragraph: picture.paragraph_index, offset: 0 };
+      lastEdit = null;
+      input.focus({ preventScroll: true });
+      paint();
+      // Press and drag in one go moves a floating picture
+      const frame = pages.get(page.page_number)?.overlay.querySelector('.canvas-image-frame');
+      if (frame && picture.anchored) startImageDrag(e, picture, frame, env.zoom());
+      return;
+    }
+    selectImage(null);
     const pos = hitTest(page.page_number, pt.x, pt.y);
     if (!pos) return;
     e.preventDefault();
@@ -342,6 +511,11 @@ export function createCanvasEditor(env) {
   }
 
   function onMouseMove(e) {
+    if (imageDrag) {
+      if (e.buttons & 1) dragImage(e);
+      else endImageDrag();
+      return;
+    }
     if (!dragging || !(e.buttons & 1)) {
       dragging = false;
       return;
@@ -354,13 +528,46 @@ export function createCanvasEditor(env) {
   }
   function onMouseUp() {
     dragging = false;
+    if (imageDrag) endImageDrag();
   }
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mouseup', onMouseUp);
 
   // ---------- Keyboard input ----------
 
+  /** Keys for a selected picture; returns true when handled */
+  function imageKey(e) {
+    const key = e.key;
+    if (key === 'Delete' || key === 'Backspace') {
+      const ref = image;
+      selectImage(null);
+      env.imageDeleted(ref);
+      return true;
+    }
+    if (key === 'Escape') {
+      selectImage(null);
+      paint();
+      return true;
+    }
+    const step = e.shiftKey ? 10 : 1;
+    const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key];
+    if (nudge && imageItem(image)?.item.anchored) {
+      env.imageEdited(image, { dx: nudge[0], dy: nudge[1] });
+      return true;
+    }
+    // Anything else (typing, arrows on an inline picture) goes back to the text
+    if (!e.metaKey && !e.ctrlKey) {
+      selectImage(null);
+      paint();
+    }
+    return false;
+  }
+
   input.addEventListener('keydown', e => {
+    if (image && !composing && !e.isComposing && imageKey(e)) {
+      e.preventDefault();
+      return;
+    }
     if (!focus || composing || e.isComposing) return;
     const mod = e.metaKey || e.ctrlKey;
     const byWord = IS_MAC ? e.altKey : e.ctrlKey;
@@ -525,7 +732,7 @@ export function createCanvasEditor(env) {
     attachPage(page, card, canvas) {
       const existing = card.querySelector('.canvas-overlay');
       if (existing && canvas.dataset.editorAttached) {
-        pages.set(page.page_number, { canvas, overlay: existing }); // unchanged page kept as is
+        pages.set(page.page_number, { canvas, overlay: existing, page }); // unchanged page kept as is
         return;
       }
       canvas.dataset.editorAttached = '1';
@@ -540,7 +747,7 @@ export function createCanvasEditor(env) {
         height: canvas.style.height,
       });
       card.appendChild(overlay);
-      pages.set(page.page_number, { canvas, overlay });
+      pages.set(page.page_number, { canvas, overlay, page });
       canvas.addEventListener('mousedown', e => onMouseDown(e, page, card, canvas));
     },
 
@@ -577,11 +784,23 @@ export function createCanvasEditor(env) {
     clear() {
       anchor = focus = null;
       lastEdit = null;
+      selectImage(null);
       paint();
+    },
+
+    /** The selected picture `{ paragraph, index }`, or null */
+    selectedImage: () => image,
+
+    /** Selects a picture (null deselects it) and scrolls it into view */
+    selectImage(ref) {
+      selectImage(ref);
+      paint({ reveal: true });
+      input.focus({ preventScroll: true });
     },
 
     /** Selects a range, e.g. to restore a selection or select everything */
     select(newAnchor, newFocus = newAnchor) {
+      selectImage(null);
       anchor = newAnchor;
       focus = newFocus;
       goalX = null;

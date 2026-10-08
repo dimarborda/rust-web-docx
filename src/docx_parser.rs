@@ -341,6 +341,37 @@ pub struct ImageRef {
     pub v_offset: f64,
     /// top / center / bottom instead of an offset
     pub v_align: Option<String>,
+    /// How text flows around the picture: "inline", "square", "tight", "through",
+    /// "topAndBottom", "behind" or "inFront"
+    #[serde(default)]
+    pub wrap: String,
+    /// Side(s) text may take next to a square/tight picture: "bothSides", "left", "right", "largest"
+    #[serde(default)]
+    pub wrap_side: String,
+    /// Space kept free between the picture and the text (`distT/B/L/R`), px
+    #[serde(default)]
+    pub dist_top: f64,
+    #[serde(default)]
+    pub dist_bottom: f64,
+    #[serde(default)]
+    pub dist_left: f64,
+    #[serde(default)]
+    pub dist_right: f64,
+    /// Character offset in the paragraph text where the picture sits
+    #[serde(default)]
+    pub offset: usize,
+    /// `wp:docPr` id and description (alternative text)
+    #[serde(default)]
+    pub doc_pr_id: u64,
+    #[serde(default)]
+    pub alt: String,
+}
+
+impl ImageRef {
+    /// Text flows around it: the layout keeps its box free of text
+    pub fn wraps_text(&self) -> bool {
+        self.anchored && matches!(self.wrap.as_str(), "square" | "tight" | "through" | "topAndBottom")
+    }
 }
 
 /// An image together with its pixels as a data URL
@@ -357,6 +388,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
     let mut img = ImageRef {
         h_relative: "column".into(),
         v_relative: "paragraph".into(),
+        wrap: "inline".into(),
         ..Default::default()
     };
     let mut axis = ' ';
@@ -402,9 +434,27 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
         };
         let name = e.name();
         let n = name.as_ref();
-        if tag_is(n, "anchor") {
-            img.anchored = true;
-            img.behind_text = get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
+        if tag_is(n, "anchor") || tag_is(n, "inline") {
+            let dist = |name: &str| get_attr_i64(&e, name).unwrap_or(0) as f64 / EMU_PER_PX;
+            img.dist_top = dist("distT");
+            img.dist_bottom = dist("distB");
+            img.dist_left = dist("distL");
+            img.dist_right = dist("distR");
+            if tag_is(n, "anchor") {
+                img.anchored = true;
+                img.behind_text = get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
+                // Without a wrap element Word floats the picture over the text
+                img.wrap = if img.behind_text { "behind" } else { "inFront" }.into();
+            }
+        } else if img.anchored && ["wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom"].iter().any(|t| tag_is(n, t)) {
+            let local = std::str::from_utf8(n).unwrap_or("").rsplit(':').next().unwrap_or("");
+            let kind = &local["wrap".len()..];
+            let mut chars = kind.chars();
+            img.wrap = chars.next().map(|c| c.to_ascii_lowercase().to_string() + chars.as_str()).unwrap_or_default();
+            img.wrap_side = get_attr_value(&e, "wrapText").unwrap_or_else(|| "bothSides".into());
+        } else if tag_is(n, "docPr") {
+            img.doc_pr_id = get_attr_i64(&e, "id").unwrap_or(0).max(0) as u64;
+            img.alt = get_attr_value(&e, "descr").unwrap_or_default();
         } else if tag_is(n, "positionH") || tag_is(n, "positionV") {
             axis = if tag_is(n, "positionH") { 'h' } else { 'v' };
             if let Some(rel) = get_attr_value(&e, "relativeFrom") {
@@ -552,8 +602,11 @@ pub struct ReplaceResult {
     pub message: String,
 }
 
+#[path = "image_edit.rs"]
+mod image_edit;
 #[path = "insert_objects.rs"]
 mod insert_objects;
+pub use image_edit::ImageUpdate;
 pub use insert_objects::{NewImage, NewTable};
 
 /// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
@@ -1979,7 +2032,9 @@ pub fn parse_paragraph_with(
         let n = name.as_ref();
         if is_start && tag_is(n, "drawing") {
             buf.clear();
-            if let Some(img) = parse_drawing(reader) {
+            if let Some(mut img) = parse_drawing(reader) {
+                img.offset = raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>()
+                    + if in_r { run.text.chars().count() } else { 0 };
                 images.push(img);
             }
             continue;

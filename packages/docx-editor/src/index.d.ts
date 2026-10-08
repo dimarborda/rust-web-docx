@@ -84,14 +84,91 @@ export interface NewTable {
   align?: Array<'left' | 'center' | 'right'>;
 }
 
+/**
+ * How text flows around a picture: in line with it, wrapped around its box ('square') or
+ * contour ('tight', 'through'; drawn as its box), above and below only, or floating behind /
+ * in front of the text (which then ignores it)
+ */
+export type ImageWrap = 'inline' | 'square' | 'tight' | 'through' | 'topAndBottom' | 'behind' | 'inFront';
+
+/** Side(s) text may take next to a wrapped picture; 'bothSides' uses the wider side */
+export type ImageWrapSide = 'bothSides' | 'left' | 'right' | 'largest';
+
+export type ImageHorizontalFrame =
+  | 'margin' | 'page' | 'column' | 'character' | 'leftMargin' | 'rightMargin' | 'insideMargin' | 'outsideMargin';
+export type ImageVerticalFrame =
+  | 'margin' | 'page' | 'paragraph' | 'line' | 'topMargin' | 'bottomMargin' | 'insideMargin' | 'outsideMargin';
+
+/** Position of a floating picture on one axis: an offset from the frame's edge, or an alignment in it */
+export interface ImageAxis<Frame extends string, Align extends string> {
+  relativeTo?: Frame;
+  /** CSS px from the frame's left/top edge (replaces `align`) */
+  offset?: number;
+  /** Replaces `offset` */
+  align?: Align;
+}
+
+export type ImageHorizontal = ImageAxis<ImageHorizontalFrame, 'left' | 'center' | 'right' | 'inside' | 'outside'>;
+export type ImageVertical = ImageAxis<ImageVerticalFrame, 'top' | 'center' | 'bottom' | 'inside' | 'outside'>;
+
+/** A picture: its paragraph and its index among that paragraph's pictures */
+export interface ImageRef {
+  paragraph: number;
+  index: number;
+}
+
+export interface ImageInfo extends ImageRef {
+  /** CSS px at 100 % zoom */
+  width: number;
+  height: number;
+  wrap: ImageWrap;
+  wrapSide: ImageWrapSide | null;
+  /** Floating (any wrap but 'inline') */
+  anchored: boolean;
+  /** null for pictures in line with the text */
+  horizontal: { relativeTo: ImageHorizontalFrame; offset: number; align: string | null } | null;
+  vertical: { relativeTo: ImageVerticalFrame; offset: number; align: string | null } | null;
+  /** Space kept free between the picture and the text */
+  distance: { top: number; bottom: number; left: number; right: number };
+  alt: string;
+  /** Character offset in the paragraph text where the picture sits */
+  textOffset: number;
+  /** Where the picture is drawn (page number, page px), or null before it is laid out */
+  bounds: { page: number; x: number; y: number; width: number; height: number } | null;
+}
+
+export interface ImageChanges {
+  width?: number;
+  height?: number;
+  /** With only width or height, scale the other side (default true) */
+  keepRatio?: boolean;
+  wrap?: ImageWrap;
+  wrapSide?: ImageWrapSide;
+  horizontal?: ImageHorizontal;
+  vertical?: ImageVertical;
+  /** Space between the picture and the text, on every side or per side */
+  distance?: number | { top?: number; bottom?: number; left?: number; right?: number };
+  alt?: string;
+}
+
 export interface InsertImageOptions {
   at?: InsertPosition;
   /** CSS px; with only one of width/height the aspect ratio is kept */
   width?: number;
   height?: number;
+  /** Alignment of an inline picture's paragraph */
   align?: 'left' | 'center' | 'right';
   /** Alternative text */
   alt?: string;
+  /**
+   * 'inline' (default) puts the picture in a paragraph of its own; any other wrap anchors it
+   * to the paragraph at the position, which keeps its text and the caret
+   */
+  wrap?: ImageWrap;
+  wrapSide?: ImageWrapSide;
+  horizontal?: ImageHorizontal;
+  vertical?: ImageVertical;
+  distance?: number;
 }
 
 export interface DocxEditorOptions {
@@ -112,6 +189,8 @@ export interface DocxEditorEventMap {
   load: CustomEvent<{ fileName: string }>;
   change: CustomEvent<Record<string, never>>;
   selectionchange: CustomEvent<{ selection: Selection | null; format: Format | null }>;
+  /** A picture was selected (mouse or `selectImage()`), changed with the mouse, or deselected (null) */
+  imageselect: CustomEvent<{ image: ImageInfo | null }>;
   message: CustomEvent<{ message: string; error: boolean }>;
 }
 
@@ -176,10 +255,35 @@ export class DocxEditor extends EventTarget {
   /** @deprecated Appends an empty table at the end; use `insertTable({ rows })` */
   insertTable(rows: number, cols: number, headers?: string[]): { first: number };
   /**
-   * Inserts a PNG, JPEG or GIF picture in its own paragraph as one undo step; it never exceeds
-   * the text width of the page. The caret goes to the paragraph after it.
+   * Inserts a PNG, JPEG or GIF picture as one undo step; it never exceeds the text width of the
+   * page. Inline (default): in its own paragraph, caret after it. Floating (`wrap`): anchored to
+   * the paragraph at the position, placed with `horizontal` / `vertical`.
    */
-  insertImage(image: Uint8Array | ArrayBuffer | Blob | string, options?: InsertImageOptions): Promise<{ paragraph: number }>;
+  insertImage(image: Uint8Array | ArrayBuffer | Blob | string, options?: InsertImageOptions): Promise<ImageRef>;
+
+  /** Every picture of the body (table cells included) in document order */
+  images(): ImageInfo[];
+  /** The picture selected with the mouse or `selectImage()`, or null */
+  readonly selectedImage: ImageInfo | null;
+  /** Selects a picture as if it had been clicked; null goes back to the text caret */
+  selectImage(ref: ImageRef | null): void;
+  /**
+   * Changes size, wrapping, position, distance to the text or alternative text as one undo
+   * step; unset fields keep their value. Returns the picture as it is now.
+   * Positions need a floating picture (set `wrap` first or in the same call).
+   */
+  updateImage(ref: ImageRef, changes: ImageChanges): ImageInfo;
+  /** One side keeps the aspect ratio unless `keepRatio` is false; `scale` multiplies the size */
+  resizeImage(ref: ImageRef, size: { width?: number; height?: number; keepRatio?: boolean; scale?: number }): ImageInfo;
+  /**
+   * Moves a floating picture to page coordinates `{x, y}` (top-left corner) or by `{dx, dy}`,
+   * keeping its frame when it has an offset. An inline picture first becomes 'square'.
+   */
+  moveImage(ref: ImageRef, to: { x?: number; y?: number; dx?: number; dy?: number }): ImageInfo;
+  setImageWrap(ref: ImageRef, wrap: ImageWrap, options?: { side?: ImageWrapSide; distance?: ImageChanges['distance'] }): ImageInfo;
+  /** A floating picture aligns within the margins; an inline one aligns its paragraph */
+  alignImage(ref: ImageRef, align: 'left' | 'center' | 'right'): ImageInfo;
+  deleteImage(ref: ImageRef): void;
   setBackgroundColor(hex: string): void;
   /** View-only diagonal watermark; pass null to remove it */
   setWatermark(text: string | null, options?: { opacity?: number }): void;
@@ -202,7 +306,7 @@ export class DocxEditor extends EventTarget {
 
 export type ToolbarItem =
   | 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'color'
-  | 'left' | 'center' | 'right' | 'both' | 'zoom' | '|';
+  | 'left' | 'center' | 'right' | 'both' | 'imageWrap' | 'zoom' | '|';
 
 export const DEFAULT_TOOLBAR_ITEMS: ToolbarItem[];
 

@@ -215,6 +215,27 @@ function updateRibbon(format) {
   if (format.color) textColorInput.value = format.color;
 }
 
+// ---------- Selected picture ----------
+
+function updateImageTools(image) {
+  $('image-tools').style.display = image ? 'flex' : 'none';
+  if (!image) return;
+  $('image-wrap').value = image.wrap;
+  $('image-width').value = Math.round(image.width);
+  $('image-height').value = Math.round(image.height);
+}
+
+function editSelectedImage(change) {
+  const image = editor.selectedImage;
+  if (!image) return;
+  try {
+    change(image);
+    updateImageTools(editor.selectedImage);
+  } catch (err) {
+    showToast('No se pudo cambiar la imagen: ' + err, true);
+  }
+}
+
 function updateVariablesBadge() {
   const count = editor.variables().length;
   varsCountBadge.textContent = count;
@@ -424,6 +445,7 @@ function setupEventListeners() {
   editor.addEventListener('load', onDocumentLoaded);
   editor.addEventListener('change', onDocumentChanged);
   editor.addEventListener('selectionchange', e => updateRibbon(e.detail.format));
+  editor.addEventListener('imageselect', e => updateImageTools(e.detail.image));
   editor.addEventListener('message', e => showToast(e.detail.message, e.detail.error));
 
   $('btn-zoom-in').addEventListener('click', () => setZoom(0.25));
@@ -464,7 +486,12 @@ function setupEventListeners() {
   btnFmtBold.addEventListener('click', () => editor.toggleBold());
   btnFmtItalic.addEventListener('click', () => editor.toggleItalic());
   btnFmtUnderline?.addEventListener('click', () => editor.toggleUnderline());
-  Object.entries(alignButtons).forEach(([align, btn]) => btn?.addEventListener('click', () => editor.setAlignment(align)));
+  // With a picture selected, the alignment buttons align the picture
+  Object.entries(alignButtons).forEach(([align, btn]) => btn?.addEventListener('click', () => {
+    const image = editor.selectedImage;
+    if (image && align !== 'both') editSelectedImage(img => editor.alignImage(img, align));
+    else editor.setAlignment(align);
+  }));
   // The native color picker keeps focus while open
   textColorInput.addEventListener('input', e => editor.setColor(e.target.value, { refocus: false }));
   document.querySelectorAll('.color-swatch-dot').forEach(dot => dot.addEventListener('click', () => {
@@ -479,6 +506,15 @@ function setupEventListeners() {
     insertImage(e.target.files?.[0]);
     e.target.value = '';
   });
+  $('image-wrap').addEventListener('change', e => editSelectedImage(img => editor.setImageWrap(img, e.target.value)));
+  const resize = side => editSelectedImage(img => {
+    const value = Number($(`image-${side}`).value);
+    if (!(value > 0)) return;
+    editor.resizeImage(img, { [side]: value, keepRatio: $('image-ratio').checked });
+  });
+  $('image-width').addEventListener('change', () => resize('width'));
+  $('image-height').addEventListener('change', () => resize('height'));
+  $('btn-image-delete').addEventListener('click', () => editSelectedImage(img => editor.deleteImage(img)));
   $('btn-close-table-modal').addEventListener('click', () => hide(tableModal));
   $('btn-create-table-confirm').addEventListener('click', insertTable);
 

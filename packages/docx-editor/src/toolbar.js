@@ -1,5 +1,5 @@
 // Optional formatting toolbar for a DocxEditor: undo/redo, bold/italic/underline, text color,
-// alignment and zoom. Projects with their own design can skip it and call the editor API.
+// alignment, text wrapping of the selected picture and zoom. Projects with their own design can skip it and call the editor API.
 
 const ICONS = {
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
@@ -20,15 +20,27 @@ const LABELS = {
     undo: 'Deshacer', redo: 'Rehacer', bold: 'Negrita', italic: 'Cursiva', underline: 'Subrayado',
     color: 'Color de texto', left: 'Alinear a la izquierda', center: 'Centrar', right: 'Alinear a la derecha',
     both: 'Justificar', zoomOut: 'Reducir zoom', zoomIn: 'Aumentar zoom',
+    imageWrap: 'Ajuste de texto de la imagen',
+    wraps: {
+      inline: 'En línea con el texto', square: 'Cuadrado', tight: 'Estrecho', through: 'Transparente',
+      topAndBottom: 'Arriba y abajo', behind: 'Detrás del texto', inFront: 'Delante del texto',
+    },
   },
   en: {
     undo: 'Undo', redo: 'Redo', bold: 'Bold', italic: 'Italic', underline: 'Underline',
     color: 'Text color', left: 'Align left', center: 'Center', right: 'Align right',
     both: 'Justify', zoomOut: 'Zoom out', zoomIn: 'Zoom in',
+    imageWrap: 'Picture text wrapping',
+    wraps: {
+      inline: 'In line with text', square: 'Square', tight: 'Tight', through: 'Through',
+      topAndBottom: 'Top and bottom', behind: 'Behind text', inFront: 'In front of text',
+    },
   },
 };
 
-export const DEFAULT_TOOLBAR_ITEMS = ['undo', 'redo', '|', 'bold', 'italic', 'underline', 'color', '|', 'left', 'center', 'right', 'both', '|', 'zoom'];
+export const DEFAULT_TOOLBAR_ITEMS = ['undo', 'redo', '|', 'bold', 'italic', 'underline', 'color', '|', 'left', 'center', 'right', 'both', '|', 'imageWrap', '|', 'zoom'];
+
+const WRAPS = ['inline', 'square', 'tight', 'through', 'topAndBottom', 'behind', 'inFront'];
 
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -48,6 +60,7 @@ export function createDocxToolbar(editor, container, { items = DEFAULT_TOOLBAR_I
   const buttons = {};
   let colorInput = null;
   let zoomLabel = null;
+  let wrapSelect = null;
 
   const button = (name, onClick) => {
     const b = document.createElement('button');
@@ -63,16 +76,22 @@ export function createDocxToolbar(editor, container, { items = DEFAULT_TOOLBAR_I
     return b;
   };
 
+  const align = value => {
+    const image = editor.selectedImage;
+    if (image && value !== 'both') editor.alignImage(image, value);
+    else editor.setAlignment(value);
+  };
+
   const actions = {
     undo: () => editor.undo(),
     redo: () => editor.redo(),
     bold: () => editor.toggleBold(),
     italic: () => editor.toggleItalic(),
     underline: () => editor.toggleUnderline(),
-    left: () => editor.setAlignment('left'),
-    center: () => editor.setAlignment('center'),
-    right: () => editor.setAlignment('right'),
-    both: () => editor.setAlignment('both'),
+    left: () => align('left'),
+    center: () => align('center'),
+    right: () => align('right'),
+    both: () => align('both'),
   };
 
   items.forEach(item => {
@@ -91,6 +110,20 @@ export function createDocxToolbar(editor, container, { items = DEFAULT_TOOLBAR_I
       colorInput.addEventListener('input', () => editor.hasDocument && editor.setColor(colorInput.value, { refocus: false }));
       label.appendChild(colorInput);
       bar.appendChild(label);
+    } else if (item === 'imageWrap') {
+      // Enabled while a picture is selected; alignment buttons then align the picture
+      wrapSelect = document.createElement('select');
+      wrapSelect.className = 'docx-toolbar-select';
+      wrapSelect.title = text.imageWrap;
+      wrapSelect.setAttribute('aria-label', text.imageWrap);
+      wrapSelect.disabled = true;
+      WRAPS.forEach(wrap => wrapSelect.add(new Option(text.wraps[wrap], wrap)));
+      wrapSelect.addEventListener('change', () => {
+        const image = editor.hasDocument && editor.selectedImage;
+        if (image) editor.setImageWrap(image, wrapSelect.value);
+        editor.focus();
+      });
+      bar.appendChild(wrapSelect);
     } else if (item === 'zoom') {
       const zoom = factor => {
         const steps = factor > 0 ? ZOOM_STEPS : [...ZOOM_STEPS].reverse();
@@ -115,12 +148,20 @@ export function createDocxToolbar(editor, container, { items = DEFAULT_TOOLBAR_I
     ['left', 'center', 'right', 'both'].forEach(a => buttons[a]?.classList.toggle('active', format?.align === a));
     if (colorInput && format?.color) colorInput.value = format.color;
   };
+  const onImage = e => {
+    if (!wrapSelect) return;
+    const image = e.detail.image;
+    wrapSelect.disabled = !image;
+    if (image) wrapSelect.value = image.wrap;
+  };
   editor.addEventListener('selectionchange', onSelection);
+  editor.addEventListener('imageselect', onImage);
   container.appendChild(bar);
 
   return {
     destroy() {
       editor.removeEventListener('selectionchange', onSelection);
+      editor.removeEventListener('imageselect', onImage);
       bar.remove();
     },
   };

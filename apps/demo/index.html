@@ -213,6 +213,43 @@
         <input type="file" id="image-input" accept="image/png,image/jpeg,image/gif" style="display:none;" />
       </div>
 
+      <!-- Selected picture: text wrapping and size (shown while a picture is selected) -->
+      <div class="ribbon-group image-tools" id="image-tools" style="display: none;">
+        <div class="ribbon-divider"></div>
+        <label class="ribbon-field" title="Cómo fluye el texto alrededor de la imagen">
+          <span>Ajuste</span>
+          <select id="image-wrap">
+            <option value="inline">En línea con el texto</option>
+            <option value="square">Cuadrado</option>
+            <option value="tight">Estrecho</option>
+            <option value="through">Transparente</option>
+            <option value="topAndBottom">Arriba y abajo</option>
+            <option value="behind">Detrás del texto</option>
+            <option value="inFront">Delante del texto</option>
+          </select>
+        </label>
+        <label class="ribbon-field" title="Ancho en px">
+          <span>An</span>
+          <input type="number" id="image-width" min="8" max="4000" step="1" />
+        </label>
+        <label class="ribbon-field" title="Alto en px">
+          <span>Al</span>
+          <input type="number" id="image-height" min="8" max="4000" step="1" />
+        </label>
+        <label class="ribbon-field" title="Mantener la proporción al cambiar ancho o alto">
+          <input type="checkbox" id="image-ratio" checked />
+          <span>Proporción</span>
+        </label>
+        <button id="btn-image-delete" class="ribbon-btn" title="Eliminar la imagen (Supr)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+            <path d="M10 11v6M14 11v6"></path>
+            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+          </svg>
+        </button>
+      </div>
+
       <div class="ribbon-divider"></div>
 
       <!-- Background & Watermark Tools -->

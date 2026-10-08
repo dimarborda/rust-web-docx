@@ -108,12 +108,12 @@ const PPR_ORDER: &[&str] = &[
     "cnfStyle", "rPr", "sectPr", "pPrChange",
 ];
 
-struct Token<'a> {
-    ev: Event<'a>,
-    span: Range<usize>,
+pub(crate) struct Token<'a> {
+    pub ev: Event<'a>,
+    pub span: Range<usize>,
 }
 
-fn tokenize(xml: &str) -> Result<Vec<Token<'_>>, String> {
+pub(crate) fn tokenize(xml: &str) -> Result<Vec<Token<'_>>, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut tokens = Vec::new();
@@ -132,7 +132,7 @@ fn tokenize(xml: &str) -> Result<Vec<Token<'_>>, String> {
 }
 
 /// Index of the token closing the element opened at `i` (`i` itself for empty elements)
-fn element_end(tokens: &[Token], i: usize) -> usize {
+pub(crate) fn element_end(tokens: &[Token], i: usize) -> usize {
     if !matches!(tokens[i].ev, Event::Start(_)) {
         return i;
     }

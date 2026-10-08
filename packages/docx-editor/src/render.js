@@ -53,6 +53,19 @@ export function measureText(text, family, size, bold, italic) {
   return measureCtx.measureText(text).width;
 }
 
+const PROBE_TEXT = 'Contrato de prestación de servicios 0123456789';
+
+/**
+ * Widths of a probe text in each canvas font: changes when a web font becomes usable for
+ * canvas text, which some engines (Safari) only allow a moment after reporting it loaded
+ */
+export function fontWidthsSignature(faces) {
+  return [...faces].map(face => {
+    measureCtx.font = face;
+    return measureCtx.measureText(PROBE_TEXT).width.toFixed(2);
+  }).join('|');
+}
+
 /** Every font face a layout uses, as canvas font strings */
 export function layoutFontFaces(layout) {
   const faces = new Set();

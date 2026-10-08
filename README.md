@@ -22,7 +22,8 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 - **Edición directa sobre la página.** Cursor propio dibujado en canvas, selección con ratón y teclado entre párrafos, `Enter` para dividir y `Backspace` para unir párrafos, edición dentro de celdas de tabla, deshacer y rehacer.
 - **Ediciones sin pérdidas.** Solo se reescriben los fragmentos XML que cambiaste; estilos, temas, relaciones, imágenes y secciones del archivo original quedan intactos.
 - **Variables de plantilla.** Detecta `{{CAMPO}}` aunque Word lo haya partido en varios fragmentos (`<w:r>`) y lo reemplaza respetando el formato.
-- **Maquetación parecida a Word.** Cascada de estilos `docDefaults → styles.xml → numbering.xml → formato directo`, medición real de fuentes, paginación, sangrías, interlineado, listas numeradas, tablas con bordes resueltos por lado e imágenes ancladas.
+- **Maquetación parecida a Word.** Cascada de estilos `docDefaults → styles.xml → numbering.xml → formato directo`, medición real de fuentes, paginación, sangrías, interlineado, listas numeradas y tablas con bordes resueltos por lado. Las imágenes en línea fluyen con el texto y el texto rodea a las flotantes (cuadrado, estrecho, arriba y abajo, detrás o delante).
+- **Imágenes editables.** Se seleccionan con un clic, se redimensionan con las asas, las flotantes se arrastran y cambian de ajuste, y todo está disponible desde código (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`).
 - **Valores por defecto de Word.** Lo que el documento no especifica se dibuja como lo haría Word (Times New Roman 10 pt, sin bordes inventados), en lugar de "mejorarlo".
 - **Buscar y reemplazar** con mayúsculas/minúsculas y expresiones regulares.
 - **Privado por diseño.** Lectura del ZIP, análisis XML, maquetación, edición y reempaquetado ocurren en la memoria del navegador.
@@ -43,6 +44,8 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 | [`src/layout_engine.rs`](src/layout_engine.rs) | Corte de líneas, paginación, tablas e imágenes |
 | [`src/caret.rs`](src/caret.rs) | Hit-testing, posición del cursor y rectángulos de selección |
 | [`src/paragraph_edit.rs`](src/paragraph_edit.rs) | Ediciones de texto, división y unión de párrafos sin pérdidas |
+| [`src/insert_objects.rs`](src/insert_objects.rs) | Tablas e imágenes insertadas desde código |
+| [`src/image_edit.rs`](src/image_edit.rs) | Tamaño, posición, ajuste del texto y borrado de imágenes |
 | [`src/sample_generator.rs`](src/sample_generator.rs) | Documento de demostración generado en memoria |
 | [`packages/docx-editor/`](packages/docx-editor) | Paquete npm reutilizable: `DocxEditor`, `<docx-editor>` y barra de herramientas opcional |
 | [`apps/demo/`](apps/demo) | La demo publicada, construida sobre el paquete |
@@ -75,6 +78,7 @@ Todavía no se soportan, o solo en parte:
 - Texto de encabezados y pies de página (las imágenes sí se muestran).
 - Celdas combinadas (`gridSpan`, `vMerge`).
 - Cuadros de texto, formas y ecuaciones.
+- El texto rodea las imágenes flotantes por un solo lado y usando su rectángulo (no su contorno); las tablas no las rodean.
 - Comentarios, control de cambios y notas al pie (se conservan en el archivo, pero no se dibujan).
 - Varias columnas por sección.
 

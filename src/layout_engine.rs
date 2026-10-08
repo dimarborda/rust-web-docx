@@ -123,6 +123,15 @@ pub enum RenderCommand {
         height: f64,
         is_background: bool,
         opacity: f64,
+        /// Body picture drawn: its paragraph and index among that paragraph's pictures
+        /// (absent for backgrounds and header/footer pictures)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paragraph_index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image_index: Option<usize>,
+        /// Floating picture (`wp:anchor`) rather than in line with the text
+        #[serde(default)]
+        anchored: bool,
     },
     #[serde(rename = "watermark")]
     Watermark {
@@ -244,7 +253,7 @@ impl LayoutEngine {
             .iter()
             .map(|el| match el {
                 DocumentElement::Paragraph(p) => {
-                    Block::Paragraph(prepare_paragraph(p, geo.margin_left, geo.printable_w, None, measurer))
+                    Block::Paragraph(prepare_paragraph(p, geo.margin_left, geo.printable_w, None, measurer, &[]))
                 }
                 DocumentElement::Table(t) => Block::Table(prepare_table(t, &geo, measurer)),
             })
@@ -254,7 +263,7 @@ impl LayoutEngine {
         let mut flow = FlowState::default();
         for (i, block) in blocks.iter().enumerate() {
             match block {
-                Block::Paragraph(b) => place_paragraph(&mut pag, &blocks, i, b, &mut flow),
+                Block::Paragraph(b) => place_paragraph(&mut pag, &blocks, i, b, &mut flow, measurer),
                 Block::Table(t) => place_table(&mut pag, t, &mut flow),
             }
         }
@@ -274,6 +283,9 @@ impl LayoutEngine {
                         height: page_h,
                         is_background: true,
                         opacity: 1.0,
+                        paragraph_index: None,
+                        image_index: None,
+                        anchored: false,
                     },
                 );
             }
@@ -293,7 +305,7 @@ impl LayoutEngine {
                 } else {
                     (column.0, para_top)
                 };
-                let cmd = image_command(&placed.image, &placed.data_url, x, y);
+                let cmd = image_command(&placed.image, &placed.data_url, x, y, None);
                 if placed.image.behind_text {
                     page.items.insert(0, cmd);
                 } else {
@@ -477,6 +489,15 @@ struct LineBox {
     height: f64,
     /// Baseline offset from the top of the line box
     baseline: f64,
+    /// Space skipped above the line to clear a floating picture (top-and-bottom wrapping)
+    gap_before: f64,
+}
+
+impl LineBox {
+    /// Height including the space skipped above it
+    fn outer_height(&self) -> f64 {
+        self.gap_before + self.height
+    }
 }
 
 struct ParagraphBox<'a> {
@@ -484,8 +505,11 @@ struct ParagraphBox<'a> {
     /// Left edge and width of the paragraph's column (page margin, or a table cell's content box)
     left: f64,
     width: f64,
-    /// Where the first line's inline pictures start (x) when the paragraph has any
-    inline_images_x: f64,
+    /// Extra x of the list label when a floating picture pushes the first line to the right
+    label_shift: f64,
+    /// Page (count of finished pages) the lines were fitted around floating pictures for;
+    /// their `gap_before` only applies there
+    wrap_page: Option<usize>,
     lines: Vec<LineBox>,
     font_size: f64,
     font_weight: &'static str,
@@ -500,7 +524,7 @@ struct ParagraphBox<'a> {
 
 impl ParagraphBox<'_> {
     fn lines_height(&self) -> f64 {
-        self.lines.iter().map(|l| l.height).sum()
+        self.lines.iter().map(LineBox::outer_height).sum()
     }
 }
 
@@ -564,21 +588,24 @@ fn css_color(c: &str, fallback: &str) -> String {
 
 /// Lays out a paragraph in the column starting at `left` with `width` px. `auto_color`
 /// replaces the default text color (e.g. white text in dark table cells, like Word's "auto").
+/// `slots` narrow (or push down) lines to keep them clear of floating pictures
 fn prepare_paragraph<'a>(
     p: &'a ParagraphInfo,
     left: f64,
     width: f64,
     auto_color: Option<&str>,
     m: &mut dyn TextMeasurer,
+    slots: &[LineSlot],
 ) -> ParagraphBox<'a> {
     let (font_size, _, font_weight, font_family, default_color) = get_paragraph_typography(p);
     let color = css_color(&p.color, auto_color.unwrap_or(&default_color));
-    let lines = layout_paragraph_lines(p, font_size, &color, &font_family, left, width, m);
+    let lines = layout_paragraph_lines(p, font_size, &color, &font_family, left, width, slots, m);
     let label = list_label_geometry(p, font_size, &font_family, m);
 
     let lines: Vec<LineBox> = lines
         .into_iter()
-        .map(|line| {
+        .enumerate()
+        .map(|(idx, line)| {
             // The tallest run sets the line's natural height
             let (size, family) = line
                 .runs
@@ -596,41 +623,33 @@ fn prepare_paragraph<'a>(
                 natural * p.line_spacing.unwrap_or(1.0)
             };
             // Extra leading sits above the text, as in Word
-            LineBox { line, height, baseline: height - descent * size }
+            let mut baseline = height - descent * size;
+            let mut height = height;
+            // Inline pictures stand on the baseline; the line grows to fit the tallest one
+            let tallest = line.images.iter().map(|i| i.height).fold(0.0, f64::max);
+            if tallest > baseline {
+                height += tallest - baseline;
+                baseline = tallest;
+            }
+            let gap_before = slots.get(idx).map_or(0.0, |s| s.gap);
+            LineBox { line, height, baseline, gap_before }
         })
         .collect();
 
     let (space_before, space_after) = (p.space_before * PX_PER_PT, p.space_after * PX_PER_PT);
     let top_border_h = p.borders.top.as_ref().map_or(0.0, |b| b.space.max(3.0) + b.sz_px);
 
-    // Inline pictures sit on the first line (approximation: before its text), which grows
-    // to fit them with the text on the baseline, as in Word
-    let inline: Vec<&ImageRef> = p.images.iter().filter(|i| !i.anchored).collect();
-    let mut lines = lines;
-    let mut inline_images_x = left;
-    if !inline.is_empty() {
-        let total_w: f64 = inline.iter().map(|i| i.width).sum();
-        let tallest = inline.iter().map(|i| i.height).fold(0.0, f64::max);
-        if let Some(first) = lines.first_mut() {
-            if tallest > first.height {
-                first.baseline += tallest - first.height;
-                first.height = tallest;
-            }
-            let indent = (p.indent_left + p.indent_first_line).max(0.0);
-            let free = (width - indent - total_w).max(0.0);
-            inline_images_x = left + indent + match p.align.as_str() {
-                "center" => free / 2.0,
-                "right" => free,
-                _ => 0.0,
-            };
-        }
-    }
+    let label_shift = match (&label, slots.first()) {
+        (Some(g), Some(slot)) => (slot.left - g.text_offset).max(0.0),
+        _ => 0.0,
+    };
 
     ParagraphBox {
         p,
         left,
         width,
-        inline_images_x,
+        label_shift,
+        wrap_page: None,
         lines,
         font_size,
         font_weight,
@@ -695,7 +714,7 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
                         .iter()
                         .map(|p| {
                             let inner = (width - pad_left - pad_right).max(10.0);
-                            prepare_paragraph(p, x + pad_left, inner, dark.then_some("#FFFFFF"), m)
+                            prepare_paragraph(p, x + pad_left, inner, dark.then_some("#FFFFFF"), m, &[])
                         })
                         .collect();
                     let content_height = pad_top + pad_bottom
@@ -734,6 +753,8 @@ struct Paginator<'a> {
     items: Vec<RenderCommand>,
     /// Pictures in front of the text, drawn after everything else on the page
     front: Vec<RenderCommand>,
+    /// Areas of the current page that floating pictures keep free of text
+    exclusions: Vec<Exclusion>,
     cursor_y: f64,
 }
 
@@ -752,6 +773,7 @@ impl<'a> Paginator<'a> {
             pages: Vec::new(),
             items: Vec::new(),
             front: Vec::new(),
+            exclusions: Vec::new(),
             cursor_y: geo.top_first,
         }
     }
@@ -793,6 +815,7 @@ impl<'a> Paginator<'a> {
             items,
         });
         self.cursor_y = self.geo.top;
+        self.exclusions.clear();
     }
 
     fn finish(mut self) -> Vec<PageLayout> {
@@ -842,7 +865,14 @@ fn keep_chain_height(blocks: &[Block], start: usize) -> f64 {
     h
 }
 
-fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &ParagraphBox, flow: &mut FlowState) {
+fn place_paragraph(
+    pag: &mut Paginator,
+    blocks: &[Block],
+    i: usize,
+    b: &ParagraphBox,
+    flow: &mut FlowState,
+    m: &mut dyn TextMeasurer,
+) {
     let p = b.p;
     if p.page_break_before && !pag.at_top() {
         pag.new_page();
@@ -883,6 +913,18 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
         pag.cursor_y += b.top_border_h;
     }
 
+    // Floating pictures (this paragraph's and earlier ones on the page) narrow the lines
+    // beside them or push them below
+    register_floats(pag, b, pag.cursor_y);
+    let wrapped;
+    let b = match wrap_around_floats(pag, b, pag.cursor_y, m) {
+        Some(w) => {
+            wrapped = w;
+            &wrapped
+        }
+        None => b,
+    };
+
     // Lines, split into chunks at manual page breaks, with widow/orphan control
     let n = b.lines.len();
     let mut k0 = 0;
@@ -891,8 +933,8 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
         let chunk_end = (k0..n).find(|&k| b.lines[k].line.page_break_after).map_or(n, |k| k + 1);
         let mut fit = 0;
         let mut h = 0.0;
-        while k0 + fit < chunk_end && h + b.lines[k0 + fit].height <= pag.remaining() + 0.01 {
-            h += b.lines[k0 + fit].height;
+        while k0 + fit < chunk_end && h + b.lines[k0 + fit].outer_height() <= pag.remaining() + 0.01 {
+            h += b.lines[k0 + fit].outer_height();
             fit += 1;
         }
         let rest = chunk_end - k0;
@@ -950,35 +992,176 @@ fn place_paragraph(pag: &mut Paginator, blocks: &[Block], i: usize, b: &Paragrap
 
 fn draw_line(pag: &mut Paginator, b: &ParagraphBox, idx: usize) {
     if idx == 0 {
-        place_paragraph_images(pag, b, pag.cursor_y);
+        place_floating_images(pag, b, pag.cursor_y, true);
+    }
+    let lb = &b.lines[idx];
+    if b.wrap_page == Some(pag.pages.len()) {
+        pag.cursor_y += lb.gap_before;
     }
     push_line_items(&mut pag.items, b, idx, pag.cursor_y);
-    pag.cursor_y += b.lines[idx].height;
+    push_inline_images(pag, b, idx, pag.cursor_y);
+    pag.cursor_y += lb.height;
 }
 
-/// Puts a paragraph's pictures on the current page: floating ones where they are anchored
-/// (behind or in front of the text), inline ones on the first line
-fn place_paragraph_images(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
-    let mut inline_x = b.inline_images_x;
-    for img in &b.p.images {
+/// Puts a paragraph's floating pictures on the current page where they are anchored, behind
+/// or in front of the text. With `register`, those that wrap text keep their area free of
+/// it for the rest of the page.
+fn place_floating_images(pag: &mut Paginator, b: &ParagraphBox, para_top: f64, register: bool) {
+    if register {
+        register_floats(pag, b, para_top);
+    }
+    for (k, img) in b.p.images.iter().enumerate().filter(|(_, img)| img.anchored) {
         let Some(data_url) = pag.images.get(&img.rel_id) else { continue };
-        let (x, y) = if img.anchored {
-            anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top)
-        } else {
-            let first = &b.lines[0];
-            let pos = (inline_x, para_top + first.height - img.height);
-            inline_x += img.width;
-            pos
-        };
-        let cmd = image_command(img, data_url, x, y);
+        let (x, y) = anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top);
+        let cmd = image_command(img, data_url, x, y, Some((b.p.index, k)));
         if img.behind_text {
             pag.items.insert(0, cmd);
-        } else if img.anchored {
-            pag.front.push(cmd);
         } else {
-            pag.items.push(cmd);
+            pag.front.push(cmd);
         }
     }
+}
+
+/// Draws the inline pictures of line `idx`, standing on its baseline
+fn push_inline_images(pag: &mut Paginator, b: &ParagraphBox, idx: usize, top: f64) {
+    let lb = &b.lines[idx];
+    for li in &lb.line.images {
+        let img = &b.p.images[li.index];
+        let Some(data_url) = pag.images.get(&img.rel_id) else { continue };
+        let cmd = image_command(img, data_url, li.x, top + lb.baseline - li.height, Some((b.p.index, li.index)));
+        pag.items.push(cmd);
+    }
+}
+
+/// Narrowest text column worth filling beside a floating picture; less than this and the
+/// line moves below the picture
+const MIN_WRAP_WIDTH: f64 = 72.0;
+
+/// Area of the page a floating picture keeps free of text (its box plus `dist*`)
+#[derive(Debug, Clone)]
+struct Exclusion {
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+    /// Text goes above and below only (top-and-bottom wrapping)
+    full_width: bool,
+    /// Side text may take: "bothSides", "left", "right" or "largest"
+    side: String,
+    paragraph: usize,
+    image: usize,
+}
+
+/// How a line must give way to floating pictures: insets from the column edges, or space to
+/// skip above it
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct LineSlot {
+    left: f64,
+    right: f64,
+    gap: f64,
+}
+
+/// Records the text-wrapping pictures anchored in `b` as exclusions of the current page
+fn register_floats(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
+    for (k, img) in b.p.images.iter().enumerate().filter(|(_, img)| img.wraps_text()) {
+        if pag.exclusions.iter().any(|e| e.paragraph == b.p.index && e.image == k) {
+            continue;
+        }
+        let (x, y) = anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top);
+        pag.exclusions.push(Exclusion {
+            left: x - img.dist_left,
+            right: x + img.width + img.dist_right,
+            top: y - img.dist_top,
+            bottom: y + img.height + img.dist_bottom,
+            full_width: img.wrap == "topAndBottom",
+            side: img.wrap_side.clone(),
+            paragraph: b.p.index,
+            image: k,
+        });
+    }
+}
+
+/// Where each line starting at `start_y` may go, given the exclusions of the page.
+/// `heights` are the expected line heights (the last one repeats).
+fn line_slots(exclusions: &[Exclusion], column: (f64, f64), start_y: f64, page_bottom: f64, heights: &[f64]) -> Vec<LineSlot> {
+    let (col_left, col_right) = column;
+    let mut slots = Vec::new();
+    let mut top = start_y;
+    let max_lines = heights.len() * 4 + 16;
+    for idx in 0..max_lines {
+        if top >= page_bottom {
+            break;
+        }
+        let h = heights.get(idx).or(heights.last()).copied().unwrap_or(16.0).max(1.0);
+        let mut slot = LineSlot::default();
+        let mut y = top;
+        for _ in 0..16 {
+            let overlapping: Vec<&Exclusion> = exclusions
+                .iter()
+                .filter(|e| e.top < y + h && e.bottom > y && e.left < col_right && e.right > col_left)
+                .collect();
+            let (mut left, mut right) = (0.0f64, 0.0f64);
+            let mut blocked = false;
+            for e in &overlapping {
+                if e.full_width {
+                    blocked = true;
+                    continue;
+                }
+                let space_left = e.left - col_left;
+                let space_right = col_right - e.right;
+                let text_left = match e.side.as_str() {
+                    "left" => true,
+                    "right" => false,
+                    // Text takes the wider side (Word fills both sides of a centered picture)
+                    _ => space_left >= space_right,
+                };
+                if text_left {
+                    right = right.max(col_right - e.left);
+                } else {
+                    left = left.max(e.right - col_left);
+                }
+            }
+            if !blocked && col_right - col_left - left - right >= MIN_WRAP_WIDTH {
+                slot.left = left;
+                slot.right = right;
+                break;
+            }
+            // No room beside the pictures: continue below the first one that ends
+            let below = overlapping.iter().map(|e| e.bottom).fold(f64::INFINITY, f64::min);
+            if !below.is_finite() || below <= y {
+                break;
+            }
+            y = below;
+            slot = LineSlot { gap: y - top, ..LineSlot::default() };
+        }
+        slots.push(slot);
+        top = y + h;
+    }
+    while slots.last() == Some(&LineSlot::default()) {
+        slots.pop();
+    }
+    slots
+}
+
+/// The paragraph laid out again around the floating pictures of the page, or `None` when
+/// none of them reaches its lines
+fn wrap_around_floats<'a>(pag: &Paginator, b: &ParagraphBox<'a>, top: f64, m: &mut dyn TextMeasurer) -> Option<ParagraphBox<'a>> {
+    if pag.exclusions.is_empty() {
+        return None;
+    }
+    let column = (b.left, b.left + b.width);
+    let heights: Vec<f64> = b.lines.iter().map(|l| l.height).collect();
+    let slots = line_slots(&pag.exclusions, column, top, pag.geo.bottom, &heights);
+    if slots.is_empty() {
+        return None;
+    }
+    let first = prepare_paragraph(b.p, b.left, b.width, None, m, &slots);
+    // Narrower lines may change line heights (pictures, mixed sizes): settle once more
+    let heights: Vec<f64> = first.lines.iter().map(|l| l.height).collect();
+    let again = line_slots(&pag.exclusions, column, top, pag.geo.bottom, &heights);
+    let mut wrapped = if again == slots { first } else { prepare_paragraph(b.p, b.left, b.width, None, m, &again) };
+    wrapped.wrap_page = Some(pag.pages.len());
+    Some(wrapped)
 }
 
 /// Top-left corner of a floating picture, from what its position is relative to
@@ -1012,7 +1195,8 @@ fn anchored_position(img: &ImageRef, geo: &PageGeometry, column: (f64, f64), par
     (x, y)
 }
 
-fn image_command(img: &ImageRef, data_url: &str, x: f64, y: f64) -> RenderCommand {
+/// `body`: the picture's paragraph and index among its pictures
+fn image_command(img: &ImageRef, data_url: &str, x: f64, y: f64, body: Option<(usize, usize)>) -> RenderCommand {
     RenderCommand::Image {
         data_url: data_url.to_string(),
         x,
@@ -1021,6 +1205,9 @@ fn image_command(img: &ImageRef, data_url: &str, x: f64, y: f64) -> RenderComman
         height: img.height,
         is_background: img.behind_text,
         opacity: 1.0,
+        paragraph_index: body.map(|(p, _)| p),
+        image_index: body.map(|(_, i)| i),
+        anchored: img.anchored,
     }
 }
 
@@ -1063,7 +1250,7 @@ fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize,
         if let (Some(label), Some(geo)) = (b.p.list_label.as_ref(), b.label.as_ref()) {
             items.push(RenderCommand::Text {
                 text: label.text.clone(),
-                x: b.left + geo.label_offset,
+                x: b.left + geo.label_offset + b.label_shift,
                 y: baseline_y,
                 width: geo.label_width,
                 height: lb.height,
@@ -1086,7 +1273,7 @@ fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize,
                     font_size: Some(geo.font_size),
                     font_family: label.font_family.clone(),
                     width: geo.label_width,
-                    x: b.left + geo.label_offset,
+                    x: b.left + geo.label_offset + b.label_shift,
                     start: 0,
                 }],
                 line: None,
@@ -1162,9 +1349,11 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
             let mut y = top + pad_top + v_offset;
             for b in &cell.paragraphs {
                 y += b.space_before;
-                place_paragraph_images(pag, b, y);
+                place_floating_images(pag, b, y, false);
                 for idx in 0..b.lines.len() {
+                    y += b.lines[idx].gap_before;
                     push_line_items(&mut pag.items, b, idx, y);
+                    push_inline_images(pag, b, idx, y);
                     y += b.lines[idx].height;
                 }
                 y += b.space_after;
@@ -1197,6 +1386,16 @@ struct LayoutLine {
     pub box_left: f64,
     pub box_right: f64,
     pub runs: Vec<TextRun>,
+    /// Pictures in line with the text drawn on this line
+    pub images: Vec<LineImage>,
+}
+
+/// An inline picture placed on a line: index in the paragraph's pictures and its box
+#[derive(Debug, Clone)]
+struct LineImage {
+    index: usize,
+    x: f64,
+    height: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -1227,6 +1426,8 @@ enum AtomicUnit {
     Tab(usize),
     Spaces(Vec<LayoutSegment>),
     Word(Vec<LayoutSegment>),
+    /// Inline picture (index in the paragraph's pictures)
+    Image(usize),
 }
 
 /// Splits runs into words, spaces and breaks, remembering where each piece starts in the text
@@ -1336,8 +1537,11 @@ fn group_into_units(segments: Vec<LayoutSegment>) -> Vec<AtomicUnit> {
     units
 }
 
-fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegment, width: f64) {
-    if let Some(last) = runs.last_mut() {
+/// Appends text to the line, growing the last run when it has the same format (runs before
+/// `barrier` stay as they are: an inline picture follows them)
+fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegment, width: f64, barrier: usize) {
+    let can_grow = runs.len() > barrier;
+    if let Some(last) = runs.last_mut().filter(|_| can_grow) {
         if last.bold == seg.bold
             && last.italic == seg.italic
             && last.underline == seg.underline
@@ -1378,6 +1582,7 @@ fn seg_width(m: &mut dyn TextMeasurer, seg: &LayoutSegment, text: &str, family_c
     )
 }
 
+#[allow(clippy::too_many_arguments, unused_assignments)]
 fn layout_paragraph_lines(
     p: &ParagraphInfo,
     font_size: f64,
@@ -1385,14 +1590,24 @@ fn layout_paragraph_lines(
     family_css: &str,
     margin_left: f64,
     printable_width: f64,
+    slots: &[LineSlot],
     m: &mut dyn TextMeasurer,
 ) -> Vec<LayoutLine> {
     let first_line_indent = list_label_geometry(p, font_size, family_css, m)
         .map(|g| g.text_offset)
         .unwrap_or_else(|| (p.indent_left + p.indent_first_line).max(0.0));
-    let line_indent = |idx: usize| if idx == 0 { first_line_indent } else { p.indent_left.max(0.0) };
-    let max_width = |idx: usize| (printable_width - line_indent(idx) - p.indent_right.max(0.0)).max(60.0);
-    let flush = |mut runs: Vec<TextRun>, line_w: f64, idx: usize, ends_paragraph_line: bool, page_break_after: bool, range: (usize, usize)| {
+    let slot = |idx: usize| slots.get(idx).copied().unwrap_or_default();
+    // A floating picture beside the line moves its edge unless the indent already clears it
+    let line_indent = |idx: usize| (if idx == 0 { first_line_indent } else { p.indent_left.max(0.0) }).max(slot(idx).left);
+    let right_indent = |idx: usize| p.indent_right.max(0.0).max(slot(idx).right);
+    let max_width = |idx: usize| (printable_width - line_indent(idx) - right_indent(idx)).max(60.0);
+    let flush = |mut runs: Vec<TextRun>,
+                 images: Vec<(usize, f64, usize)>,
+                 line_w: f64,
+                 idx: usize,
+                 ends_paragraph_line: bool,
+                 page_break_after: bool,
+                 range: (usize, usize)| {
         let indent = line_indent(idx);
         let max_w = max_width(idx);
         let x = match p.align.as_str() {
@@ -1401,18 +1616,33 @@ fn layout_paragraph_lines(
             _ => margin_left + indent,
         };
         // Justified lines (except the last one) stretch their spaces to fill the line
-        let space_count: usize = runs.iter().filter(|r| r.text != "\t").map(|r| r.text.matches(' ').count()).sum();
+        let spaces = |r: &TextRun| if r.text == "\t" { 0 } else { r.text.matches(' ').count() };
+        let space_count: usize = runs.iter().map(spaces).sum();
         let gap = max_w - line_w;
         let space_extra = if p.align == "both" && !ends_paragraph_line && space_count > 0 && gap > 0.0 {
             gap / space_count as f64
         } else {
             0.0
         };
+        // Spaces stretched before each run, for the pictures between runs
+        let mut stretched = Vec::with_capacity(runs.len() + 1);
+        let mut acc = 0.0;
         let mut cur = x;
-        for r in runs.iter_mut() {
-            r.x = cur;
-            cur += r.width + if r.text == "\t" { 0.0 } else { space_extra * r.text.matches(' ').count() as f64 };
+        for (i, r) in runs.iter_mut().enumerate() {
+            cur += images.iter().filter(|&&(_, _, before)| before == i).map(|&(k, _, _)| p.images[k].width).sum::<f64>();
+            stretched.push(acc);
+            r.x = cur + acc;
+            acc += space_extra * spaces(r) as f64;
+            cur += r.width;
         }
+        stretched.push(acc);
+        let images = images
+            .into_iter()
+            .map(|(index, rel_x, runs_before)| {
+                let img = &p.images[index];
+                LineImage { index, x: x + rel_x + stretched[runs_before], height: img.height }
+            })
+            .collect();
         LayoutLine {
             text: runs.iter().map(|r| r.text.as_str()).collect(),
             x,
@@ -1426,12 +1656,23 @@ fn layout_paragraph_lines(
             box_left: margin_left + indent,
             box_right: margin_left + indent + max_w,
             runs,
+            images,
         }
     };
 
+    // Pictures in line with the text, by their position in it
+    let mut inline: Vec<(usize, usize)> = p
+        .images
+        .iter()
+        .enumerate()
+        .filter(|(_, img)| !img.anchored)
+        .map(|(k, img)| (img.offset, k))
+        .collect();
+    inline.sort();
+
     let total_chars = p.text.chars().count();
-    if p.text.trim().is_empty() && p.runs.is_empty() {
-        return vec![flush(Vec::new(), 0.0, 0, true, false, (0, total_chars))];
+    if p.text.trim().is_empty() && p.runs.is_empty() && inline.is_empty() {
+        return vec![flush(Vec::new(), Vec::new(), 0.0, 0, true, false, (0, total_chars))];
     }
 
     // Raw runs with font sizes scaled to px
@@ -1453,10 +1694,14 @@ fn layout_paragraph_lines(
     };
     let total_chars = source_runs.iter().map(|r| r.text.chars().count()).sum::<usize>();
 
-    let units = group_into_units(extract_segments(&source_runs, default_color, font_size));
+    let units = with_inline_images(group_into_units(extract_segments(&source_runs, default_color, font_size)), &inline);
 
     let mut lines = Vec::new();
     let mut runs: Vec<TextRun> = Vec::new();
+    // Pictures on the current line: (index in p.images, x from the line start, runs before it)
+    let mut line_images: Vec<(usize, f64, usize)> = Vec::new();
+    // Runs before this count may not grow: a picture sits after them
+    let mut barrier = 0usize;
     let mut line_w = 0.0;
     let mut line_start = 0usize;
     let mut pending_spaces: Vec<LayoutSegment> = Vec::new();
@@ -1465,36 +1710,44 @@ fn layout_paragraph_lines(
     let mut ended_with_break = false;
     let mut idx = 0;
 
+    macro_rules! new_line {
+        ($ends:expr, $page_break:expr, $end:expr) => {{
+            lines.push(flush(std::mem::take(&mut runs), std::mem::take(&mut line_images), line_w, idx, $ends, $page_break, (line_start, $end)));
+            line_w = 0.0;
+            barrier = 0;
+            idx += 1;
+        }};
+    }
+
     for unit in units {
         ended_with_break = false;
+        let has_content = !runs.is_empty() || !line_images.is_empty();
         match unit {
             AtomicUnit::Newline(at) | AtomicUnit::PageBreak(at) => {
                 let page_break = matches!(unit, AtomicUnit::PageBreak(_));
                 // Spaces before a manual break stay on the line
                 for sp in pending_spaces.drain(..) {
                     if let SegmentKind::Space(ref s) = sp.kind {
-                        if !runs.is_empty() || !just_wrapped {
+                        if has_content || !just_wrapped {
                             let w = seg_width(m, &sp, s, family_css);
-                            append_segment_to_runs(&mut runs, s, &sp, w);
+                            append_segment_to_runs(&mut runs, s, &sp, w, barrier);
                             line_w += w;
                         }
                     }
                 }
-                lines.push(flush(std::mem::take(&mut runs), line_w, idx, true, page_break, (line_start, at)));
-                line_w = 0.0;
+                new_line!(true, page_break, at);
                 line_start = at + 1;
                 just_wrapped = false;
                 ended_with_break = true;
-                idx += 1;
             }
             AtomicUnit::Tab(at) => {
                 // Default tab stops every 0.5in, measured from the left margin
                 const DEFAULT_TAB: f64 = 48.0;
                 for sp in pending_spaces.drain(..) {
                     if let SegmentKind::Space(ref s) = sp.kind {
-                        if !runs.is_empty() || !just_wrapped {
+                        if has_content || !just_wrapped {
                             let w = seg_width(m, &sp, s, family_css);
-                            append_segment_to_runs(&mut runs, s, &sp, w);
+                            append_segment_to_runs(&mut runs, s, &sp, w, barrier);
                             line_w += w;
                         }
                     }
@@ -1504,11 +1757,9 @@ fn layout_paragraph_lines(
                     (((pos / DEFAULT_TAB).floor() + 1.0) * DEFAULT_TAB - pos).max(1.0)
                 };
                 let mut tab_w = advance(line_indent(idx), line_w);
-                if line_w + tab_w > max_width(idx) && !runs.is_empty() {
-                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, at)));
-                    line_w = 0.0;
+                if line_w + tab_w > max_width(idx) && has_content {
+                    new_line!(false, false, at);
                     line_start = at;
-                    idx += 1;
                     tab_w = advance(line_indent(idx), 0.0);
                 }
                 runs.push(TextRun {
@@ -1527,6 +1778,40 @@ fn layout_paragraph_lines(
                 just_wrapped = false;
             }
             AtomicUnit::Spaces(spaces) => pending_spaces = spaces,
+            AtomicUnit::Image(k) => {
+                // A picture in line with the text breaks lines like a word without characters
+                let img = &p.images[k];
+                let at = img.offset.min(total_chars);
+                let spaces: Vec<(String, LayoutSegment, f64)> = if has_content || !just_wrapped {
+                    pending_spaces
+                        .drain(..)
+                        .filter_map(|sp| match sp.kind {
+                            SegmentKind::Space(ref s) => {
+                                let w = seg_width(m, &sp, s, family_css);
+                                Some((s.clone(), sp, w))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                pending_spaces.clear();
+                let spaces_w: f64 = spaces.iter().map(|(_, _, w)| w).sum();
+                if line_w + spaces_w + img.width > max_width(idx) && has_content {
+                    new_line!(false, false, at);
+                    line_start = at;
+                } else {
+                    for (s, seg, w) in &spaces {
+                        append_segment_to_runs(&mut runs, s, seg, *w, barrier);
+                        line_w += w;
+                    }
+                }
+                line_images.push((k, line_w, runs.len()));
+                line_w += img.width;
+                barrier = runs.len();
+                just_wrapped = false;
+            }
             AtomicUnit::Word(word_segs) => {
                 let word_start = word_segs.first().map_or(line_start, |s| s.start);
                 let pieces: Vec<(String, LayoutSegment, f64)> = word_segs
@@ -1540,7 +1825,7 @@ fn layout_paragraph_lines(
                     })
                     .collect();
                 let word_w: f64 = pieces.iter().map(|(_, _, w)| w).sum();
-                let keep_spaces = !runs.is_empty() || !just_wrapped;
+                let keep_spaces = has_content || !just_wrapped;
                 let spaces: Vec<(String, LayoutSegment, f64)> = if keep_spaces {
                     pending_spaces
                         .drain(..)
@@ -1558,20 +1843,18 @@ fn layout_paragraph_lines(
                 pending_spaces.clear();
                 let spaces_w: f64 = spaces.iter().map(|(_, _, w)| w).sum();
 
-                if line_w + spaces_w + word_w > max_width(idx) && !runs.is_empty() {
-                    lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, word_start)));
-                    line_w = 0.0;
+                if line_w + spaces_w + word_w > max_width(idx) && has_content {
+                    new_line!(false, false, word_start);
                     line_start = word_start;
-                    idx += 1;
                 } else {
                     for (s, seg, w) in &spaces {
-                        append_segment_to_runs(&mut runs, s, seg, *w);
+                        append_segment_to_runs(&mut runs, s, seg, *w, barrier);
                         line_w += w;
                     }
                 }
                 if word_w <= max_width(idx) {
                     for (t, seg, w) in &pieces {
-                        append_segment_to_runs(&mut runs, t, seg, *w);
+                        append_segment_to_runs(&mut runs, t, seg, *w, barrier);
                         line_w += w;
                     }
                 } else {
@@ -1582,14 +1865,12 @@ fn layout_paragraph_lines(
                             let offset = seg.start + i;
                             let text = ch.to_string();
                             let w = seg_width(m, seg, &text, family_css);
-                            if line_w + w > max_width(idx) && !runs.is_empty() {
-                                lines.push(flush(std::mem::take(&mut runs), line_w, idx, false, false, (line_start, offset)));
-                                line_w = 0.0;
+                            if line_w + w > max_width(idx) && (!runs.is_empty() || !line_images.is_empty()) {
+                                new_line!(false, false, offset);
                                 line_start = offset;
-                                idx += 1;
                             }
                             let piece = LayoutSegment { start: offset, ..seg.clone() };
-                            append_segment_to_runs(&mut runs, &text, &piece, w);
+                            append_segment_to_runs(&mut runs, &text, &piece, w, barrier);
                             line_w += w;
                         }
                     }
@@ -1598,27 +1879,60 @@ fn layout_paragraph_lines(
             }
         }
         if let Some(last) = lines.last() {
-            if !last.is_last_line && runs.is_empty() {
+            if !last.is_last_line && runs.is_empty() && line_images.is_empty() {
                 just_wrapped = true;
             }
         }
     }
 
     // Trailing spaces stay on the last line (they are visible to the caret)
+    let has_content = !runs.is_empty() || !line_images.is_empty();
     for sp in pending_spaces.drain(..) {
         if let SegmentKind::Space(ref s) = sp.kind {
-            if !runs.is_empty() || !just_wrapped {
+            if has_content || !just_wrapped {
                 let w = seg_width(m, &sp, s, family_css);
-                append_segment_to_runs(&mut runs, s, &sp, w);
+                append_segment_to_runs(&mut runs, s, &sp, w, barrier);
                 line_w += w;
             }
         }
     }
-    if !runs.is_empty() || ended_with_break || lines.is_empty() {
+    if !runs.is_empty() || !line_images.is_empty() || ended_with_break || lines.is_empty() {
         // A paragraph ending in a manual break still shows an (empty) last line
-        lines.push(flush(runs, line_w, idx, true, false, (line_start, total_chars)));
+        lines.push(flush(runs, line_images, line_w, idx, true, false, (line_start, total_chars)));
     }
     lines
+}
+
+/// Character offset where a unit starts
+fn unit_start(unit: &AtomicUnit) -> usize {
+    match unit {
+        AtomicUnit::Newline(at) | AtomicUnit::PageBreak(at) | AtomicUnit::Tab(at) => *at,
+        AtomicUnit::Spaces(segs) | AtomicUnit::Word(segs) => segs.first().map_or(0, |s| s.start),
+        AtomicUnit::Image(_) => 0,
+    }
+}
+
+/// Puts each inline picture `(offset, index)` before the first unit starting at or after its
+/// offset (a picture inside a word goes after the word)
+fn with_inline_images(units: Vec<AtomicUnit>, images: &[(usize, usize)]) -> Vec<AtomicUnit> {
+    if images.is_empty() {
+        return units;
+    }
+    let mut out = Vec::with_capacity(units.len() + images.len());
+    let mut next = images.iter().peekable();
+    for unit in units {
+        let start = unit_start(&unit);
+        while let Some(&&(offset, k)) = next.peek() {
+            if offset > start {
+                break;
+            }
+            out.push(AtomicUnit::Image(k));
+            next.next();
+        }
+        out.push(unit);
+    }
+    out.extend(next.map(|&(_, k)| AtomicUnit::Image(k)));
+    out
 }
 
 fn add_watermark_command(items: &mut Vec<RenderCommand>, text: &str, opacity: f64, page_w: f64, page_h: f64) {
@@ -2046,5 +2360,153 @@ mod tests {
             assert!(*y > 70.0 + 20.0, "Vertically centered text baseline must be pushed down, got y={}", y);
         }
     }
+
+    /// Text lines of a paragraph: (x, top, right edge of the line box, text)
+    fn line_boxes(l: &DocumentLayout, paragraph: usize) -> Vec<(f64, f64, f64, String)> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                RenderCommand::Text { paragraph_index, x, text, line: Some(r), .. } if *paragraph_index == paragraph => {
+                    Some((*x, r.top, r.right, text.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn layout_with_images(paragraphs: Vec<ParagraphInfo>) -> DocumentLayout {
+        let elements: Vec<DocumentElement> = paragraphs.into_iter().map(DocumentElement::Paragraph).collect();
+        let images = HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
+        LayoutEngine::new().with_images(images).compute_layout(
+            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+        )
+    }
+
+    fn body_images(l: &DocumentLayout) -> Vec<(f64, f64, Option<usize>, Option<usize>)> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                RenderCommand::Image { x, y, paragraph_index, image_index, .. } => Some((*x, *y, *paragraph_index, *image_index)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn floating(wrap: &str, side: &str, h_offset: f64, width: f64, height: f64) -> ImageRef {
+        ImageRef {
+            rel_id: "rId7".into(),
+            width,
+            height,
+            anchored: true,
+            wrap: wrap.into(),
+            wrap_side: side.into(),
+            h_relative: "margin".into(),
+            h_offset,
+            v_relative: "paragraph".into(),
+            dist_left: 10.0,
+            dist_right: 10.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_inline_picture_flows_with_the_text() {
+        let mut p = para(0, "antes despues");
+        p.images = vec![ImageRef { rel_id: "rId7".into(), width: 40.0, height: 60.0, wrap: "inline".into(), offset: 6, ..Default::default() }];
+        let l = layout_with_images(vec![p]);
+        let lines = line_boxes(&l, 0);
+        assert_eq!(lines.len(), 1);
+        let (line_x, top, _, _) = lines[0];
+        let imgs = body_images(&l);
+        assert_eq!(imgs.len(), 1);
+        let (x, y, para, index) = imgs[0];
+        assert_eq!((para, index), (Some(0), Some(0)));
+        assert!(x > line_x + 20.0, "after the first word, not at the line start: {} vs {}", x, line_x);
+        // The run after the picture starts after it
+        let runs = match l.pages[0].items.iter().find(|i| matches!(i, RenderCommand::Text { paragraph_index: 0, line: Some(_), .. })) {
+            Some(RenderCommand::Text { runs, .. }) => runs.clone(),
+            _ => unreachable!(),
+        };
+        let after = runs.iter().find(|r| r.start >= 6).expect("run after the picture");
+        assert!(after.x >= x + 40.0 - 0.01, "text after the picture is pushed right");
+        // The line grew so the picture stands on the baseline inside it
+        assert!(y >= top - 0.01);
+    }
+
+    #[test]
+    fn test_inline_pictures_wrap_to_new_lines() {
+        let mut p = para(0, "");
+        p.runs.clear();
+        p.images = (0..3)
+            .map(|_| ImageRef { rel_id: "rId7".into(), width: 300.0, height: 50.0, wrap: "inline".into(), ..Default::default() })
+            .collect();
+        let l = layout_with_images(vec![p]);
+        let imgs = body_images(&l);
+        assert_eq!(imgs.len(), 3);
+        // 670 px of text width: two pictures on the first line, the third on the next one
+        assert_eq!(imgs[0].1, imgs[1].1);
+        assert!(imgs[2].1 > imgs[1].1 + 49.0);
+        assert!(imgs[2].0 < imgs[1].0);
+    }
+
+    #[test]
+    fn test_square_wrap_narrows_the_lines_beside_the_picture() {
+        let long = "palabra ".repeat(120);
+        let mut anchor = para(0, &long);
+        // 200x100 at the left margin: text goes to its right
+        anchor.images = vec![floating("square", "bothSides", 0.0, 200.0, 100.0)];
+        let l = layout_with_images(vec![anchor]);
+        let lines = line_boxes(&l, 0);
+        let (first_x, first_top, _, _) = lines[0];
+        let margin = PageSetup::default().margin_left;
+        assert!((first_x - (margin + 210.0)).abs() < 0.5, "starts after picture + distance: {}", first_x);
+        let below = lines.iter().find(|(_, top, _, _)| *top >= first_top + 100.0).expect("a line below the picture");
+        assert!((below.0 - margin).abs() < 0.5, "below the picture the full width comes back: {}", below.0);
+    }
+
+    #[test]
+    fn test_wrap_side_left_keeps_text_left_of_the_picture() {
+        let long = "palabra ".repeat(120);
+        let mut anchor = para(0, &long);
+        // Picture near the left, but text may only use its left side: the narrow strip is
+        // too small, so lines skip below it
+        anchor.images = vec![floating("square", "left", 30.0, 200.0, 100.0)];
+        let l = layout_with_images(vec![anchor]);
+        let lines = line_boxes(&l, 0);
+        let img_y = body_images(&l)[0].1;
+        assert!(lines[0].1 >= img_y + 100.0 - 0.01, "first line pushed below: {} vs {}", lines[0].1, img_y);
+
+        let mut right = para(0, &long);
+        right.images = vec![floating("square", "left", 400.0, 200.0, 100.0)];
+        let l = layout_with_images(vec![right]);
+        let lines = line_boxes(&l, 0);
+        let margin = PageSetup::default().margin_left;
+        assert!((lines[0].2 - (margin + 390.0)).abs() < 0.5, "line box ends before the picture: {}", lines[0].2);
+    }
+
+    #[test]
+    fn test_top_and_bottom_pushes_text_below() {
+        let mut anchor = para(0, "uno");
+        anchor.images = vec![floating("topAndBottom", "", 100.0, 200.0, 120.0)];
+        let next = para(1, "dos");
+        let l = layout_with_images(vec![anchor, next]);
+        let img_y = body_images(&l)[0].1;
+        let first = line_boxes(&l, 0)[0].1;
+        assert!(first >= img_y + 120.0 - 0.01, "the anchor's own line goes below the picture: {} vs {}", first, img_y);
+        let second = line_boxes(&l, 1)[0].1;
+        assert!(second > first);
+    }
+
+    #[test]
+    fn test_pictures_in_front_do_not_move_text() {
+        let mut anchor = para(0, "texto");
+        anchor.images = vec![floating("inFront", "", 0.0, 200.0, 100.0)];
+        let l = layout_with_images(vec![anchor]);
+        let margin = PageSetup::default().margin_left;
+        assert!((line_boxes(&l, 0)[0].0 - margin).abs() < 0.5);
+    }
+
 }
 

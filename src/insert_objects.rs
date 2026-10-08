@@ -12,7 +12,7 @@ const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 const TABLE_BORDER_COLOR: &str = "BFBFBF";
 const HEADER_FILL: &str = "F2F2F2";
 
-const NS_WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+pub(super) const NS_WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
@@ -50,6 +50,46 @@ pub struct NewImage {
     /// Alternative text (accessibility; Word shows it as the picture description)
     #[serde(default)]
     pub alt: Option<String>,
+    /// How text flows around it (default "inline"); see `ImageUpdate` for the values
+    #[serde(default)]
+    pub wrap: Option<String>,
+    #[serde(default)]
+    pub wrap_side: Option<String>,
+    /// Position of a floating picture (see `ImageUpdate`)
+    #[serde(default)]
+    pub h_relative: Option<String>,
+    #[serde(default)]
+    pub h_offset: Option<f64>,
+    #[serde(default)]
+    pub h_align: Option<String>,
+    #[serde(default)]
+    pub v_relative: Option<String>,
+    #[serde(default)]
+    pub v_offset: Option<f64>,
+    #[serde(default)]
+    pub v_align: Option<String>,
+    /// Space between a floating picture and the text, px
+    #[serde(default)]
+    pub distance: Option<f64>,
+}
+
+impl NewImage {
+    /// The floating layout asked for, applied once the picture is in place
+    fn layout(&self) -> Option<super::ImageUpdate> {
+        let update = super::ImageUpdate {
+            wrap: self.wrap.clone().filter(|w| w != "inline"),
+            wrap_side: self.wrap_side.clone(),
+            h_relative: self.h_relative.clone(),
+            h_offset: self.h_offset,
+            h_align: self.h_align.clone(),
+            v_relative: self.v_relative.clone(),
+            v_offset: self.v_offset,
+            v_align: self.v_align.clone(),
+            distance: self.distance,
+            ..Default::default()
+        };
+        (update != super::ImageUpdate::default()).then_some(update)
+    }
 }
 
 impl DocxModifier {
@@ -100,6 +140,13 @@ impl DocxModifier {
             return Err(format!("La imagen supera el máximo de {} MB.", MAX_IMAGE_BYTES / 1024 / 1024));
         }
         let (format, px_w, px_h) = image_info(bytes).ok_or("Formato de imagen no soportado: usa PNG, JPEG o GIF.")?;
+        let layout = image.layout();
+        if let Some(update) = &layout {
+            if update.wrap.is_none() {
+                return Err("Para posicionar la imagen indica también su ajuste (wrap), por ejemplo \"square\".".to_string());
+            }
+            update.validate()?;
+        }
         if let Some(align) = &image.align {
             if !["left", "center", "right"].contains(&align.as_str()) {
                 return Err(format!("Alineación no válida: {}", align));
@@ -112,9 +159,26 @@ impl DocxModifier {
             (parse_paragraph_fragment(&xml[range], &self.styles).text.chars().count(), extract_page_setup_quick_xml(&xml))
         };
         let (width, height) = fit_image(px_w, px_h, image.width, image.height, &page);
+        let offset = offset.min(len);
+
+        // A floating picture is anchored to the paragraph at the position, as Word does; the
+        // text stays where it was and flows around it
+        if let Some(update) = layout {
+            let rel_id = self.add_image_part(bytes, format)?;
+            let mut xml = self.get_file_string("word/document.xml")?;
+            xml = ensure_namespace(&xml, "wp", NS_WP);
+            xml = ensure_namespace(&xml, "r", NS_R);
+            let doc_pr_id = next_doc_pr_id(&xml);
+            let run = drawing_run(&rel_id, doc_pr_id, width, height, image.alt.as_deref().unwrap_or(""));
+            let range = self.body_paragraph(&xml, index)?;
+            let paragraph = with_first_run(&xml[range.clone()], &run)?;
+            xml.replace_range(range, &paragraph);
+            self.put_file("word/document.xml".to_string(), xml.into_bytes());
+            self.update_image(index, 0, &update)?;
+            return Ok((index, (index, offset)));
+        }
 
         // An empty paragraph for the picture, and always one after it for the caret
-        let offset = offset.min(len);
         let picture = NewParagraph { align: image.align.clone(), ..Default::default() };
         let mut paragraphs = vec![picture];
         if offset == len {
@@ -408,6 +472,23 @@ fn with_run(paragraph: &str, run: &str) -> String {
     }
 }
 
+/// The paragraph with `run` as its first run (right after its properties)
+fn with_first_run(paragraph: &str, run: &str) -> Result<String, String> {
+    let tokens = crate::paragraph_edit::tokenize(paragraph)?;
+    if !matches!(tokens.first().map(|t| &t.ev), Some(Event::Start(_))) {
+        return Ok(with_run(paragraph, run));
+    }
+    let at = match tokens.get(1).map(|t| &t.ev) {
+        Some(Event::Start(e) | Event::Empty(e)) if tag_is(e.name().as_ref(), "pPr") => {
+            tokens[crate::paragraph_edit::element_end(&tokens, 1)].span.end
+        }
+        _ => tokens[0].span.end,
+    };
+    let mut out = paragraph.to_string();
+    out.insert_str(at, run);
+    Ok(out)
+}
+
 /// Unique id for a new `wp:docPr` (Word refuses duplicates)
 fn next_doc_pr_id(doc: &str) -> u64 {
     let re = regex::Regex::new(r#"<wp:docPr\b[^>]*\bid="(\d+)""#).expect("regex");
@@ -415,7 +496,7 @@ fn next_doc_pr_id(doc: &str) -> u64 {
 }
 
 /// Declares `xmlns:prefix` on the root element when it is missing
-fn ensure_namespace(xml: &str, prefix: &str, uri: &str) -> String {
+pub(super) fn ensure_namespace(xml: &str, prefix: &str, uri: &str) -> String {
     let Some(start) = xml.find("<w:document") else { return xml.to_string() };
     let Some(end) = xml[start..].find('>').map(|i| start + i) else { return xml.to_string() };
     if xml[start..end].contains(&format!("xmlns:{}=", prefix)) {
@@ -493,5 +574,8 @@ mod tests {
         assert_eq!(with_run("<w:p/>", "<w:r/>"), "<w:p><w:r/></w:p>");
         assert_eq!(with_run(r#"<w:p w:rsidR="1"/>"#, "<w:r/>"), r#"<w:p w:rsidR="1"><w:r/></w:p>"#);
         assert_eq!(with_run("<w:p><w:pPr/></w:p>", "<w:r/>"), "<w:p><w:pPr/><w:r/></w:p>");
+        assert_eq!(with_first_run("<w:p><w:pPr><w:jc/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>", "<w:r/>").unwrap(), "<w:p><w:pPr><w:jc/></w:pPr><w:r/><w:r><w:t>a</w:t></w:r></w:p>");
+        assert_eq!(with_first_run("<w:p><w:r><w:t>a</w:t></w:r></w:p>", "<w:r/>").unwrap(), "<w:p><w:r/><w:r><w:t>a</w:t></w:r></w:p>");
+        assert_eq!(with_first_run("<w:p/>", "<w:r/>").unwrap(), "<w:p><w:r/></w:p>");
     }
 }

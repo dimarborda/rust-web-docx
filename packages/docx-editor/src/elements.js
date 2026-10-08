@@ -9,7 +9,7 @@
 import { DocxEditor } from './docx_editor.js';
 import { createDocxToolbar } from './toolbar.js';
 
-const FORWARDED = ['load', 'change', 'selectionchange', 'message'];
+const FORWARDED = ['load', 'change', 'selectionchange', 'imageselect', 'message'];
 
 export class DocxEditorElement extends HTMLElement {
   static observedAttributes = ['src', 'zoom'];

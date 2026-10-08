@@ -469,6 +469,34 @@ body {
   transform: scale(1.2);
 }
 
+.ribbon-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ribbon-field select,
+.ribbon-field input[type="number"] {
+  height: 28px;
+  padding: 0 0.4rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font: inherit;
+}
+
+.ribbon-field select option {
+  color: #0f172a;
+}
+
+.ribbon-field input[type="number"] {
+  width: 4.6rem;
+}
+
 .ribbon-hint-pill {
   margin-left: auto;
   font-size: 0.76rem;
