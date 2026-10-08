@@ -73,6 +73,27 @@ export interface NewParagraph {
   align?: Alignment;
 }
 
+export interface NewTable {
+  /** Cells as text; "\n" is a line break inside the cell. Short rows are padded. */
+  rows: string[][];
+  /** First row bold, shaded and repeated on every page (default true) */
+  header?: boolean;
+  /** Relative column widths, e.g. [2, 1, 1]; equal columns when unset */
+  widths?: number[];
+  /** Per-column alignment */
+  align?: Array<'left' | 'center' | 'right'>;
+}
+
+export interface InsertImageOptions {
+  at?: InsertPosition;
+  /** CSS px; with only one of width/height the aspect ratio is kept */
+  width?: number;
+  height?: number;
+  align?: 'left' | 'center' | 'right';
+  /** Alternative text */
+  alt?: string;
+}
+
 export interface DocxEditorOptions {
   /** 1 = 100 % (default) */
   zoom?: number;
@@ -147,7 +168,18 @@ export class DocxEditor extends EventTarget {
   insertParagraphs(paragraphs: string | Array<string | NewParagraph>, options?: { at?: InsertPosition }): { first: number; count: number };
   /** Inserts plain text as one undo step; each line becomes a paragraph */
   insertText(text: string, options?: { at?: InsertPosition }): { first: number; count: number };
-  insertTable(rows: number, cols: number, headers?: string[]): void;
+  /**
+   * Inserts a table as one undo step at the caret (or start/end); the caret goes to the
+   * paragraph after it. Throws when the position is inside another table.
+   */
+  insertTable(table: NewTable, options?: { at?: InsertPosition }): { first: number };
+  /** @deprecated Appends an empty table at the end; use `insertTable({ rows })` */
+  insertTable(rows: number, cols: number, headers?: string[]): { first: number };
+  /**
+   * Inserts a PNG, JPEG or GIF picture in its own paragraph as one undo step; it never exceeds
+   * the text width of the page. The caret goes to the paragraph after it.
+   */
+  insertImage(image: Uint8Array | ArrayBuffer | Blob | string, options?: InsertImageOptions): Promise<{ paragraph: number }>;
   setBackgroundColor(hex: string): void;
   /** View-only diagonal watermark; pass null to remove it */
   setWatermark(text: string | null, options?: { opacity?: number }): void;

@@ -278,6 +278,53 @@ impl DocxSession {
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
 
+    /// Inserts a table at a position as one undo step (see `DocxModifier::insert_table`).
+    /// `table_json`: `{ "rows": [["Ítem", "Valor"], ["A", "1"]], "header": true, "widths": [2, 1], "align": ["left", "right"] }`.
+    /// Returns `{ "first": n, "caret": { "paragraph": n, "offset": 0 } }` (`first` = first cell's paragraph).
+    #[wasm_bindgen]
+    pub fn insert_table(
+        &mut self,
+        paragraph: usize,
+        offset: usize,
+        table_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let table: docx_parser::NewTable = serde_json::from_str(table_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before);
+        let (first, (p, o)) = self
+            .modifier
+            .insert_table(paragraph, offset, &table)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: p, offset: o };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "first": first, "caret": caret }))
+    }
+
+    /// Inserts a PNG, JPEG or GIF picture in its own paragraph as one undo step (see
+    /// `DocxModifier::insert_image`). `options_json`: `{ "width": px, "height": px, "align": "center", "alt": "..." }`.
+    /// Returns `{ "paragraph": n, "caret": { "paragraph": n, "offset": 0 } }`.
+    #[wasm_bindgen]
+    pub fn insert_image(
+        &mut self,
+        paragraph: usize,
+        offset: usize,
+        bytes: &[u8],
+        options_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let options: docx_parser::NewImage = serde_json::from_str(options_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before);
+        let (index, (p, o)) = self
+            .modifier
+            .insert_image(paragraph, offset, bytes, &options)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: p, offset: o };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "paragraph": index, "caret": caret }))
+    }
+
     /// Undoes the last step: `{done, selection}` (selection is the JSON given before the step)
     #[wasm_bindgen]
     pub fn undo(&mut self) -> String {

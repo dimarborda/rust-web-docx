@@ -552,7 +552,10 @@ pub struct ReplaceResult {
     pub message: String,
 }
 
-/// One paragraph edit: new text, optional per-character formatting and alignment
+#[path = "insert_objects.rs"]
+mod insert_objects;
+pub use insert_objects::{NewImage, NewTable};
+
 /// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
 /// whole paragraph (unset properties are inherited) and alignment.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -1288,10 +1291,10 @@ impl DocxModifier {
         Ok(true)
     }
 
-    /// Appends a new table to the document
+    /// Appends an empty table (header row from `headers`) at the end of the document
     pub fn add_table(&mut self, rows: usize, cols: usize, headers: &[String]) -> Result<bool, String> {
         let doc_xml = self.get_file_string("word/document.xml")?;
-        let new_xml = insert_table_into_xml(&doc_xml, rows, cols, headers)?;
+        let new_xml = insert_objects::append_table_xml(&doc_xml, rows, cols, headers)?;
         self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
         Ok(true)
     }
@@ -2803,49 +2806,6 @@ fn set_bg_color_in_xml(xml: &str, hex: &str) -> String {
 }
 
 /// Inserts a new table into document XML
-fn insert_table_into_xml(
-    xml: &str,
-    rows_count: usize,
-    cols_count: usize,
-    headers: &[String],
-) -> Result<String, String> {
-    let mut table_xml = String::new();
-    table_xml.push_str("<w:tbl>");
-    table_xml.push_str(r#"<w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="CBD5E1"/><w:left w:val="none"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="94A3B8"/><w:right w:val="none"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/><w:insideV w:val="none"/></w:tblBorders></w:tblPr>"#);
-
-    for r in 0..rows_count {
-        table_xml.push_str("<w:tr>");
-        for c in 0..cols_count {
-            let is_header = r == 0;
-            let val = if is_header && c < headers.len() {
-                &headers[c]
-            } else if is_header {
-                "Columna"
-            } else {
-                "Dato"
-            };
-
-            table_xml.push_str("<w:tc><w:p>");
-            if is_header {
-                table_xml.push_str("<w:r><w:rPr><w:b/><w:color w:val=\"1E3A8A\"/></w:rPr>");
-            } else {
-                table_xml.push_str("<w:r>");
-            }
-            table_xml.push_str(&format!("<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p></w:tc>", escape_xml(val)));
-        }
-        table_xml.push_str("</w:tr>");
-    }
-
-    table_xml.push_str("</w:tbl>");
-
-    if let Some(pos) = xml.rfind("</w:body>") {
-        let (before, after) = xml.split_at(pos);
-        Ok(format!("{}{}{}", before, table_xml, after))
-    } else {
-        Ok(format!("{}{}", xml, table_xml))
-    }
-}
-
 fn escape_xml(input: &str) -> String {
     input
         .replace('&', "&amp;")

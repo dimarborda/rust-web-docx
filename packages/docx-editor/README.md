@@ -49,6 +49,11 @@ editor.insertParagraphs([
   { text: 'CONTRATO DE SERVICIOS', bold: true, fontSize: 16, align: 'center' },
   'Entre las partes se acuerda lo siguiente.',
 ], { at: 'end' });                        // un solo ⌘Z lo deshace
+editor.insertTable({                     // tabla con contenido en el cursor
+  rows: [['Ítem', 'Valor'], ['Diseño', '$1.200.000']],
+  widths: [2, 1], align: ['left', 'right'],
+});
+await editor.insertImage(file, { width: 200, align: 'center', alt: 'Logo' }); // PNG, JPEG o GIF
 const bytes = editor.save();             // Uint8Array del .docx editado
 
 editor.addEventListener('change', () => console.log(editor.stats()));
@@ -62,9 +67,11 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
 | `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio o al final, como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align }` |
+| `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. `rows` son las celdas como texto (`\n` = salto de línea en la celda); `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
+| `insertImage(image, { at, width, height, align, alt })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) en su propio párrafo, como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. Devuelve una promesa |
 | `undo()` / `redo()` / `canUndo` / `canRedo` | Historial |
 | `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `setColor(hex)` / `setAlignment(align)` | Formato de la selección |
-| `insertTable(rows, cols, headers)` / `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Contenido y apariencia |
+| `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Apariencia. `insertTable(rows, cols, headers)` de versiones anteriores sigue funcionando (tabla vacía al final) |
 | `select(anchor, focus)` | Coloca el cursor o una selección (`{ paragraph, offset }`) |
 | `setZoom(z)` / `focus()` / `destroy()` | Vista y ciclo de vida. Sin cursor previo, `focus()` lo pone al inicio del documento |
 

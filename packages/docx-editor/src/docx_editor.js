@@ -310,10 +310,8 @@ export class DocxEditor extends EventTarget {
     if (!items.length) return { first: -1, count: 0 };
 
     const pos = this.#insertionPoint(at);
-    const selection = this.#canvasEditor.selection();
     const result = JSON.parse(this.#session.insert_paragraphs(
-      pos.paragraph, pos.offset, JSON.stringify(items),
-      selection ? JSON.stringify({ anchor: selection.anchor, focus: selection.focus }) : undefined,
+      pos.paragraph, pos.offset, JSON.stringify(items), this.#selectionJSON(),
     ));
     this.#changed();
     this.#canvasEditor.select(result.caret);
@@ -325,11 +323,64 @@ export class DocxEditor extends EventTarget {
     return this.insertParagraphs(String(text).replace(/\r\n?/g, '\n').split('\n'), options);
   }
 
-  /** Appends a table at the end of the document */
-  insertTable(rows, cols, headers = Array.from({ length: cols }, (_, i) => `${i + 1}`)) {
+  /**
+   * Inserts a table as one undo step and leaves the caret in the paragraph after it. Text
+   * before the insertion point stays above the table and text after it goes below.
+   * `insertTable(rows, cols, headers)` (earlier versions) still appends an empty table at the end.
+   * @param {{rows: string[][], header?: boolean, widths?: number[], align?: Array<'left'|'center'|'right'>} | number} table
+   *        cells as text ("\n" = line break in the cell); `header` (default true) makes the first
+   *        row bold, shaded and repeated on every page; `widths` are relative column widths
+   * @param {{at?: 'cursor'|'start'|'end'}} [options]
+   * @returns {{first: number}} paragraph index of the first cell
+   */
+  insertTable(table, options, legacyHeaders) {
     this.#require();
-    this.#session.add_table(rows, cols, JSON.stringify(headers));
+    if (typeof table === 'number') {
+      const cols = Number(options) || 1;
+      const headers = legacyHeaders ?? Array.from({ length: cols }, (_, i) => `${i + 1}`);
+      this.#session.add_table(table, cols, JSON.stringify(headers));
+      this.#changed();
+      return { first: -1 };
+    }
+    const { at = 'cursor' } = options ?? {};
+    const { rows, header = true, widths, align } = table ?? {};
+    if (!Array.isArray(rows) || !rows.length) throw new Error('docx-editor: insertTable needs rows');
+    const payload = { rows: rows.map(row => (Array.isArray(row) ? row : [row]).map(c => (c == null ? '' : String(c)))), header, widths, align };
+    const pos = this.#insertionPoint(at);
+    const result = JSON.parse(this.#session.insert_table(
+      pos.paragraph, pos.offset, JSON.stringify(payload), this.#selectionJSON(),
+    ));
     this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { first: result.first };
+  }
+
+  /**
+   * Inserts a PNG, JPEG or GIF picture in a paragraph of its own as one undo step and leaves
+   * the caret in the paragraph after it. Without a size the picture keeps its pixel size; it
+   * never exceeds the text width of the page.
+   * @param {Uint8Array | ArrayBuffer | Blob | string} image bytes, a Blob/File or a `data:` URL
+   * @param {{at?: 'cursor'|'start'|'end', width?: number, height?: number, align?: 'left'|'center'|'right', alt?: string}} [options]
+   *        `width` / `height` in CSS px (one is enough: the aspect ratio is kept)
+   * @returns {Promise<{paragraph: number}>} index of the picture's paragraph
+   */
+  async insertImage(image, { at = 'cursor', width, height, align, alt } = {}) {
+    this.#require();
+    const bytes = await toBytes(image);
+    this.#require();
+    const pos = this.#insertionPoint(at);
+    const result = JSON.parse(this.#session.insert_image(
+      pos.paragraph, pos.offset, bytes, JSON.stringify({ width, height, align, alt }), this.#selectionJSON(),
+    ));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { paragraph: result.paragraph };
+  }
+
+  /** Current selection as stored with an undo step */
+  #selectionJSON() {
+    const selection = this.#canvasEditor.selection();
+    return selection ? JSON.stringify({ anchor: selection.anchor, focus: selection.focus }) : undefined;
   }
 
   setBackgroundColor(hex) {
@@ -628,4 +679,22 @@ function mergeRuns(chars) {
     else runs.push({ ...c });
   });
   return runs;
+}
+
+/** Bytes of an image given as bytes, a Blob/File or a `data:` URL */
+async function toBytes(image) {
+  if (image instanceof Uint8Array) return image;
+  if (image instanceof ArrayBuffer) return new Uint8Array(image);
+  if (typeof Blob !== 'undefined' && image instanceof Blob) return new Uint8Array(await image.arrayBuffer());
+  if (typeof image === 'string' && image.startsWith('data:')) {
+    const comma = image.indexOf(',');
+    const meta = image.slice(0, comma);
+    const data = image.slice(comma + 1);
+    if (meta.endsWith(';base64')) {
+      const bin = atob(data);
+      return Uint8Array.from(bin, c => c.charCodeAt(0));
+    }
+    return new TextEncoder().encode(decodeURIComponent(data));
+  }
+  throw new Error('docx-editor: insertImage needs a Uint8Array, ArrayBuffer, Blob or data: URL');
 }

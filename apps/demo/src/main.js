@@ -274,11 +274,22 @@ function insertTable() {
   const rows = parseInt($('tbl-input-rows').value, 10) || 3;
   const cols = parseInt($('tbl-input-cols').value, 10) || 3;
   try {
-    editor.insertTable(rows, cols, Array.from({ length: cols }, (_, i) => `Columna ${i + 1}`));
+    const header = Array.from({ length: cols }, (_, i) => `Columna ${i + 1}`);
+    editor.insertTable({ rows: [header, ...Array.from({ length: rows - 1 }, () => Array(cols).fill(''))] });
     tableModal.style.display = 'none';
     showToast(`Tabla de ${rows}x${cols} insertada exitosamente.`);
   } catch (err) {
     showToast('Error al insertar tabla: ' + err, true);
+  }
+}
+
+async function insertImage(file) {
+  if (!file) return;
+  try {
+    await editor.insertImage(file, { alt: file.name });
+    showToast(`Imagen "${file.name}" insertada.`);
+  } catch (err) {
+    showToast('Error al insertar imagen: ' + err, true);
   }
 }
 
@@ -463,6 +474,11 @@ function setupEventListeners() {
 
   // Table
   $('btn-insert-table').addEventListener('click', () => show(tableModal));
+  $('btn-insert-image').addEventListener('click', () => $('image-input').click());
+  $('image-input').addEventListener('change', e => {
+    insertImage(e.target.files?.[0]);
+    e.target.value = '';
+  });
   $('btn-close-table-modal').addEventListener('click', () => hide(tableModal));
   $('btn-create-table-confirm').addEventListener('click', insertTable);
 
