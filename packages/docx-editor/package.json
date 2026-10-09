@@ -1,6 +1,6 @@
 {
   "name": "@dimarborda/docx-editor",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Word (.docx) editor for the browser: Rust + WebAssembly layout engine rendered to canvas, as a framework-agnostic web component",
   "type": "module",
   "license": "MIT",
