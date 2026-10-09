@@ -43,6 +43,9 @@ jobs:
       - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
+          # wrangler 4 applies apps/demo/public/_headers (CSP, caching); the action's default
+          # 3.x uploads it as a plain file
+          wranglerVersion: "4.86.0"
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy

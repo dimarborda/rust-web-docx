@@ -34,3 +34,6 @@ examples/*
 *.dotx
 *.dot
 
+
+# Local state of `wrangler dev`
+.wrangler/

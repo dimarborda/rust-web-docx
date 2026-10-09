@@ -4,6 +4,10 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Content-Security-Policy as recommended in packages/docx-editor/README.md: 'wasm-unsafe-eval'
+# lets the engine compile without allowing eval(); 'unsafe-inline' in style-src covers the
+# style="" attributes of the demo's HTML (the editor itself needs only 'self')
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'
