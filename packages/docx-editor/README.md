@@ -54,6 +54,8 @@ editor.insertTable({                     // tabla con contenido en el cursor
   widths: [2, 1], align: ['left', 'right'],
 });
 await editor.insertImage(file, { width: 200, align: 'center', alt: 'Logo' }); // PNG, JPEG o GIF
+editor.insertTable({ rows: [['Empresa', 'Logo'], ['Acme', { image: logoBytes, text: 'Sello' }]] });
+await editor.downloadPdf('contrato.pdf');  // PDF vectorial con texto seleccionable
 const bytes = editor.save();             // Uint8Array del .docx editado
 
 editor.addEventListener('change', () => console.log(editor.stats()));
@@ -64,10 +66,11 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | :--- | :--- |
 | `open(source, { fileName })` / `openBlank({ fileName, pageSize, focus })` / `openSample()` / `close()` | Abrir, crear y cerrar documentos. `pageSize`: `a4` (predeterminado), `letter` o `legal` |
 | `save()` / `saveBlob()` / `download(name)` | Exportar el `.docx` editado |
+| `exportPdf({ watermark })` / `exportPdfBlob()` / `downloadPdf(name)` | Exportar a PDF vectorial (ver [PDF](#pdf)). Devuelven promesas |
 | `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
 | `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio o al final, como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align }` |
-| `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. `rows` son las celdas como texto (`\n` = salto de línea en la celda); `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
+| `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. Cada celda es un texto (`\n` = salto de línea en la celda) o `{ text, image, width, height, alt }` con una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer` o URL `data:`) que ocupa el ancho de la columna salvo que indiques `width`/`height`, con el texto debajo; `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
 | `insertImage(image, { at, width, height, align, alt, wrap, wrapSide, horizontal, vertical, distance })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. En línea (predeterminado) va en su propio párrafo; con otro `wrap` queda flotante, anclada al párrafo del cursor (ver [Imágenes](#imágenes)). Devuelve una promesa con `{ paragraph, index }` |
 | `images()` / `selectedImage` / `selectImage(ref)` | Imágenes del documento y la seleccionada (ver [Imágenes](#imágenes)) |
 | `updateImage(ref, changes)` / `resizeImage` / `moveImage` / `setImageWrap` / `alignImage` / `deleteImage` | Tamaño, posición y ajuste del texto de una imagen, cada cambio como un paso de deshacer |
@@ -90,6 +93,16 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
 
 Incluye tipos de TypeScript.
+
+### PDF
+
+```js
+const pdf = await editor.exportPdf();            // Uint8Array
+await editor.downloadPdf('contrato.pdf');         // o descargarlo directamente
+const blob = await editor.exportPdfBlob({ watermark: false });
+```
+
+Genera un PDF vectorial de las páginas tal como se ven en el editor: texto real (seleccionable y buscable) con las fuentes incrustadas y recortadas a los caracteres usados, imágenes, tablas, bordes, formas, cuadros de texto, encabezados y pies con su número de página. La marca de agua de `setWatermark()` se incluye salvo `{ watermark: false }`. Las fuentes son las que sube el usuario con `registerFont()` o las sustitutas métricas del paquete (`@dimarborda/docx-editor/fonts`); sin ellas se usan las fuentes estándar del PDF, y el texto se ajusta al ancho medido en pantalla para que nada se desplace. [pdf-lib](https://pdf-lib.js.org/) se descarga solo la primera vez que se exporta.
 
 ### Solo lectura
 
@@ -179,6 +192,46 @@ export function DocxView({ file, onChange }) {
 }
 ```
 
+### Next.js (App Router, Turbopack)
+
+Probado con Next 16 y Turbopack, tanto en `next dev` como en `next build` y `next start`. El paquete se importa con un `import` normal: no toca el DOM al cargarse, así que el renderizado en servidor no falla. El editor se crea en el cliente, dentro de `useEffect`.
+
+```jsx
+// app/editor.jsx
+'use client';
+import { useEffect, useRef } from 'react';
+import { DocxEditor } from '@dimarborda/docx-editor';
+import '@dimarborda/docx-editor/style.css';
+import '@dimarborda/docx-editor/fonts';
+
+export default function Editor({ file }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    let editor;
+    let disposed = false;
+    DocxEditor.create(ref.current, { locale: 'es' }).then(async e => {
+      if (disposed) return e.destroy();
+      editor = e;
+      if (file) await editor.open(file);
+      else editor.openBlank();
+    });
+    return () => {
+      disposed = true;
+      editor?.destroy();
+    };
+  }, [file]);
+  return <div ref={ref} style={{ height: '80vh' }} />;
+}
+```
+
+`app/page.jsx` (un componente de servidor) puede renderizar `<Editor />` directamente.
+
+- **El `.wasm` (≈2 MB, ≈800 KB comprimido) se descarga solo en el cliente** y solo al crear el editor, no al importar el paquete. Turbopack lo copia a `/_next/static/media/` y Next lo sirve como `application/wasm`.
+- **pdf-lib** se descarga únicamente al llamar a `exportPdf()`.
+- **Si sirves el `.wasm` desde otro lugar** (un CDN, o `/public` en un despliegue con reglas propias), copia `node_modules/@dimarborda/docx-editor/wasm/docx_engine_bg.wasm` y pasa su ruta: `DocxEditor.create(el, { wasmUrl: '/docx_engine_bg.wasm' })`. Si actualizas el paquete, vuelve a copiarlo.
+- Si tu aplicación usa una cabecera CSP (por ejemplo desde `proxy.ts`), revisa la sección [Content Security Policy](#content-security-policy).
+- Versiones anteriores a la 0.7.0 accedían a `document` al importarse y había que cargarlas con `dynamic(() => import(...), { ssr: false })`; ya no hace falta.
+
 ### Tauri
 
 Dentro de la ventana de la app se usa igual que en la web. Lo único que cambia es abrir y guardar con los plugins `dialog` y `fs`:
@@ -217,11 +270,45 @@ El contenedor del editor necesita una altura (por ejemplo `height: 80vh`, o ser 
 
 ## Bundlers
 
-El paquete carga `docx_engine_bg.wasm` con `new URL(..., import.meta.url)`. Vite, webpack 5, Rollup y esbuild copian ese archivo junto al JavaScript sin configuración extra. Si lo sirves desde otro lugar, pásalo con `DocxEditor.create(el, { wasmUrl })` o con el atributo `wasm-url`.
+El paquete carga `docx_engine_bg.wasm` con `new URL(..., import.meta.url)`. Vite, webpack 5, Turbopack (probado con Next.js 16), Rollup y esbuild copian ese archivo junto al JavaScript sin configuración extra. Importar el paquete no toca el DOM, así que también se puede importar en código que se renderiza en el servidor (SSR); el editor se crea en el navegador. Si lo sirves desde otro lugar, pásalo con `DocxEditor.create(el, { wasmUrl })` o con el atributo `wasm-url`.
+
+## Content Security Policy
+
+Si tu aplicación envía una cabecera `Content-Security-Policy`, el `script-src` de **producción** debe incluir `'wasm-unsafe-eval'`. Sin ella, el navegador bloquea la compilación del motor y el editor no arranca: `DocxEditor.create()` / `initEngine()` fallan con el error *"docx-editor: the page's Content-Security-Policy blocks WebAssembly. Add 'wasm-unsafe-eval' to script-src"* (el error original del navegador queda en `error.cause`).
+
+El fallo suele aparecer solo al desplegar. En desarrollo muchas configuraciones (Next.js, Vite) incluyen `'unsafe-eval'` para la recarga en caliente, y eso también permite el WebAssembly. Al quitarlo en producción, que es lo correcto, hay que añadir `'wasm-unsafe-eval'`, que solo autoriza WebAssembly y no habilita `eval()`.
+
+| Directiva | Valor que necesita el editor | Para qué |
+| :--- | :--- | :--- |
+| `script-src` | `'self' 'wasm-unsafe-eval'` | Cargar el JavaScript del paquete y compilar el motor WebAssembly |
+| `connect-src` | `'self'` (o el origen desde donde sirvas `docx_engine_bg.wasm` y las fuentes) | Descargar el `.wasm`, y leer las fuentes al exportar a PDF |
+| `img-src` | `'self' data: blob:` | Las imágenes del documento se dibujan desde URLs `data:` |
+| `font-src` | `'self'` (o el origen de las fuentes) | Las fuentes sustitutas de `@dimarborda/docx-editor/fonts`. Las que sube el usuario con `registerFont()` se cargan desde memoria y no dependen de esta directiva |
+| `style-src` | `'self'` | El CSS del paquete. Si tu empaquetador inyecta el CSS con etiquetas `<style>` (por ejemplo Vite en desarrollo), añade `'unsafe-inline'` o un *nonce* |
+
+`download()` y `downloadPdf()` descargan desde una URL `blob:`, que no necesita nada extra con políticas habituales. El editor no usa `eval()`, workers, iframes ni recursos de terceros.
+
+Ejemplo para Next.js (`proxy.ts` o `middleware.ts`), donde solo desarrollo añade `'unsafe-eval'`:
+
+```ts
+const isDev = process.env.NODE_ENV === 'development';
+const csp = [
+  "default-src 'self'",
+  `script-src 'self' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ''}`,
+  "connect-src 'self'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  `style-src 'self'${isDev ? " 'unsafe-inline'" : ''}`,
+].join('; ');
+```
+
+El servidor también debe entregar `docx_engine_bg.wasm` con el tipo `application/wasm`. Con otro tipo el motor igual arranca, pero más despacio, y la consola muestra un aviso de `instantiateStreaming`.
+
+`'wasm-unsafe-eval'` lo admiten Chrome y Edge 97+, Firefox 102+ y Safari 16+. En navegadores más antiguos solo funciona `'unsafe-eval'`. La demo publicada usa exactamente esta política (en [`apps/demo/public/_headers`](../../apps/demo/public/_headers)).
 
 ## Limitaciones
 
-Es un prototipo de laboratorio. Todavía no se dibujan las formas agrupadas, los comentarios, el control de cambios ni las columnas múltiples. Todo eso se conserva intacto al guardar el documento. Los encabezados y pies de página se dibujan (texto, tablas, imágenes, número de página y primera página distinta) y se editan con doble clic sobre ellos, como en Word: aparece una línea punteada con la etiqueta "Encabezado" o "Pie de página" y el texto se escribe, se borra y se formatea como el del cuerpo; Esc o un clic en el cuerpo vuelven a él. No se insertan tablas ni imágenes en ellos. Se usan el encabezado y el pie de la última sección (sin variante para páginas pares), y en una línea con número de página el cursor puede desfasarse si el número mostrado tiene otra cantidad de cifras que el guardado. En la selección, sus párrafos usan índices a partir de 33 554 432 (2²⁵).
+Todavía no se dibujan las formas agrupadas, los comentarios, el control de cambios ni las columnas múltiples. Todo eso se conserva intacto al guardar el documento. Los encabezados y pies de página se dibujan (texto, tablas, imágenes, número de página y primera página distinta) y se editan con doble clic sobre ellos, como en Word: aparece una línea punteada con la etiqueta "Encabezado" o "Pie de página" y el texto se escribe, se borra y se formatea como el del cuerpo; Esc o un clic en el cuerpo vuelven a él. No se insertan tablas ni imágenes en ellos. Se usan el encabezado y el pie de la última sección (sin variante para páginas pares), y en una línea con número de página el cursor puede desfasarse si el número mostrado tiene otra cantidad de cifras que el guardado. En la selección, sus párrafos usan índices a partir de 33 554 432 (2²⁵).
 
 Cuadros de texto: un clic dentro coloca el cursor en su texto (escribir, Enter, borrar, formato, deshacer) y un clic en su borde selecciona el cuadro para moverlo, redimensionarlo o cambiar su ajuste como una imagen. La selección y las flechas no salen del cuadro, y ⌘A selecciona todo su texto. No se pueden insertar tablas ni imágenes flotantes dentro de un cuadro. Las tablas dentro de un cuadro y el giro del cuadro no se dibujan, y el texto que no cabe no se recorta. Los cuadros VML de documentos antiguos se dibujan, pero no se pueden editar. En la selección (`selection`), los párrafos de los cuadros usan índices a partir de 16 777 216 (2²⁴), para no desplazar la numeración del cuerpo.
 

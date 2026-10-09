@@ -915,7 +915,7 @@ pub use shapes::{ShapeStyle, TextBox};
 #[path = "insert_objects.rs"]
 mod insert_objects;
 pub use image_edit::ImageUpdate;
-pub use insert_objects::{NewImage, NewTable};
+pub use insert_objects::{CellImage, NewCell, NewImage, NewTable};
 
 /// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
 /// whole paragraph (unset properties are inherited) and alignment.

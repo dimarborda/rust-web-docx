@@ -12,6 +12,10 @@ const listeners = new Set();
 
 export const hasCustomFont = family => customFonts.has((family || '').toLowerCase().trim());
 
+/** The font file the user registered for `family` (one per family), or null: used to embed
+ *  the exact font in exported PDFs */
+export const customFontRecord = family => customFonts.get((family || '').toLowerCase().trim()) || null;
+
 /** Called whenever fonts are added or removed, so editors can lay out again */
 export function onFontsChanged(callback) {
   listeners.add(callback);

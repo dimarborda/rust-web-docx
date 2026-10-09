@@ -12,7 +12,11 @@ import { createDocxToolbar } from './toolbar.js';
 
 const FORWARDED = ['load', 'change', 'selectionchange', 'imageselect', 'readonlychange', 'message'];
 
-export class DocxEditorElement extends HTMLElement {
+// Outside the browser (SSR) there is no HTMLElement: the classes still load, and the elements
+// are only registered where customElements exists (see index.js)
+const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
+
+export class DocxEditorElement extends ElementBase {
   static observedAttributes = ['src', 'zoom', 'readonly'];
 
   editor = null;
@@ -78,7 +82,7 @@ export class DocxEditorElement extends HTMLElement {
   }
 }
 
-export class DocxToolbarElement extends HTMLElement {
+export class DocxToolbarElement extends ElementBase {
   #toolbar = null;
 
   async connectedCallback() {

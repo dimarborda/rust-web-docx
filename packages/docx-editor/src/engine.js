@@ -10,10 +10,36 @@ let ready = false;
  * @param {string | URL} [wasmUrl] where `docx_engine_bg.wasm` is served from
  */
 export function initEngine(wasmUrl) {
-  loading ??= init(wasmUrl ? { module_or_path: wasmUrl } : undefined).then(() => {
-    ready = true;
-  });
+  loading ??= init(wasmUrl ? { module_or_path: wasmUrl } : undefined).then(
+    () => {
+      ready = true;
+    },
+    err => {
+      loading = null; // a later call may retry (e.g. after fixing wasmUrl)
+      throw explainEngineError(err);
+    },
+  );
   return loading;
+}
+
+/** The engine failed to start: say why in plain words when the cause is a known setup issue */
+function explainEngineError(err) {
+  const text = String(err?.message || err);
+  if (/Content Security Policy|unsafe-eval|wasm-unsafe-eval/i.test(text)) {
+    return new Error(
+      "docx-editor: the page's Content-Security-Policy blocks WebAssembly. Add 'wasm-unsafe-eval' "
+        + "to script-src (see the README, section \"Content Security Policy\").",
+      { cause: err },
+    );
+  }
+  if (/magic word|expected magic|Failed to fetch|NetworkError|404/i.test(text)) {
+    return new Error(
+      'docx-editor: docx_engine_bg.wasm could not be loaded. Check that it is served next to the '
+        + 'package\'s JavaScript, or pass its location with `wasmUrl` (see the README, section "Bundlers").',
+      { cause: err },
+    );
+  }
+  return err;
 }
 
 export const engineReady = () => ready;

@@ -18,10 +18,11 @@ const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 const REL_IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 
-/// A table for `insert_table`: its cells as text (a "\n" is a line break inside the cell)
+/// A table for `insert_table`: its cells as text (a "\n" is a line break inside the cell) or
+/// as text plus a picture
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct NewTable {
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<NewCell>>,
     /// The first row is a header: bold, shaded and repeated on every page
     #[serde(default = "default_true")]
     pub header: bool,
@@ -35,6 +36,72 @@ pub struct NewTable {
 
 fn default_true() -> bool {
     true
+}
+
+/// A cell of a new table: plain text, or `{ "text": "...", "image": { ... } }`
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum NewCell {
+    Text(String),
+    Rich {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        image: Option<CellImage>,
+    },
+}
+
+impl NewCell {
+    pub fn text(&self) -> &str {
+        match self {
+            NewCell::Text(t) => t,
+            NewCell::Rich { text, .. } => text.as_deref().unwrap_or(""),
+        }
+    }
+
+    fn image(&self) -> Option<&CellImage> {
+        match self {
+            NewCell::Rich { image, .. } => image.as_ref(),
+            NewCell::Text(_) => None,
+        }
+    }
+}
+
+impl From<&str> for NewCell {
+    fn from(text: &str) -> Self {
+        NewCell::Text(text.to_string())
+    }
+}
+
+impl From<String> for NewCell {
+    fn from(text: String) -> Self {
+        NewCell::Text(text)
+    }
+}
+
+/// A picture in a new table cell: PNG, JPEG or GIF bytes as base64 (or a `data:` URL).
+/// Without a size it fills the column width (never larger than its pixels), keeping its
+/// proportions. Lengths in px.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct CellImage {
+    pub data: String,
+    #[serde(default)]
+    pub width: Option<f64>,
+    #[serde(default)]
+    pub height: Option<f64>,
+    #[serde(default)]
+    pub alt: Option<String>,
+}
+
+/// Bytes of a cell picture given as base64 or as a `data:` URL
+fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+    let b64 = match data.split_once(',') {
+        Some((meta, rest)) if meta.starts_with("data:") => rest,
+        _ => data,
+    };
+    BASE64
+        .decode(b64.trim().as_bytes())
+        .map_err(|_| "La imagen de la celda no es base64 válido.".to_string())
 }
 
 /// Options of `insert_image`. Lengths in px (96 per inch, like the layout).
@@ -128,9 +195,37 @@ impl DocxModifier {
             index
         };
 
+        // Pictures of the cells: stored as media parts first, then drawn in their cells
+        let total_width = {
+            let xml = self.get_file_string("word/document.xml")?;
+            text_width_twips(&xml)
+        };
+        let widths = column_widths(table.widths.as_ref(), cols, total_width);
+        let mut pictures: HashMap<(usize, usize), (String, f64, f64, String)> = HashMap::new();
+        for (r, row) in table.rows.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                let Some(image) = cell.image() else { continue };
+                let bytes = decode_image_data(&image.data)?;
+                if bytes.len() > MAX_IMAGE_BYTES {
+                    return Err(format!("La imagen supera el máximo de {} MB.", MAX_IMAGE_BYTES / 1024 / 1024));
+                }
+                let (format, px_w, px_h) = image_info(&bytes).ok_or("Formato de imagen no soportado en la celda: usa PNG, JPEG o GIF.")?;
+                // The cell's text width: column minus the 108-twip left and right cell margins
+                let inner = ((widths[c] as f64 - 216.0) / 15.0).max(16.0);
+                let (w, h) = fit_in_cell(px_w, px_h, image.width, image.height, inner);
+                let rel_id = self.add_image_part(&bytes, format)?;
+                pictures.insert((r, c), (rel_id, w, h, image.alt.clone().unwrap_or_default()));
+            }
+        }
+
         let mut xml = self.get_file_string("word/document.xml")?;
+        if !pictures.is_empty() {
+            xml = ensure_namespace(&xml, "wp", NS_WP);
+            xml = ensure_namespace(&xml, "r", NS_R);
+        }
+        let first_id = next_doc_pr_id(&xml);
         let range = self.body_paragraph(&xml, target)?;
-        let table_xml = build_table_xml(table, cols, text_width_twips(&xml));
+        let table_xml = build_table_xml(table, cols, total_width, &pictures, first_id);
         xml.insert_str(range.start, &table_xml);
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
 
@@ -280,7 +375,34 @@ fn column_widths(weights: Option<&Vec<f64>>, cols: usize, total: u32) -> Vec<u32
 }
 
 /// The table as WordprocessingML with one paragraph per cell
-fn build_table_xml(table: &NewTable, cols: usize, total_width: u32) -> String {
+/// Size of a cell picture: the size asked for, else the column's text width (never larger
+/// than the picture's pixels), keeping the proportions and never wider than the column
+fn fit_in_cell(px_w: u32, px_h: u32, width: Option<f64>, height: Option<f64>, column: f64) -> (f64, f64) {
+    let ratio = px_h as f64 / px_w as f64;
+    let valid = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0);
+    let (w, h) = match (valid(width), valid(height)) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, w * ratio),
+        (None, Some(h)) => (h / ratio, h),
+        (None, None) => {
+            let w = (px_w as f64).min(column);
+            (w, w * ratio)
+        }
+    };
+    let scale = (column / w).min(1.0);
+    ((w * scale).round().max(1.0), (h * scale).round().max(1.0))
+}
+
+/// The table as WordprocessingML. `pictures`: (row, col) → (rId, width, height, alt) of the
+/// cells holding a picture; their `wp:docPr` ids start at `first_id`.
+fn build_table_xml(
+    table: &NewTable,
+    cols: usize,
+    total_width: u32,
+    pictures: &HashMap<(usize, usize), (String, f64, f64, String)>,
+    first_id: u64,
+) -> String {
+    let mut next_id = first_id;
     let widths = column_widths(table.widths.as_ref(), cols, total_width);
     let border = |side: &str| format!(r#"<w:{} w:val="single" w:sz="4" w:space="0" w:color="{}"/>"#, side, TABLE_BORDER_COLOR);
     let mut xml = String::from("<w:tbl><w:tblPr>");
@@ -307,7 +429,7 @@ fn build_table_xml(table: &NewTable, cols: usize, total_width: u32) -> String {
             xml.push_str("<w:trPr><w:tblHeader/></w:trPr>");
         }
         for (c, width) in widths.iter().enumerate() {
-            let text = row.get(c).map(String::as_str).unwrap_or("");
+            let text = row.get(c).map(NewCell::text).unwrap_or("");
             xml.push_str(&format!(r#"<w:tc><w:tcPr><w:tcW w:w="{}" w:type="dxa"/>"#, width));
             if is_header {
                 xml.push_str(&format!(r#"<w:shd w:val="clear" w:color="auto" w:fill="{}"/>"#, HEADER_FILL));
@@ -318,6 +440,14 @@ fn build_table_xml(table: &NewTable, cols: usize, total_width: u32) -> String {
                 xml.push_str(&format!(r#"<w:jc w:val="{}"/>"#, jc));
             }
             xml.push_str("</w:pPr>");
+            // A picture goes first, on a line of its own when the cell also has text
+            if let Some((rel_id, w, h, alt)) = pictures.get(&(r, c)) {
+                xml.push_str(&drawing_run(rel_id, next_id, *w, *h, alt));
+                next_id += 1;
+                if !text.is_empty() {
+                    xml.push_str("<w:r><w:br/></w:r>");
+                }
+            }
             if !text.is_empty() {
                 xml.push_str("<w:r>");
                 if is_header {
@@ -345,12 +475,12 @@ fn build_table_xml(table: &NewTable, cols: usize, total_width: u32) -> String {
 pub(super) fn append_table_xml(xml: &str, rows: usize, cols: usize, headers: &[String]) -> Result<String, String> {
     let rows = rows.clamp(1, MAX_TABLE_ROWS);
     let cols = cols.clamp(1, MAX_TABLE_COLS);
-    let mut cells = vec![vec![String::new(); cols]; rows];
+    let mut cells: Vec<Vec<NewCell>> = vec![vec![NewCell::from(""); cols]; rows];
     for (c, h) in headers.iter().take(cols).enumerate() {
-        cells[0][c] = h.clone();
+        cells[0][c] = NewCell::from(h.clone());
     }
     let table = NewTable { rows: cells, header: true, widths: None, align: None };
-    let table_xml = build_table_xml(&table, cols, text_width_twips(xml));
+    let table_xml = build_table_xml(&table, cols, text_width_twips(xml), &HashMap::new(), 1);
     // Word needs a paragraph between a table and the end of the body
     let block = format!("{}<w:p/>", table_xml);
     let end = xml.rfind("</w:body>").ok_or("El documento no tiene cuerpo (w:body).")?;

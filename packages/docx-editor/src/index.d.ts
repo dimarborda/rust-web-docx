@@ -76,9 +76,20 @@ export interface NewParagraph {
   align?: Alignment;
 }
 
+/** A table cell with a picture (PNG, JPEG or GIF) and optional text below it */
+export interface NewTableImageCell {
+  text?: string;
+  /** Bytes or a `data:` URL (read a Blob/File first with `await file.arrayBuffer()`) */
+  image: Uint8Array | ArrayBuffer | string;
+  /** CSS px; without a size the picture fills the column width, keeping its proportions */
+  width?: number;
+  height?: number;
+  alt?: string;
+}
+
 export interface NewTable {
-  /** Cells as text; "\n" is a line break inside the cell. Short rows are padded. */
-  rows: string[][];
+  /** Cells as text ("\n" is a line break inside the cell) or with a picture. Short rows are padded. */
+  rows: Array<Array<string | NewTableImageCell>>;
   /** First row bold, shaded and repeated on every page (default true) */
   header?: boolean;
   /** Relative column widths, e.g. [2, 1, 1]; equal columns when unset */
@@ -236,6 +247,14 @@ export class DocxEditor extends EventTarget {
   saveBlob(): Blob;
   /** Triggers a browser download */
   download(fileName?: string): void;
+  /**
+   * The pages as a vector PDF (selectable text, embedded fonts, pictures, tables, shapes).
+   * pdf-lib is loaded on first use. `watermark` (default true) includes the view watermark.
+   */
+  exportPdf(options?: { watermark?: boolean }): Promise<Uint8Array>;
+  exportPdfBlob(options?: { watermark?: boolean }): Promise<Blob>;
+  /** Downloads the PDF; the name defaults to the document's with .pdf */
+  downloadPdf(fileName?: string, options?: { watermark?: boolean }): Promise<void>;
 
   text(): string;
   /** Placeholders such as "{{CLIENTE}}" or "{fecha}" */

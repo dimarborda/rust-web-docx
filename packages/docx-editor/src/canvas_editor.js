@@ -10,7 +10,8 @@
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 /** First index of header and footer paragraphs (the engine numbers them apart) */
 const HEADER_FOOTER_BASE = 1 << 25;
-const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+// Safe to evaluate where there is no navigator (SSR): only read in the browser
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
 const LINE_BREAK = '\u000B'; // Shift+Enter: line break inside the paragraph (Word's ^l)
 const TYPING_GROUP_MS = 1500;
 

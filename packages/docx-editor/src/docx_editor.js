@@ -200,6 +200,44 @@ export class DocxEditor extends EventTarget {
     return new Blob([this.save()], { type: DOCX_MIME });
   }
 
+  /**
+   * The document as a vector PDF of the pages as laid out here: selectable text in the fonts
+   * the page shows (uploaded fonts or the bundled substitutes), pictures, tables and shapes.
+   * pdf-lib is loaded the first time this is called.
+   * @param {{watermark?: boolean}} [options] `watermark` (default true) includes the view
+   *        watermark set with `setWatermark()`
+   * @returns {Promise<Uint8Array>}
+   */
+  async exportPdf({ watermark = true } = {}) {
+    this.#require();
+    // The PDF uses the layout's measurements: make sure they were taken with the fonts the
+    // page has now (a font that finished loading may not have been laid out yet)
+    await document.fonts?.ready;
+    if (!this.#layout || fontWidthsSignature(this.#requestedFaces) !== this.#fontWidths) {
+      this.#session.reset_measurements();
+      this.#render({ full: true });
+    }
+    const { exportPdf } = await import('./pdf_export.js');
+    return exportPdf(this.#layout, { title: this.#fileName.replace(/\.docx$/i, ''), watermark });
+  }
+
+  /** `exportPdf()` as a Blob (application/pdf) */
+  async exportPdfBlob(options) {
+    return new Blob([await this.exportPdf(options)], { type: 'application/pdf' });
+  }
+
+  /** Downloads the document as PDF (browsers; in Tauri write `exportPdf()` with the fs plugin) */
+  async downloadPdf(fileName = this.#fileName.replace(/\.docx$/i, '') + '.pdf', options) {
+    const url = URL.createObjectURL(await this.exportPdfBlob(options));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   /** Downloads the edited document (browsers; in Tauri write `save()` with the fs plugin) */
   download(fileName = this.#fileName) {
     const url = URL.createObjectURL(this.saveBlob());
@@ -354,9 +392,13 @@ export class DocxEditor extends EventTarget {
    * Inserts a table as one undo step and leaves the caret in the paragraph after it. Text
    * before the insertion point stays above the table and text after it goes below.
    * `insertTable(rows, cols, headers)` (earlier versions) still appends an empty table at the end.
-   * @param {{rows: string[][], header?: boolean, widths?: number[], align?: Array<'left'|'center'|'right'>} | number} table
-   *        cells as text ("\n" = line break in the cell); `header` (default true) makes the first
-   *        row bold, shaded and repeated on every page; `widths` are relative column widths
+   * @param {{rows: Array<Array<string | {text?: string, image?: Uint8Array|ArrayBuffer|string, width?: number, height?: number, alt?: string}>>,
+   *          header?: boolean, widths?: number[], align?: Array<'left'|'center'|'right'>} | number} table
+   *        cells as text ("\n" = line break in the cell) or `{ text, image }`: a PNG, JPEG or GIF
+   *        (bytes or a `data:` URL; read a Blob/File first with `await file.arrayBuffer()`) that
+   *        fills the column width unless `width` / `height` (CSS px) are given, with the text
+   *        below it; `header` (default true) makes the first row bold, shaded and repeated on
+   *        every page; `widths` are relative column widths
    * @param {{at?: 'cursor'|'start'|'end'}} [options]
    * @returns {{first: number}} paragraph index of the first cell
    */
@@ -372,7 +414,7 @@ export class DocxEditor extends EventTarget {
     const { at = 'cursor' } = options ?? {};
     const { rows, header = true, widths, align } = table ?? {};
     if (!Array.isArray(rows) || !rows.length) throw new Error('docx-editor: insertTable needs rows');
-    const payload = { rows: rows.map(row => (Array.isArray(row) ? row : [row]).map(c => (c == null ? '' : String(c)))), header, widths, align };
+    const payload = { rows: rows.map(row => (Array.isArray(row) ? row : [row]).map(tableCell)), header, widths, align };
     const pos = this.#insertionPoint(at);
     const result = JSON.parse(this.#session.insert_table(
       pos.paragraph, pos.offset, JSON.stringify(payload), this.#selectionJSON(),
@@ -1017,6 +1059,25 @@ function moveChanges(info, dx, dy) {
   if (dx) changes.horizontal = axis(info.horizontal, dx, (info.bounds?.x ?? 0) + dx);
   if (dy) changes.vertical = axis(info.vertical, dy, (info.bounds?.y ?? 0) + dy);
   return changes;
+}
+
+/** A cell for the engine: its text, or `{ text, image: { data: base64 } }` */
+function tableCell(cell) {
+  if (cell == null) return '';
+  if (typeof cell !== 'object') return String(cell);
+  const { text, image, width, height, alt } = cell;
+  if (image == null) return text == null ? '' : String(text);
+  if (typeof Blob !== 'undefined' && image instanceof Blob) {
+    throw new Error('docx-editor: insertTable needs image bytes or a data: URL; read the Blob first with await blob.arrayBuffer()');
+  }
+  const data = typeof image === 'string' ? image : base64(image instanceof ArrayBuffer ? new Uint8Array(image) : image);
+  return { text: text == null ? undefined : String(text), image: { data, width, height, alt } };
+}
+
+function base64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
 }
 
 /** Bytes of an image given as bytes, a Blob/File or a `data:` URL */

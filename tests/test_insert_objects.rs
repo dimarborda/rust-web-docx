@@ -1,5 +1,5 @@
 use rust_web_docx::blank_generator::{generate_blank_docx, PageSize};
-use rust_web_docx::docx_parser::{DocumentElement, DocxModifier, NewImage, NewTable};
+use rust_web_docx::docx_parser::{CellImage, DocumentElement, DocxModifier, NewCell, NewImage, NewTable};
 use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -36,7 +36,7 @@ fn texts(m: &DocxModifier) -> Vec<String> {
 
 fn table(rows: &[&[&str]]) -> NewTable {
     NewTable {
-        rows: rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect(),
+        rows: rows.iter().map(|r| r.iter().map(|c| NewCell::from(*c)).collect()).collect(),
         header: true,
         widths: None,
         align: None,
@@ -238,4 +238,60 @@ fn test_image_errors() {
     let bad = NewImage { align: Some("justify".into()), ..Default::default() };
     assert!(m.insert_image(0, 0, &png(1, 1), &bad).is_err());
     assert_eq!(document(&m), original, "nothing changes on error");
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[test]
+fn test_pictures_in_table_cells() {
+    let mut m = docx(r#"<w:p><w:r><w:t>Antes</w:t></w:r></w:p>"#);
+    let logo = NewCell::Rich {
+        text: Some("Logo".into()),
+        image: Some(CellImage { data: b64(&png(2000, 1000)), width: None, height: None, alt: Some("Logo de la empresa".into()) }),
+    };
+    let firma = NewCell::Rich {
+        text: None,
+        image: Some(CellImage { data: format!("data:image/png;base64,{}", b64(&png(300, 100))), width: Some(90.0), height: None, alt: None }),
+    };
+    let t = NewTable {
+        rows: vec![vec![NewCell::from("Imagen"), NewCell::from("Firma")], vec![logo, firma]],
+        header: true,
+        widths: None,
+        align: None,
+    };
+    m.insert_table(0, 5, &t).unwrap();
+
+    let table = m.extract_elements().unwrap().into_iter().find_map(|e| match e {
+        DocumentElement::Table(t) => Some(t),
+        _ => None,
+    }).unwrap();
+    let logo_cell = &table.rich_rows[1].cells[0];
+    let img = &logo_cell.paragraphs[0].images[0];
+    // 9360 twips / 2 columns = 4680 twips; minus 216 twips of cell margins = 297.6 px
+    assert!((img.width - 298.0).abs() < 1.0, "fits the column width: {}", img.width);
+    assert!((img.height - img.width / 2.0).abs() < 1.0, "keeps the proportions");
+    assert_eq!(img.alt, "Logo de la empresa");
+    assert_eq!(logo_cell.paragraphs[0].text, "\nLogo", "the text goes on the line below the picture");
+    let firma_img = &table.rich_rows[1].cells[1].paragraphs[0].images[0];
+    assert_eq!((firma_img.width, firma_img.height), (90.0, 30.0));
+
+    let doc = document(&m);
+    assert!(doc.contains("xmlns:wp="));
+    let ids: Vec<&str> = doc.match_indices("<wp:docPr id=\"").map(|(i, _)| &doc[i + 14..i + 17]).collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1], "unique drawing ids");
+    let reopened = reopen(&m);
+    let rels = reopened.get_file_string("word/_rels/document.xml.rels").unwrap();
+    assert_eq!(rels.matches("relationships/image").count(), 2);
+
+    let bad = NewTable {
+        rows: vec![vec![NewCell::Rich { text: None, image: Some(CellImage { data: "no es base64!".into(), width: None, height: None, alt: None }) }]],
+        header: false,
+        widths: None,
+        align: None,
+    };
+    assert!(m.insert_table(0, 0, &bad).is_err());
 }

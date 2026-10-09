@@ -44,13 +44,21 @@ export function disableLigatures(ctx) {
   if ('fontKerning' in ctx) ctx.fontKerning = 'none';
 }
 
-const measureCtx = document.createElement('canvas').getContext('2d');
-disableLigatures(measureCtx);
+// Created on first use, so importing the package also works where there is no DOM (SSR)
+let measureCanvas = null;
+function measureCtx() {
+  if (!measureCanvas) {
+    measureCanvas = document.createElement('canvas').getContext('2d');
+    disableLigatures(measureCanvas);
+  }
+  return measureCanvas;
+}
 
 /** `(text, family, sizePx, bold, italic) => width`, the measurer the Rust layout calls */
 export function measureText(text, family, size, bold, italic) {
-  measureCtx.font = canvasFont(bold ? '700' : '400', italic ? 'italic' : 'normal', size, family);
-  return measureCtx.measureText(text).width;
+  const ctx = measureCtx();
+  ctx.font = canvasFont(bold ? '700' : '400', italic ? 'italic' : 'normal', size, family);
+  return ctx.measureText(text).width;
 }
 
 const PROBE_TEXT = 'Contrato de prestación de servicios 0123456789';
@@ -61,8 +69,9 @@ const PROBE_TEXT = 'Contrato de prestación de servicios 0123456789';
  */
 export function fontWidthsSignature(faces) {
   return [...faces].map(face => {
-    measureCtx.font = face;
-    return measureCtx.measureText(PROBE_TEXT).width.toFixed(2);
+    const ctx = measureCtx();
+    ctx.font = face;
+    return ctx.measureText(PROBE_TEXT).width.toFixed(2);
   }).join('|');
 }
 

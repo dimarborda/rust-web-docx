@@ -13,7 +13,7 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
   <img src="./docs/demo.gif" alt="Edición directa de un contrato y reemplazo de variables de plantilla en Rust DOCX" width="860" />
 </p>
 
-> **Estado: laboratorio.** Es un prototipo para edición de plantillas con alta fidelidad a Word, no un reemplazo completo de Word. Mira las [limitaciones conocidas](#limitaciones-conocidas).
+> Pensado para editar documentos y plantillas con alta fidelidad a Word, sin salir del navegador. Revisa las [limitaciones conocidas](#limitaciones-conocidas) antes de integrarlo.
 
 ---
 
@@ -30,6 +30,7 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 - **Imágenes editables.** Se seleccionan con un clic, se redimensionan con las asas, las flotantes se arrastran y cambian de ajuste, y todo está disponible desde código (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`).
 - **Valores por defecto de Word.** Lo que el documento no especifica se dibuja como lo haría Word (Times New Roman 10 pt, sin bordes inventados), en lugar de "mejorarlo".
 - **Buscar y reemplazar** con mayúsculas/minúsculas y expresiones regulares.
+- **Exportar a PDF** vectorial, con texto seleccionable y las fuentes incrustadas, tal como se ve en el editor.
 - **Privado por diseño.** Lectura del ZIP, análisis XML, maquetación, edición y reempaquetado ocurren en la memoria del navegador.
 
 ## Cómo funciona
@@ -74,7 +75,7 @@ npm install @dimarborda/docx-editor
 </script>
 ```
 
-La API completa, los ejemplos con React y Tauri y las opciones de fuentes están en el [README del paquete](packages/docx-editor/README.md). Un ejemplo mínimo de integración está en [`apps/demo/embed.html`](apps/demo/embed.html).
+La API completa, los ejemplos con React, Next.js y Tauri y las opciones de fuentes están en el [README del paquete](packages/docx-editor/README.md). Si tu sitio usa una cabecera `Content-Security-Policy`, añade `'wasm-unsafe-eval'` al `script-src` de producción; los detalles están en la sección [Content Security Policy](packages/docx-editor/README.md#content-security-policy). Un ejemplo mínimo de integración está en [`apps/demo/embed.html`](apps/demo/embed.html).
 
 ## Limitaciones conocidas
 
@@ -139,7 +140,7 @@ npm run deploy
 
 **Rust DOCX** is a Word (`.docx`) editor that runs entirely in the browser: a Rust core compiled to WebAssembly parses the OpenXML, lays out pages the way Word does (style cascade, real font metrics, pagination, tables, inline pictures that flow with the text and floating ones that text wraps around) and renders them to a 2D canvas with its own caret and selection. Pictures can be selected, resized, moved and re-wrapped with the mouse or from code (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`). Edits are lossless: only the XML you touched is rewritten. Template placeholders like `{{FIELD}}` are replaced even when Word splits them across runs. No server is involved, so documents never leave your machine.
 
-[Try the live demo](https://rust-web-docx.dimarborda.workers.dev/?demo). It is a lab prototype; see the [known limitations](#limitaciones-conocidas) above.
+[Try the live demo](https://rust-web-docx.dimarborda.workers.dev/?demo), and see the [known limitations](#limitaciones-conocidas) above.
 
 ---
 

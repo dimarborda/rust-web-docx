@@ -84,6 +84,17 @@ function openSample() {
   }
 }
 
+/** New empty A4 document, after confirming when the open one has unsaved edits */
+function newDocument() {
+  if (editor.hasDocument && editor.canUndo && !confirm('¿Crear un documento nuevo? Los cambios que no hayas descargado se perderán.')) return;
+  try {
+    editor.openBlank({ fileName: 'documento.docx', pageSize: 'a4' });
+    showToast('Documento en blanco listo para escribir.');
+  } catch (err) {
+    showToast('No se pudo crear el documento: ' + err, true);
+  }
+}
+
 function onDocumentLoaded() {
   dismissedMissingFonts = null;
   emptyStateView.style.display = 'none';
@@ -93,6 +104,7 @@ function onDocumentLoaded() {
   formattingRibbon.style.display = 'flex';
   appStatusbar.style.display = 'flex';
   btnDownload.disabled = false;
+  $('btn-download-pdf').disabled = false;
   currentDocTitle.textContent = editor.fileName;
   onDocumentChanged();
 }
@@ -460,6 +472,7 @@ function setupEventListeners() {
     if (e.target.files?.[0]) openFile(e.target.files[0]);
   }));
   [$('btn-load-sample'), $('btn-welcome-demo')].forEach(btn => btn?.addEventListener('click', openSample));
+  [$('btn-new-document'), $('btn-welcome-new')].forEach(btn => btn?.addEventListener('click', newDocument));
 
   $('examples-folder-input')?.addEventListener('change', e => {
     if (e.target.files?.length) usePickedFolder(e.target.files);
@@ -467,6 +480,18 @@ function setupEventListeners() {
   });
 
   btnDownload.addEventListener('click', downloadDocx);
+  $('btn-download-pdf').addEventListener('click', async () => {
+    const button = $('btn-download-pdf');
+    button.disabled = true;
+    try {
+      await editor.downloadPdf(`${editor.fileName.replace(/\.docx$/i, '')}.pdf`);
+      showToast('PDF descargado.');
+    } catch (err) {
+      showToast('No se pudo exportar el PDF: ' + err, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   if (dropTarget) {
     ['dragenter', 'dragover'].forEach(name => dropTarget.addEventListener(name, e => {
