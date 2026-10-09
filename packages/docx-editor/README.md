@@ -282,11 +282,11 @@ El fallo suele aparecer solo al desplegar. En desarrollo muchas configuraciones 
 | :--- | :--- | :--- |
 | `script-src` | `'self' 'wasm-unsafe-eval'` | Cargar el JavaScript del paquete y compilar el motor WebAssembly |
 | `connect-src` | `'self'` (o el origen desde donde sirvas `docx_engine_bg.wasm` y las fuentes) | Descargar el `.wasm`, y leer las fuentes al exportar a PDF |
-| `img-src` | `'self' data: blob:` | Las imágenes del documento se dibujan desde URLs `data:` |
+| `img-src` | `'self' data:` | Las imágenes del documento se dibujan desde URLs `data:` (no hace falta `blob:`) |
 | `font-src` | `'self'` (o el origen de las fuentes) | Las fuentes sustitutas de `@dimarborda/docx-editor/fonts`. Las que sube el usuario con `registerFont()` se cargan desde memoria y no dependen de esta directiva |
 | `style-src` | `'self'` | El CSS del paquete. Si tu empaquetador inyecta el CSS con etiquetas `<style>` (por ejemplo Vite en desarrollo), añade `'unsafe-inline'` o un *nonce* |
 
-`download()` y `downloadPdf()` descargan desde una URL `blob:`, que no necesita nada extra con políticas habituales. El editor no usa `eval()`, workers, iframes ni recursos de terceros.
+`download()` y `downloadPdf()` descargan desde una URL `blob:`, que no depende de `img-src` y no necesita nada extra con políticas habituales. El editor no usa `eval()`, workers, iframes ni recursos de terceros.
 
 Ejemplo para Next.js (`proxy.ts` o `middleware.ts`), donde solo desarrollo añade `'unsafe-eval'`:
 
@@ -296,7 +296,7 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'wasm-unsafe-eval'${isDev ? " 'unsafe-eval'" : ''}`,
   "connect-src 'self'",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data:",
   "font-src 'self'",
   `style-src 'self'${isDev ? " 'unsafe-inline'" : ''}`,
 ].join('; ');
