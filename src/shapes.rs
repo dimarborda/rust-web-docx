@@ -606,7 +606,8 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
     }
     let len = |k: &str| css.get(k).and_then(|v| vml_length(v));
     let anchored = css.get("position").map(String::as_str) == Some("absolute");
-    let behind = css.get("z-index").and_then(|z| z.trim().parse::<i64>().ok()).is_some_and(|z| z < 0);
+    let z_index = css.get("z-index").and_then(|z| z.trim().parse::<i64>().ok()).unwrap_or(0);
+    let behind = z_index < 0;
 
     let h_relative = match css.get("mso-position-horizontal-relative").map(String::as_str) {
         Some("margin") => "margin",
@@ -661,6 +662,7 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
         alt: get_attr_value(e, "alt").unwrap_or_default(),
         shape: Some(shape),
         vml: true,
+        z_order: z_index,
         ..Default::default()
     }
 }

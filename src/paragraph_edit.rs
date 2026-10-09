@@ -200,8 +200,9 @@ pub fn body_paragraph_ranges(xml: &str) -> Result<Vec<Range<usize>>, String> {
     let mut i = 0;
     while i < tokens.len() {
         match &tokens[i].ev {
-            Event::Start(e) if tag_is(e.name().as_ref(), "body") => in_body = true,
-            Event::End(e) if tag_is(e.name().as_ref(), "body") => in_body = false,
+            // Headers and footers (w:hdr / w:ftr) number their paragraphs the same way
+            Event::Start(e) if ["body", "hdr", "ftr"].iter().any(|t| tag_is(e.name().as_ref(), t)) => in_body = true,
+            Event::End(e) if ["body", "hdr", "ftr"].iter().any(|t| tag_is(e.name().as_ref(), t)) => in_body = false,
             Event::Start(e) | Event::Empty(e) if in_body && tag_is(e.name().as_ref(), "p") => {
                 let end = element_end(&tokens, i);
                 ranges.push(tokens[i].span.start..tokens[end].span.end);

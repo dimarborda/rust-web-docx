@@ -425,6 +425,13 @@ pub struct ImageRef {
     /// Read from legacy VML (`w:pict`): drawn, but not editable
     #[serde(default)]
     pub vml: bool,
+    /// Stacking order among floating objects (`relativeHeight`, VML `z-index`): higher is on top
+    #[serde(default)]
+    pub z_order: i64,
+    /// Contour text follows with tight / through wrapping (`wp:wrapPolygon`), as fractions of
+    /// the picture's width and height
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wrap_polygon: Vec<[f64; 2]>,
 }
 
 impl ImageRef {
@@ -454,6 +461,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
     let mut axis = ' ';
     let mut text_kind: Option<&'static str> = None;
     let mut unsupported = false;
+    let mut in_polygon = false;
     let mut buf = Vec::new();
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -483,6 +491,8 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
                     axis = ' ';
                 } else if tag_is(n, "posOffset") || tag_is(n, "align") {
                     text_kind = None;
+                } else if tag_is(n, "wrapPolygon") {
+                    in_polygon = false;
                 }
                 buf.clear();
                 continue;
@@ -520,6 +530,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             img.dist_right = dist("distR");
             if tag_is(n, "anchor") {
                 img.anchored = true;
+                img.z_order = get_attr_i64(&e, "relativeHeight").unwrap_or(0);
                 img.behind_text = get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
                 // Without a wrap element Word floats the picture over the text
                 img.wrap = if img.behind_text { "behind" } else { "inFront" }.into();
@@ -530,6 +541,12 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             let mut chars = kind.chars();
             img.wrap = chars.next().map(|c| c.to_ascii_lowercase().to_string() + chars.as_str()).unwrap_or_default();
             img.wrap_side = get_attr_value(&e, "wrapText").unwrap_or_else(|| "bothSides".into());
+        } else if is_start && tag_is(n, "wrapPolygon") {
+            in_polygon = true;
+        } else if in_polygon && (tag_is(n, "start") || tag_is(n, "lineTo")) {
+            // Coordinates in a 21600 × 21600 space over the picture
+            let coord = |name: &str| get_attr_i64(&e, name).unwrap_or(0) as f64 / 21600.0;
+            img.wrap_polygon.push([coord("x"), coord("y")]);
         } else if tag_is(n, "docPr") {
             img.doc_pr_id = get_attr_i64(&e, "id").unwrap_or(0).max(0) as u64;
             img.alt = get_attr_value(&e, "descr").unwrap_or_default();
@@ -672,6 +689,10 @@ fn header_footer_elements(
         None => HashMap::new(),
     };
     let mut elements = parse_document_elements_with(xml, styles);
+    // Paragraphs get editable numbers of their own (text boxes inside stay read-only)
+    if let Some(slot) = header_footer_parts(files).iter().position(|p| p == part) {
+        for_each_paragraph_mut(&mut elements, &mut |p| p.index += HEADER_FOOTER_BASE + slot * PART_SLOT);
+    }
     let mut rename = |img: &mut ImageRef| {
         if img.rel_id.is_empty() {
             return;
@@ -698,6 +719,26 @@ fn header_footer_elements(
 /// Text box paragraphs are numbered from here on, apart from body and table paragraphs, so
 /// adding text to a box never renumbers the body
 pub const TEXT_BOX_BASE: usize = 1 << 24;
+
+/// Header and footer paragraphs are numbered from here on: `HEADER_FOOTER_BASE + slot ×
+/// PART_SLOT + n`, where `slot` is the part's place in `header_footer_parts` and `n` the
+/// paragraph's place in the part
+pub const HEADER_FOOTER_BASE: usize = 1 << 25;
+pub const PART_SLOT: usize = 1 << 16;
+
+/// Header and footer parts of the package, in a stable order
+pub(crate) fn header_footer_parts(files: &HashMap<String, Vec<u8>>) -> Vec<String> {
+    let mut parts: Vec<String> = files
+        .keys()
+        .filter(|name| {
+            let file = name.strip_prefix("word/").unwrap_or("");
+            !file.contains('/') && (file.starts_with("header") || file.starts_with("footer")) && file.ends_with(".xml")
+        })
+        .cloned()
+        .collect();
+    parts.sort();
+    parts
+}
 
 /// Gives the paragraphs of the body's text boxes (DrawingML ones, anchored in body or table
 /// paragraphs) indices from `TEXT_BOX_BASE` in document order: the order `paragraph_ranges`
@@ -745,6 +786,11 @@ impl ParagraphRanges {
             self.body.get(index).cloned()
         }
     }
+}
+
+/// Byte range of paragraph `index` of a part (a text box paragraph from `TEXT_BOX_BASE`)
+fn range_of(xml: &str, index: usize) -> Result<Option<std::ops::Range<usize>>, String> {
+    Ok(if index >= TEXT_BOX_BASE { paragraph_ranges(xml)?.get(index) } else { body_paragraph_ranges(xml)?.get(index).cloned() })
 }
 
 pub(crate) fn paragraph_ranges(xml: &str) -> Result<ParagraphRanges, String> {
@@ -1134,8 +1180,12 @@ impl DocxModifier {
         !self.history.redo.is_empty()
     }
 
-    /// Byte range of paragraph `index`: a body or table paragraph, or a text box paragraph
+    /// Byte range of paragraph `index` of document.xml: a body or table paragraph, or a text
+    /// box paragraph (header and footer paragraphs live in other parts, see `locate`)
     fn body_paragraph(&self, xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
+        if index >= HEADER_FOOTER_BASE {
+            return Err("Esta operación no está disponible en encabezados y pies de página.".to_string());
+        }
         let range = if index >= TEXT_BOX_BASE {
             paragraph_ranges(xml)?.get(index)
         } else {
@@ -1144,13 +1194,33 @@ impl DocxModifier {
         range.ok_or_else(|| format!("No existe el párrafo {}.", index))
     }
 
-    /// Splits body paragraph `index` at `offset` (Enter)
+    /// The part holding paragraph `index` and the paragraph's own index in that part
+    fn locate(&self, index: usize) -> Result<(String, usize), String> {
+        if index < HEADER_FOOTER_BASE {
+            return Ok(("word/document.xml".to_string(), index));
+        }
+        let slot = (index - HEADER_FOOTER_BASE) / PART_SLOT;
+        let part = header_footer_parts(&self.files)
+            .get(slot)
+            .cloned()
+            .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+        Ok((part, (index - HEADER_FOOTER_BASE) % PART_SLOT))
+    }
+
+    /// Paragraph `index` of whichever part holds it: (part name, part XML, byte range)
+    fn paragraph_in_part(&self, index: usize) -> Result<(String, String, std::ops::Range<usize>), String> {
+        let (part, local) = self.locate(index)?;
+        let xml = self.get_file_string(&part)?;
+        let range = range_of(&xml, local)?.ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+        Ok((part, xml, range))
+    }
+
+    /// Splits paragraph `index` at `offset` (Enter)
     pub fn split_paragraph(&mut self, index: usize, offset: usize) -> Result<(), String> {
-        let mut xml = self.get_file_string("word/document.xml")?;
-        let range = self.body_paragraph(&xml, index)?;
+        let (part, mut xml, range) = self.paragraph_in_part(index)?;
         let (first, second) = split_paragraph(&xml[range.clone()], &self.styles, offset)?;
         xml.replace_range(range, &(first + &second));
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
         Ok(())
     }
 
@@ -1166,9 +1236,12 @@ impl DocxModifier {
         if (p1 >= TEXT_BOX_BASE) != (p2 >= TEXT_BOX_BASE) {
             return Err("La selección no puede ir del texto del documento a un cuadro de texto.".to_string());
         }
-        let mut xml = self.get_file_string("word/document.xml")?;
-        let ranges = paragraph_ranges(&xml)?;
-        let (r1, r2) = match (ranges.get(p1), ranges.get(p2)) {
+        let ((part, l1), (part2, l2)) = (self.locate(p1)?, self.locate(p2)?);
+        if part != part2 {
+            return Err("La selección no puede ir de un encabezado o pie de página a otra parte del documento.".to_string());
+        }
+        let mut xml = self.get_file_string(&part)?;
+        let (r1, r2) = match (range_of(&xml, l1)?, range_of(&xml, l2)?) {
             (Some(a), Some(b)) => (a, b),
             _ => return Err("La selección apunta a párrafos que no existen.".to_string()),
         };
@@ -1183,15 +1256,15 @@ impl DocxModifier {
         let tail = edit_paragraph_range(&xml[r2.clone()], &self.styles, 0, o2, "")?;
         let merged = merge_paragraphs(&head, &tail, &self.styles)?;
         xml.replace_range(r1.start..r2.end, &merged);
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
         Ok(())
     }
 
     /// Joins body paragraph `index` with the next one when nothing (e.g. a table) sits between
     pub fn merge_with_next(&mut self, index: usize) -> Result<(), String> {
-        let xml = self.get_file_string("word/document.xml")?;
-        let ranges = paragraph_ranges(&xml)?;
-        let current = match (ranges.get(index), ranges.get(index + 1)) {
+        let (part, local) = self.locate(index)?;
+        let xml = self.get_file_string(&part)?;
+        let current = match (range_of(&xml, local)?, range_of(&xml, local + 1)?) {
             (Some(a), Some(b)) if a.end <= b.start && is_blank(&xml[a.end..b.start]) => a,
             _ => return Err("Solo se pueden unir párrafos contiguos.".to_string()),
         };
@@ -1215,8 +1288,7 @@ impl DocxModifier {
             return Err("No hay párrafos para insertar.".to_string());
         }
         let current = {
-            let xml = self.get_file_string("word/document.xml")?;
-            let range = self.body_paragraph(&xml, index)?;
+            let (_, xml, range) = self.paragraph_in_part(index)?;
             parse_paragraph_fragment(&xml[range], &self.styles).text
         };
         let len = current.chars().count();
@@ -1478,11 +1550,10 @@ impl DocxModifier {
         end: usize,
         text: &str,
     ) -> Result<bool, String> {
-        let mut xml = self.get_file_string("word/document.xml")?;
-        let range = self.body_paragraph(&xml, index)?;
+        let (part, mut xml, range) = self.paragraph_in_part(index)?;
         let edited = edit_paragraph_range(&xml[range.clone()], &self.styles, start, end, text)?;
         xml.replace_range(range, &edited);
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
         Ok(true)
     }
 
@@ -1525,18 +1596,18 @@ impl DocxModifier {
 
     /// Applies minimal edits to body paragraphs, preserving everything the editor doesn't model
     fn edit_body_paragraphs(&mut self, edits: &[ParagraphEdit]) -> Result<usize, String> {
-        let mut xml = self.get_file_string("word/document.xml")?;
         if edits.iter().any(|e| e.index >= TEXT_BOX_BASE) {
-            // A text box paragraph lies inside its anchor paragraph: edit one at a time,
-            // finding each again in the updated document
+            // A text box paragraph lies inside its anchor paragraph, and header and footer
+            // paragraphs live in their own parts: edit one at a time, finding each again
             for edit in edits {
-                let range = self.body_paragraph(&xml, edit.index)?;
+                let (part, mut xml, range) = self.paragraph_in_part(edit.index)?;
                 let edited = edit_paragraph(&xml[range.clone()], &self.styles, edit.text, edit.formats.as_deref(), edit.align)?;
                 xml.replace_range(range, &edited);
+                self.put_file(part, xml.into_bytes());
             }
-            self.put_file("word/document.xml".to_string(), xml.into_bytes());
             return Ok(edits.len());
         }
+        let mut xml = self.get_file_string("word/document.xml")?;
         let ranges = body_paragraph_ranges(&xml)?;
 
         // Splice from the end so earlier byte ranges stay valid

@@ -97,6 +97,9 @@ impl DocxModifier {
     /// and text after it goes below. Returns the index of the first cell's paragraph and the
     /// caret at the start of the paragraph after the table.
     pub fn insert_table(&mut self, index: usize, offset: usize, table: &NewTable) -> Result<(usize, (usize, usize)), String> {
+        if index >= HEADER_FOOTER_BASE {
+            return Err("No se pueden insertar tablas en encabezados ni pies de página.".to_string());
+        }
         if index >= TEXT_BOX_BASE {
             return Err("No se puede insertar una tabla dentro de un cuadro de texto.".to_string());
         }
@@ -143,6 +146,9 @@ impl DocxModifier {
             return Err(format!("La imagen supera el máximo de {} MB.", MAX_IMAGE_BYTES / 1024 / 1024));
         }
         let (format, px_w, px_h) = image_info(bytes).ok_or("Formato de imagen no soportado: usa PNG, JPEG o GIF.")?;
+        if index >= HEADER_FOOTER_BASE {
+            return Err("No se pueden insertar imágenes en encabezados ni pies de página.".to_string());
+        }
         let layout = image.layout();
         if layout.is_some() && index >= TEXT_BOX_BASE {
             return Err("Dentro de un cuadro de texto solo se pueden insertar imágenes en línea con el texto.".to_string());

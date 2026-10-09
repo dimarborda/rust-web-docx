@@ -4,6 +4,7 @@
 //! Positions are `(paragraph, offset)` with the offset counted in Unicode scalar values of
 //! the paragraph text (what `ParagraphInfo::text` holds).
 
+use crate::docx_parser::HEADER_FOOTER_BASE;
 use crate::layout_engine::{DocumentLayout, FontSpec, RenderCommand, TextMeasurer, TextRun};
 use serde::{Deserialize, Serialize};
 
@@ -198,11 +199,23 @@ fn lines(layout: &DocumentLayout) -> Vec<Line<'_>> {
 
 /// The line that displays the caret at `pos`. A wrapped line's `end` belongs to the next
 /// line; `end` of a line closed by a break (or of the last line) belongs to that line.
-fn line_index(lines: &[Line], pos: TextPosition) -> Option<usize> {
+/// A header or footer paragraph is drawn on every page, and `page` (when
+/// given) picks the copy on that page
+fn line_index_on(lines: &[Line], pos: TextPosition, page: Option<usize>) -> Option<usize> {
+    let on_page = page.filter(|_| pos.paragraph >= HEADER_FOOTER_BASE);
+    if let Some(p) = on_page {
+        if lines.iter().any(|l| l.paragraph == pos.paragraph && l.page == p) {
+            return line_index_in(lines, pos, |l| l.page == p);
+        }
+    }
+    line_index_in(lines, pos, |_| true)
+}
+
+fn line_index_in(lines: &[Line], pos: TextPosition, keep: impl Fn(&Line) -> bool) -> Option<usize> {
     let mut at_end = None;
     let mut last = None;
     for (i, line) in lines.iter().enumerate() {
-        if line.paragraph != pos.paragraph {
+        if line.paragraph != pos.paragraph || !keep(line) {
             continue;
         }
         if line.start <= pos.offset && pos.offset < line.end {
@@ -223,10 +236,24 @@ pub fn hit_test(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dy
     let all = lines(layout);
     let score = |l: &Line| (l.distance_x(x) > 0.5, l.distance_y(y), l.distance_x(x));
     // Inside an editable text box only its own lines count; elsewhere only the body's
+    // (headers and footers are reached with `hit_test_header_footer`)
     let in_box = text_box_at(layout, page, x, y);
-    let line = all.iter().filter(|l| l.page == page && l.text_box == in_box).min_by(|a, b| {
+    let line = all.iter().filter(|l| l.page == page && l.text_box == in_box && l.paragraph < HEADER_FOOTER_BASE).min_by(|a, b| {
         score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
     })?;
+    Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
+}
+
+/// Text position in the header or footer of a page under a point, or `None` when the point
+/// is not on (or right next to) header or footer text: header editing mode
+pub fn hit_test_header_footer(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dyn TextMeasurer) -> Option<TextPosition> {
+    const REACH: f64 = 24.0;
+    let all = lines(layout);
+    let score = |l: &Line| (l.distance_y(y), l.distance_x(x));
+    let line = all
+        .iter()
+        .filter(|l| l.page == page && l.paragraph >= HEADER_FOOTER_BASE && l.distance_y(y) < REACH)
+        .min_by(|a, b| score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal))?;
     Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
 }
 
@@ -244,8 +271,13 @@ fn text_box_at(layout: &DocumentLayout, page: usize, x: f64, y: f64) -> Option<[
 }
 
 pub fn caret_box(layout: &DocumentLayout, pos: TextPosition, m: &mut dyn TextMeasurer) -> Option<CaretBox> {
+    caret_box_on(layout, pos, None, m)
+}
+
+/// `caret_box`, choosing for a header or footer paragraph the copy on `page`
+pub fn caret_box_on(layout: &DocumentLayout, pos: TextPosition, page: Option<usize>, m: &mut dyn TextMeasurer) -> Option<CaretBox> {
     let all = lines(layout);
-    let line = &all[line_index(&all, pos)?];
+    let line = &all[line_index_on(&all, pos, page)?];
     let offset = pos.offset.clamp(line.start, line.caret_end().max(line.start));
     Some(CaretBox {
         page: line.page,
@@ -268,8 +300,20 @@ pub fn move_vertical(
     goal_x: f64,
     m: &mut dyn TextMeasurer,
 ) -> Option<TextPosition> {
+    move_vertical_on(layout, pos, direction, goal_x, None, m)
+}
+
+/// `move_vertical` for a caret shown on `page` (header and footer copies)
+pub fn move_vertical_on(
+    layout: &DocumentLayout,
+    pos: TextPosition,
+    direction: i32,
+    goal_x: f64,
+    page: Option<usize>,
+    m: &mut dyn TextMeasurer,
+) -> Option<TextPosition> {
     let all = lines(layout);
-    let current = &all[line_index(&all, pos)?];
+    let current = &all[line_index_on(&all, pos, page)?];
     let here = (current.page, current.top);
     let beyond = |l: &&Line| {
         let there = (l.page, l.top);
@@ -294,8 +338,15 @@ pub fn move_vertical(
         }
         best.map(|(i, _)| i)
     };
-    // Up and down stay in the text box (or the body) the caret is in
-    let candidates: Vec<&Line> = all.iter().filter(beyond).filter(|l| l.text_box == current.text_box).collect();
+    // Up and down stay in the text box (or the body, or the header/footer of this page) the
+    // caret is in
+    let in_part = current.paragraph >= HEADER_FOOTER_BASE;
+    let candidates: Vec<&Line> = all
+        .iter()
+        .filter(beyond)
+        .filter(|l| l.text_box == current.text_box && (l.paragraph >= HEADER_FOOTER_BASE) == in_part)
+        .filter(|l| !in_part || l.page == current.page)
+        .collect();
     let in_column: Vec<&Line> = candidates.iter().copied().filter(|l| l.distance_x(goal_x) == 0.0).collect();
     let target = match nearest(in_column.clone()) {
         Some(i) => in_column[i],
@@ -322,12 +373,28 @@ pub fn selection_rects_range(
     to: TextPosition,
     m: &mut dyn TextMeasurer,
 ) -> Vec<Rect> {
+    selection_rects_range_on(layout, from, to, None, m)
+}
+
+/// `selection_rects_range`; a selection in a header or footer is shown on `page` only
+pub fn selection_rects_range_on(
+    layout: &DocumentLayout,
+    from: TextPosition,
+    to: TextPosition,
+    page: Option<usize>,
+    m: &mut dyn TextMeasurer,
+) -> Vec<Rect> {
     let (from, to) = if (to.paragraph, to.offset) < (from.paragraph, from.offset) { (to, from) } else { (from, to) };
     let mut rects = Vec::new();
     if from == to {
         return rects;
     }
-    for line in lines(layout).iter().filter(|l| l.paragraph >= from.paragraph && l.paragraph <= to.paragraph) {
+    let part_page = page.filter(|_| from.paragraph >= HEADER_FOOTER_BASE);
+    for line in lines(layout)
+        .iter()
+        .filter(|l| l.paragraph >= from.paragraph && l.paragraph <= to.paragraph)
+        .filter(|l| part_page.is_none_or(|p| l.page == p))
+    {
         // Whole paragraphs in the middle of the selection, including their paragraph mark
         let start = if line.paragraph == from.paragraph { from.offset } else { 0 };
         let end = if line.paragraph == to.paragraph { to.offset } else { usize::MAX };

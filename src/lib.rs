@@ -209,19 +209,69 @@ impl DocxSession {
         self.measure_cache.clear();
     }
 
-    /// Text position `{paragraph, offset}` under a point of a page (1-based), or `null`
+    /// Text position `{paragraph, offset}` under a point of a page (1-based), or `null`.
+    /// With `header_footer`, only header and footer text counts (header editing mode), and
+    /// `null` means the point is not on it.
     #[wasm_bindgen]
-    pub fn hit_test(&mut self, page: usize, x: f64, y: f64, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
+    pub fn hit_test(
+        &mut self,
+        page: usize,
+        x: f64,
+        y: f64,
+        measure: Option<js_sys::Function>,
+        header_footer: Option<bool>,
+    ) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::hit_test(layout, page, x, y, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
+            if header_footer.unwrap_or(false) {
+                caret::hit_test_header_footer(layout, page, x, y, m)
+            } else {
+                caret::hit_test(layout, page, x, y, m)
+            }
+        }))
     }
 
-    /// Caret box `{page, x, y, height, line_start, line_end}` for a text position, or `null`
+    /// Caret box `{page, x, y, height, line_start, line_end}` for a text position, or `null`.
+    /// A header or footer paragraph is drawn on every page: `page` picks the copy to use.
     #[wasm_bindgen]
-    pub fn caret_box(&mut self, paragraph: usize, offset: usize, measure: Option<js_sys::Function>) -> Result<String, JsValue> {
+    pub fn caret_box(&mut self, paragraph: usize, offset: usize, measure: Option<js_sys::Function>, page: Option<usize>) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
         let pos = TextPosition { paragraph, offset };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::caret_box(layout, pos, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::caret_box_on(layout, pos, page, m)))
+    }
+
+    /// Header and footer paragraphs, numbered from `HEADER_FOOTER_BASE`, each with the part it
+    /// belongs to: `[{ ...paragraph, part: "word/header1.xml" }]`
+    #[wasm_bindgen]
+    pub fn header_footer_paragraphs_json(&self) -> Result<String, JsValue> {
+        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let hf = &inputs.header_footer;
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<serde_json::Value> = Vec::new();
+        let groups = [Some(&hf.header), Some(&hf.footer), hf.first_header.as_ref(), hf.first_footer.as_ref()];
+        for elements in groups.into_iter().flatten() {
+            let mut paragraphs: Vec<&docx_parser::ParagraphInfo> = Vec::new();
+            for el in elements.iter() {
+                match el {
+                    docx_parser::DocumentElement::Paragraph(p) => paragraphs.push(p),
+                    docx_parser::DocumentElement::Table(t) => {
+                        t.rich_rows.iter().flat_map(|r| r.cells.iter()).for_each(|c| paragraphs.extend(c.paragraphs.iter()));
+                    }
+                }
+            }
+            for p in paragraphs {
+                if p.index >= docx_parser::HEADER_FOOTER_BASE && seen.insert(p.index) {
+                    let mut value = serde_json::to_value(p).map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.remove("images");
+                        let slot = (p.index - docx_parser::HEADER_FOOTER_BASE) / docx_parser::PART_SLOT;
+                        obj.insert("part_slot".into(), slot.into());
+                    }
+                    out.push(value);
+                }
+            }
+        }
+        to_json(&out)
     }
 
     /// Position one line up (`direction` < 0) or down at horizontal position `goal_x`, or `null`
@@ -233,10 +283,11 @@ impl DocxSession {
         direction: i32,
         goal_x: f64,
         measure: Option<js_sys::Function>,
+        page: Option<usize>,
     ) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("null".into()) };
         let pos = TextPosition { paragraph, offset };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::move_vertical(layout, pos, direction, goal_x, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::move_vertical_on(layout, pos, direction, goal_x, page, m)))
     }
 
     /// Highlight rectangles `[{page, x, y, width, height}]` for characters `start..end`
@@ -469,11 +520,12 @@ impl DocxSession {
         p2: usize,
         o2: usize,
         measure: Option<js_sys::Function>,
+        page: Option<usize>,
     ) -> Result<String, JsValue> {
         let Some(layout) = &self.layout else { return Ok("[]".into()) };
         let from = TextPosition { paragraph: p1, offset: o1 };
         let to = TextPosition { paragraph: p2, offset: o2 };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects_range(layout, from, to, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects_range_on(layout, from, to, page, m)))
     }
 
     /// Gets all document elements (paragraphs and tables in order) as JSON

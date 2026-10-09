@@ -110,6 +110,33 @@ docx-toolbar {
 .docx-editor .canvas-image-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
 .docx-editor .canvas-image-handle.w { left: -5px; top: calc(50% - 4.5px); cursor: ew-resize; }
 
+/* Header mode: boundary of the header and footer being edited, as Word marks them */
+.docx-editor .canvas-part-boundary {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--docx-image-frame, #2563eb);
+  pointer-events: none;
+}
+
+.docx-editor .canvas-part-boundary span {
+  position: absolute;
+  left: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--docx-image-frame, #2563eb);
+  color: #ffffff;
+  font: 500 10px/1.4 system-ui, sans-serif;
+}
+
+.docx-editor .canvas-part-boundary.header span {
+  top: 2px;
+}
+
+.docx-editor .canvas-part-boundary.footer span {
+  bottom: 2px;
+}
+
 /* Text box the caret is in */
 .docx-editor .canvas-textbox-outline {
   position: absolute;

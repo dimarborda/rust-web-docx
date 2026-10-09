@@ -56,6 +56,9 @@ export interface DocxEditorLabels {
   clickToFormat: string;
   /** Default file name for `openBlank()` */
   untitled: string;
+  /** Labels shown on the header and footer while editing them */
+  header: string;
+  footer: string;
 }
 
 export type PageSize = 'a4' | 'letter' | 'legal';

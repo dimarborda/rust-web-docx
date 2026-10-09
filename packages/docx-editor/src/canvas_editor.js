@@ -8,6 +8,8 @@
 // (where the caret is) and may span paragraphs.
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
+/** First index of header and footer paragraphs (the engine numbers them apart) */
+const HEADER_FOOTER_BASE = 1 << 25;
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 const LINE_BREAK = '\u000B'; // Shift+Enter: line break inside the paragraph (Word's ^l)
 const TYPING_GROUP_MS = 1500;
@@ -57,11 +59,17 @@ export function createCanvasEditor(env) {
 
   const parse = json => (json ? JSON.parse(json) : null);
   const session = () => env.session();
-  const hitTest = (page, x, y) => parse(session()?.hit_test(page, x, y, env.measure));
-  const caretBox = pos => parse(session()?.caret_box(pos.paragraph, pos.offset, env.measure));
-  const moveVertical = (pos, dir, x) => parse(session()?.move_vertical(pos.paragraph, pos.offset, dir, x, env.measure));
+  // Header mode (double click on a header or footer): clicks reach header and footer text,
+  // and `partPage` says which page's copy shows the caret
+  let headerMode = false;
+  let partPage = null;
+  let bodyCaret = null; // caret to go back to when leaving header mode
+  const hitTest = (page, x, y, header = headerMode) => parse(session()?.hit_test(page, x, y, env.measure, header));
+  const pageHint = pos => (pos && pos.paragraph >= HEADER_FOOTER_BASE ? partPage ?? undefined : undefined);
+  const caretBox = pos => parse(session()?.caret_box(pos.paragraph, pos.offset, env.measure, pageHint(pos)));
+  const moveVertical = (pos, dir, x) => parse(session()?.move_vertical(pos.paragraph, pos.offset, dir, x, env.measure, pageHint(pos)));
   const selectionRects = (a, b) =>
-    parse(session()?.selection_rects_range(a.paragraph, a.offset, b.paragraph, b.offset, env.measure)) || [];
+    parse(session()?.selection_rects_range(a.paragraph, a.offset, b.paragraph, b.offset, env.measure, pageHint(a))) || [];
 
   // ---------- Text helpers ----------
 
@@ -76,7 +84,8 @@ export function createCanvasEditor(env) {
 
   // Text box paragraphs live in containers "tb:<anchor>:<index>"; the caret never wanders
   // between a text box and the rest of the document
-  const isBox = p => !!p && p.container.startsWith('tb:');
+  // Header and footer paragraphs ("hf:<part>") are separate flows too
+  const isBox = p => !!p && (p.container.startsWith('tb:') || p.container.startsWith('hf:'));
   const sameFlow = (a, b) => !!a && !!b && (isBox(a) || isBox(b) ? a.container === b.container : true);
 
   /** Paragraphs the caret at `index` can reach: its text box, or the body and its tables */
@@ -309,6 +318,7 @@ export function createCanvasEditor(env) {
     }
 
     paintTextBoxOutline(zoom);
+    paintHeaderMode(zoom);
     const box = caretBox(focus);
     const page = box && pages.get(box.page);
     if (page) {
@@ -539,7 +549,19 @@ export function createCanvasEditor(env) {
       return;
     }
     selectImage(null);
-    const pos = hitTest(page.page_number, pt.x, pt.y);
+    // Double click on a header or footer enters header mode; a click elsewhere leaves it
+    let pos = null;
+    if (headerMode || e.detail === 2) {
+      pos = hitTest(page.page_number, pt.x, pt.y, true);
+      if (pos && !headerMode) {
+        enterHeaderMode(pos, page.page_number);
+        e.preventDefault();
+        return;
+      }
+      if (pos) partPage = page.page_number;
+      else if (headerMode) leaveHeaderMode(false);
+    }
+    pos = pos || hitTest(page.page_number, pt.x, pt.y, false);
     if (!pos) return;
     e.preventDefault();
 
@@ -559,6 +581,48 @@ export function createCanvasEditor(env) {
     lastEdit = null;
     input.focus({ preventScroll: true });
     paint();
+  }
+
+  function enterHeaderMode(pos, pageNumber) {
+    bodyCaret = focus && focus.paragraph < HEADER_FOOTER_BASE ? focus : bodyCaret;
+    headerMode = true;
+    partPage = pageNumber;
+    anchor = focus = pos;
+    goalX = null;
+    lastEdit = null;
+    input.focus({ preventScroll: true });
+    paint();
+  }
+
+  /** Back to the body; with `restore` the caret returns where it was before header mode */
+  function leaveHeaderMode(restore) {
+    headerMode = false;
+    partPage = null;
+    if (restore) {
+      anchor = focus = bodyCaret || { paragraph: firstParagraphIndex(), offset: 0 };
+    }
+  }
+
+  /** Dashed boundary and label of the header and footer on each page while editing them */
+  function paintHeaderMode(zoom) {
+    if (!headerMode) return;
+    for (const { page, overlay } of pages.values()) {
+      const lines = (page.items || []).filter(it => it.type === 'text' && it.line && it.paragraph_index >= HEADER_FOOTER_BASE);
+      const half = page.height / 2;
+      for (const [kind, group] of [['header', lines.filter(l => l.line.top < half)], ['footer', lines.filter(l => l.line.top >= half)]]) {
+        if (!group.length) continue;
+        const y = kind === 'header'
+          ? Math.max(...group.map(l => l.line.top + l.height)) + 4
+          : Math.min(...group.map(l => l.line.top)) - 4;
+        const boundary = document.createElement('div');
+        boundary.className = `canvas-part-boundary ${kind}`;
+        boundary.style.top = `${y * zoom}px`;
+        const label = document.createElement('span');
+        label.textContent = env.labels[kind] || (kind === 'header' ? 'Encabezado' : 'Pie de página');
+        boundary.appendChild(label);
+        overlay.appendChild(boundary);
+      }
+    }
   }
 
   function onMouseMove(e) {
@@ -696,6 +760,10 @@ export function createCanvasEditor(env) {
         break;
       }
       case 'Escape':
+        if (headerMode) {
+          leaveHeaderMode(true);
+          break;
+        }
         anchor = focus = null;
         input.blur();
         break;
@@ -868,6 +936,8 @@ export function createCanvasEditor(env) {
     /** Selects a range, e.g. to restore a selection or select everything */
     select(newAnchor, newFocus = newAnchor) {
       selectImage(null);
+      if (headerMode && newFocus?.paragraph < HEADER_FOOTER_BASE) leaveHeaderMode(false);
+      if (newFocus?.paragraph >= HEADER_FOOTER_BASE) headerMode = true;
       anchor = newAnchor;
       focus = newFocus;
       goalX = null;

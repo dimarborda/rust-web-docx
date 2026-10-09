@@ -17,6 +17,8 @@ const LABELS = {
     nothingToRedo: 'No hay nada para rehacer.',
     clickToFormat: 'Haz clic en el texto para aplicar formato.',
     untitled: 'documento.docx',
+    header: 'Encabezado',
+    footer: 'Pie de página',
   },
   en: {
     editor: 'Document editor',
@@ -25,6 +27,8 @@ const LABELS = {
     nothingToRedo: 'Nothing to redo.',
     clickToFormat: 'Click in the text to apply formatting.',
     untitled: 'document.docx',
+    header: 'Header',
+    footer: 'Footer',
   },
 };
 
@@ -64,6 +68,8 @@ export class DocxEditor extends EventTarget {
   #layout = null;
   #rendered = { session: null, zoom: null, cards: new Map() };
   #paragraphCache = { source: null, list: [], byIndex: new Map() };
+  /** Header and footer paragraphs (numbered from HEADER_FOOTER_BASE), edited in header mode */
+  #partParagraphs = [];
   #requestedFaces = new Set();
   #watermark = null;
   #zoom;
@@ -670,6 +676,7 @@ export class DocxEditor extends EventTarget {
 
   #refreshElements() {
     this.#elements = JSON.parse(this.#session.get_document_elements_json());
+    this.#partParagraphs = JSON.parse(this.#session.header_footer_paragraphs_json());
   }
 
   #changed() {
@@ -700,6 +707,7 @@ export class DocxEditor extends EventTarget {
           }));
         }
       });
+      this.#partParagraphs.forEach(p => list.push({ ...p, container: `hf:${p.part_slot}` }));
       list.sort((a, b) => a.index - b.index);
       this.#paragraphCache = { source: this.#elements, list, byIndex: new Map(list.map(p => [p.index, p])) };
     }

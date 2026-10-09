@@ -24,7 +24,8 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 - **Variables de plantilla.** Detecta `{{CAMPO}}` aunque Word lo haya partido en varios fragmentos (`<w:r>`) y lo reemplaza respetando el formato.
 - **Maquetación parecida a Word.** Cascada de estilos `docDefaults → styles.xml → numbering.xml → formato directo`, medición real de fuentes, paginación, sangrías, interlineado, listas numeradas y tablas con bordes resueltos por lado. Las imágenes en línea fluyen con el texto y el texto rodea a las flotantes (cuadrado, estrecho, arriba y abajo, detrás o delante).
 - **Cuadros de texto y formas.** Se dibujan los cuadros de texto de Word, tanto los actuales (DrawingML) como los de documentos antiguos (VML), con su relleno, su borde, sus márgenes internos y su alineación vertical, además de rectángulos, rectángulos redondeados y elipses. El texto los rodea igual que a las imágenes, y el texto de los cuadros actuales se edita haciendo clic dentro (un clic en el borde selecciona el cuadro para moverlo).
-- **Encabezados y pies de página.** Se dibujan con su texto, tablas, imágenes y cuadros, con el número de página real en cada hoja (`PAGE`, `NUMPAGES`) y con primera página distinta. Si no caben en el margen, el cuerpo se desplaza como en Word.
+- **Encabezados y pies de página.** Se dibujan con su texto, tablas, imágenes y cuadros, con el número de página real en cada hoja (`PAGE`, `NUMPAGES`) y con primera página distinta. Si no caben en el margen, el cuerpo se desplaza como en Word. Un doble clic sobre ellos permite editar su texto (Esc vuelve al cuerpo).
+- **Ajuste de texto como en Word.** El texto rodea los objetos flotantes por ambos lados cuando hay espacio, sigue su contorno en el ajuste estrecho, las tablas los esquivan y los objetos que se pisan respetan el orden de Word. La fila de encabezado de las tablas se repite en cada página.
 - **Celdas combinadas.** Celdas que ocupan varias columnas (`gridSpan`) o varias filas (`vMerge`), dibujadas como una sola y sin partirse entre páginas cuando caben.
 - **Imágenes editables.** Se seleccionan con un clic, se redimensionan con las asas, las flotantes se arrastran y cambian de ajuste, y todo está disponible desde código (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`).
 - **Valores por defecto de Word.** Lo que el documento no especifica se dibuja como lo haría Word (Times New Roman 10 pt, sin bordes inventados), en lugar de "mejorarlo".
@@ -79,9 +80,8 @@ La API completa, los ejemplos con React y Tauri y las opciones de fuentes están
 
 Todavía no se soportan, o solo en parte:
 
-- Editar el texto de encabezados y pies de página (se dibujan, pero no se editan en el lienzo).
 - Formas agrupadas, lienzos de dibujo, ecuaciones y tablas dentro de cuadros de texto.
-- El texto rodea las imágenes flotantes por un solo lado y usando su rectángulo (no su contorno); las tablas no las rodean.
+- Secciones con encabezados distintos (se usan los de la última sección) y encabezados de páginas pares.
 - Comentarios, control de cambios y notas al pie (se conservan en el archivo, pero no se dibujan).
 - Varias columnas por sección.
 

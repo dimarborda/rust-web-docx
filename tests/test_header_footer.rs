@@ -1,4 +1,5 @@
 use rust_web_docx::docx_parser::{DocumentElement, DocxModifier};
+use rust_web_docx::docx_parser::HEADER_FOOTER_BASE;
 use rust_web_docx::layout_engine::{DocumentLayout, LayoutEngine, RenderCommand};
 use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
@@ -54,13 +55,16 @@ fn layout(m: &DocxModifier) -> DocumentLayout {
     )
 }
 
-/// (text, x, baseline y, belongs to the body) of page `n` (0-based)
+/// (text, x, baseline y, belongs to the body) of page `n` (0-based). Header and footer
+/// lines are numbered from HEADER_FOOTER_BASE: not the body's.
 fn texts(l: &DocumentLayout, n: usize) -> Vec<(String, f64, f64, bool)> {
     l.pages[n]
         .items
         .iter()
         .filter_map(|it| match it {
-            RenderCommand::Text { text, x, y, line, .. } => Some((text.clone(), *x, *y, line.is_some())),
+            RenderCommand::Text { text, x, y, line, paragraph_index, .. } => {
+                Some((text.clone(), *x, *y, line.is_some() && *paragraph_index < HEADER_FOOTER_BASE))
+            }
             _ => None,
         })
         .collect()
@@ -97,7 +101,7 @@ fn test_header_and_footer_text_with_page_numbers() {
     assert!(l.total_pages >= 2);
     for n in 0..l.total_pages {
         let h = find(&l, n, "signer2_unhtml").expect("header on every page");
-        assert!(!h.3, "header text is not part of the body (no caret there)");
+        assert!(!h.3, "header text is not part of the body");
         assert!(h.2 < 96.0, "header sits in the top margin: {}", h.2);
         assert!(h.1 > 400.0, "right aligned: {}", h.1);
         let f = find(&l, n, "Página").expect("footer on every page");
@@ -135,4 +139,65 @@ fn test_header_table_and_first_page() {
     let (company, nit) = (find(&l, 1, "Empresa").unwrap(), find(&l, 1, "NIT").unwrap());
     assert!((company.2 - nit.2).abs() < 0.5 && nit.1 > company.1 + 200.0, "two cells side by side");
     assert!(find(&l, 1, "Portada").is_none());
+}
+
+// ---------- Editing headers and footers ----------
+
+use rust_web_docx::caret::{self, TextPosition};
+use rust_web_docx::layout_engine::EstimateMeasurer;
+
+fn part_text(m: &DocxModifier, part: &str) -> String {
+    m.get_file_string(part).unwrap()
+}
+
+#[test]
+fn test_typing_in_a_header_edits_its_part() {
+    let header = r#"<w:p><w:r><w:t>Empresa</w:t></w:r></w:p><w:p><w:r><w:t>NIT</w:t></w:r></w:p>"#;
+    let mut m = docx(&pages_of_text(3), false, &[("header1.xml", "rIdH", "default", "header", header), ("footer1.xml", "rIdF", "default", "footer", FOOTER_PAGES)]);
+    let body_before = m.get_file_string("word/document.xml").unwrap();
+    // header1.xml sorts before footer1.xml? parts are sorted by name: footer1 (slot 0), header1 (slot 1)
+    let header_first = HEADER_FOOTER_BASE + rust_web_docx::docx_parser::PART_SLOT;
+    m.checkpoint(None);
+    let caret = m.replace_range(header_first, 7, header_first, 7, " S.A.S.").unwrap();
+    assert_eq!(caret, (header_first, 14));
+    assert!(part_text(&m, "word/header1.xml").contains("Empresa S.A.S."));
+    assert_eq!(m.get_file_string("word/document.xml").unwrap(), body_before, "the body is untouched");
+
+    // Enter and Backspace inside the header
+    m.replace_range(header_first, 7, header_first, 7, "\n").unwrap();
+    let hf = m.layout_inputs().unwrap().header_footer.header.clone();
+    let texts: Vec<String> = hf.iter().filter_map(|e| match e { DocumentElement::Paragraph(p) => Some(p.text.clone()), _ => None }).collect();
+    assert_eq!(texts, vec!["Empresa", " S.A.S.", "NIT"]);
+    m.merge_with_next(header_first).unwrap();
+    let first = match &m.layout_inputs().unwrap().header_footer.header[0] {
+        DocumentElement::Paragraph(p) => p.text.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(first, "Empresa S.A.S.");
+
+    // Undo goes back through the header edits
+    assert!(m.undo().is_some());
+    assert!(part_text(&m, "word/header1.xml").contains(">Empresa<"));
+
+    // A selection cannot cross from the header into the body
+    assert!(m.replace_range(header_first, 0, 0, 1, "x").is_err());
+}
+
+#[test]
+fn test_header_mode_hit_testing_and_page_copies() {
+    let header = r#"<w:p><w:r><w:t>Encabezado editable</w:t></w:r></w:p>"#;
+    let m = docx(&pages_of_text(90), false, &[("header1.xml", "rIdH", "default", "header", header)]);
+    let l = layout(&m);
+    assert!(l.total_pages >= 2);
+    let (_, hx, hy, _) = find(&l, 1, "Encabezado").unwrap();
+    // A normal click near the header goes to the body; header mode reaches the header
+    let body = caret::hit_test(&l, 2, hx + 5.0, hy - 4.0, &mut EstimateMeasurer).unwrap();
+    assert!(body.paragraph < HEADER_FOOTER_BASE);
+    let hit = caret::hit_test_header_footer(&l, 2, hx + 5.0, hy - 4.0, &mut EstimateMeasurer).unwrap();
+    assert!(hit.paragraph >= HEADER_FOOTER_BASE);
+    assert!(caret::hit_test_header_footer(&l, 2, hx, 500.0, &mut EstimateMeasurer).is_none(), "far from the header: no header position");
+    // The caret is shown in the copy of the page asked for
+    let pos = TextPosition { paragraph: hit.paragraph, offset: 2 };
+    assert_eq!(caret::caret_box_on(&l, pos, Some(2), &mut EstimateMeasurer).unwrap().page, 2);
+    assert_eq!(caret::caret_box_on(&l, pos, Some(1), &mut EstimateMeasurer).unwrap().page, 1);
 }
