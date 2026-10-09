@@ -118,6 +118,8 @@ export interface ImageRef {
 }
 
 export interface ImageInfo extends ImageRef {
+  /** A picture, a text box or a shape without text; all three are edited the same way */
+  kind: 'picture' | 'textbox' | 'shape';
   /** CSS px at 100 % zoom */
   width: number;
   height: number;
@@ -131,6 +133,10 @@ export interface ImageInfo extends ImageRef {
   /** Space kept free between the picture and the text */
   distance: { top: number; bottom: number; left: number; right: number };
   alt: string;
+  /** Text of a text box, paragraphs separated by "\n" ("" otherwise) */
+  text: string;
+  /** Outline and fill of a text box or shape ("#RRGGBB"; null for pictures) */
+  shape: { geometry: 'rect' | 'roundRect' | 'ellipse' | 'line' | string; fill: string | null; stroke: string | null; strokeWidth: number } | null;
   /** Character offset in the paragraph text where the picture sits */
   textOffset: number;
   /** Where the picture is drawn (page number, page px), or null before it is laid out */
@@ -183,6 +189,8 @@ export interface DocxEditorOptions {
   labels?: Partial<DocxEditorLabels>;
   /** Where docx_engine_bg.wasm is served from, when the bundler does not handle it */
   wasmUrl?: string | URL;
+  /** Start in read-only mode (default false: editable); see `setReadOnly` */
+  readOnly?: boolean;
 }
 
 export interface DocxEditorEventMap {
@@ -191,6 +199,8 @@ export interface DocxEditorEventMap {
   selectionchange: CustomEvent<{ selection: Selection | null; format: Format | null }>;
   /** A picture was selected (mouse or `selectImage()`), changed with the mouse, or deselected (null) */
   imageselect: CustomEvent<{ image: ImageInfo | null }>;
+  /** `setReadOnly()` changed the mode */
+  readonlychange: CustomEvent<{ readOnly: boolean }>;
   message: CustomEvent<{ message: string; error: boolean }>;
 }
 
@@ -210,6 +220,8 @@ export class DocxEditor extends EventTarget {
   readonly fileName: string;
   readonly zoom: number;
   readonly selection: Selection | null;
+  /** True while the user cannot edit (see `setReadOnly`) */
+  readonly readOnly: boolean;
 
   open(source: Uint8Array | ArrayBuffer | Blob, options?: { fileName?: string }): Promise<void>;
   openSample(): void;
@@ -261,7 +273,7 @@ export class DocxEditor extends EventTarget {
    */
   insertImage(image: Uint8Array | ArrayBuffer | Blob | string, options?: InsertImageOptions): Promise<ImageRef>;
 
-  /** Every picture of the body (table cells included) in document order */
+  /** Every picture, text box and shape of the body (table cells included) in document order */
   images(): ImageInfo[];
   /** The picture selected with the mouse or `selectImage()`, or null */
   readonly selectedImage: ImageInfo | null;
@@ -292,6 +304,12 @@ export class DocxEditor extends EventTarget {
   select(anchor: TextPosition, focus?: TextPosition): void;
 
   setZoom(zoom: number): void;
+  /**
+   * Read-only mode (editable by default): the user can move the caret, select, copy, zoom and
+   * scroll, but not type, delete, paste, cut, format, undo or edit pictures; the toolbar
+   * disables its editing buttons. Calls from code still change the document.
+   */
+  setReadOnly(readOnly?: boolean): void;
   /** Focuses the editor; when there is no caret yet it goes to the start of the document */
   focus(): void;
   destroy(): void;

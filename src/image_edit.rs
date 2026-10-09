@@ -129,7 +129,7 @@ pub(crate) fn drawing_spans(p_xml: &str) -> Result<Vec<DrawingSpan>, String> {
                 let name = e.name();
                 let n = name.as_ref();
                 // Same containers the paragraph parser skips: text boxes, VML, tracked changes
-                if ["pict", "object", "txbxContent", "pPrChange", "rPrChange"].iter().any(|t| tag_is(n, t)) {
+                if ["pict", "object", "txbxContent", "pPrChange", "rPrChange", "Fallback"].iter().any(|t| tag_is(n, t)) {
                     i = element_end(&tokens, i) + 1;
                     continue;
                 }
@@ -138,7 +138,7 @@ pub(crate) fn drawing_spans(p_xml: &str) -> Result<Vec<DrawingSpan>, String> {
                     let range = tokens[i].span.start..tokens[end].span.end;
                     let mut reader = Reader::from_str(&p_xml[range.clone()]);
                     let _ = reader.read_event();
-                    if let Some(image) = parse_drawing(&mut reader) {
+                    if let Some(image) = parse_drawing(&mut reader, &StyleSheet::default()) {
                         let outer = |local: &str| {
                             stack.iter().rev().find(|(name, _)| name == local).map(|&(_, j)| {
                                 tokens[j].span.start..tokens[element_end(&tokens, j)].span.end

@@ -2,17 +2,18 @@
 //
 //   <docx-editor id="doc" src="/plantilla.docx" locale="es"></docx-editor>
 //   <docx-editor blank page-size="letter"></docx-editor>   (new empty document)
+//   <docx-editor src="/contrato.docx" readonly></docx-editor>   (view only; editable by default)
 //   <docx-toolbar for="doc"></docx-toolbar>
 //
 // `element.editor` is the DocxEditor (null until the `ready` event). Editor events (load,
-// change, selectionchange, message) are re-dispatched on the element.
+// change, selectionchange, imageselect, readonlychange, message) are re-dispatched on the element.
 import { DocxEditor } from './docx_editor.js';
 import { createDocxToolbar } from './toolbar.js';
 
-const FORWARDED = ['load', 'change', 'selectionchange', 'imageselect', 'message'];
+const FORWARDED = ['load', 'change', 'selectionchange', 'imageselect', 'readonlychange', 'message'];
 
 export class DocxEditorElement extends HTMLElement {
-  static observedAttributes = ['src', 'zoom'];
+  static observedAttributes = ['src', 'zoom', 'readonly'];
 
   editor = null;
   #creating = null;
@@ -35,6 +36,7 @@ export class DocxEditorElement extends HTMLElement {
     if (!this.editor) return;
     if (name === 'src' && value) this.#openUrl(value);
     if (name === 'zoom' && value) this.editor.setZoom(Number(value));
+    if (name === 'readonly') this.editor.setReadOnly(value !== null && value !== 'false');
   }
 
   async #create() {
@@ -42,6 +44,7 @@ export class DocxEditorElement extends HTMLElement {
       locale: this.getAttribute('locale') || undefined,
       zoom: Number(this.getAttribute('zoom')) || 1,
       gridlines: this.getAttribute('gridlines') !== 'false',
+      readOnly: this.hasAttribute('readonly') && this.getAttribute('readonly') !== 'false',
       pageLabels: this.getAttribute('page-labels') !== 'false',
       wasmUrl: this.getAttribute('wasm-url') || undefined,
     });

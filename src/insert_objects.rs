@@ -97,6 +97,9 @@ impl DocxModifier {
     /// and text after it goes below. Returns the index of the first cell's paragraph and the
     /// caret at the start of the paragraph after the table.
     pub fn insert_table(&mut self, index: usize, offset: usize, table: &NewTable) -> Result<(usize, (usize, usize)), String> {
+        if index >= TEXT_BOX_BASE {
+            return Err("No se puede insertar una tabla dentro de un cuadro de texto.".to_string());
+        }
         let cols = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         if table.rows.is_empty() || cols == 0 {
             return Err("La tabla no tiene celdas.".to_string());
@@ -141,6 +144,9 @@ impl DocxModifier {
         }
         let (format, px_w, px_h) = image_info(bytes).ok_or("Formato de imagen no soportado: usa PNG, JPEG o GIF.")?;
         let layout = image.layout();
+        if layout.is_some() && index >= TEXT_BOX_BASE {
+            return Err("Dentro de un cuadro de texto solo se pueden insertar imágenes en línea con el texto.".to_string());
+        }
         if let Some(update) = &layout {
             if update.wrap.is_none() {
                 return Err("Para posicionar la imagen indica también su ajuste (wrap), por ejemplo \"square\".".to_string());

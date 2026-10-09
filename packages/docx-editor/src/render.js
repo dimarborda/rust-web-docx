@@ -153,6 +153,8 @@ export function drawPageItems(ctx, items, { gridlines = true } = {}) {
       } else {
         pending.push(img.decode().catch(() => {}));
       }
+    } else if (item.type === 'shape') {
+      drawShape(ctx, item);
     } else if (item.type === 'line') {
       ctx.beginPath();
       ctx.moveTo(item.x1, item.y1);
@@ -177,6 +179,40 @@ export function drawPageItems(ctx, items, { gridlines = true } = {}) {
     }
   });
   return pending;
+}
+
+/** Outline and fill of a shape or text box (its text is drawn as regular text items) */
+function drawShape(ctx, item) {
+  if (!item.fill && !item.stroke) return;
+  const { x, y, width: w, height: h } = item;
+  ctx.save();
+  ctx.beginPath();
+  if (item.geometry === 'ellipse') {
+    ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  } else if (item.geometry === 'roundRect') {
+    const r = Math.min(w, h) * 0.1667; // Word's default corner: 1/6 of the shorter side
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  } else if (item.geometry === 'line') {
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w, y + h);
+  } else {
+    ctx.rect(x, y, w, h);
+  }
+  if (item.fill && item.geometry !== 'line') {
+    ctx.fillStyle = cssColor(item.fill);
+    ctx.fill();
+  }
+  if (item.stroke && item.stroke_width > 0) {
+    ctx.strokeStyle = cssColor(item.stroke);
+    ctx.lineWidth = item.stroke_width;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawText(ctx, item) {

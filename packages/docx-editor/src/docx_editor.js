@@ -6,6 +6,9 @@ import { createCanvasEditor } from './canvas_editor.js';
 import { onFontsChanged } from './fonts_registry.js';
 import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
 
+/** First index of text box paragraphs (the engine numbers them apart from the body) */
+const TEXT_BOX_BASE = 1 << 24;
+
 const LABELS = {
   es: {
     editor: 'Editor del documento',
@@ -37,12 +40,15 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * @property {'es'|'en'} [locale='es']
  * @property {object} [labels]            overrides for the locale's texts
  * @property {string|URL} [wasmUrl]       where docx_engine_bg.wasm is served from
+ * @property {boolean} [readOnly=false]   the user can navigate, select and copy but not edit
+ *                                        (see `setReadOnly()`)
  *
  * Events (dispatched on the editor; `<docx-editor>` re-dispatches them on the element):
  * - `load`             a document was opened
  * - `change`           the document changed (typing, formatting, replacements…)
  * - `selectionchange`  detail: { selection, format } with format = { bold, italic, underline, color, align }
  * - `imageselect`      detail: { image } the picture selected with the mouse or `selectImage()` (null when none)
+ * - `readonlychange`   detail: { readOnly } after `setReadOnly()` changed the mode
  * - `message`          detail: { message, error } hints and errors meant for the user
  */
 export class DocxEditor extends EventTarget {
@@ -64,6 +70,7 @@ export class DocxEditor extends EventTarget {
   #canvasEditor;
   #pages;
   #unsubscribeFonts;
+  #readOnly = false;
   #onFontsLoaded;
   #fontsRelayout = 0;
   /** Probe widths of the fonts the last layout was measured with */
@@ -75,7 +82,8 @@ export class DocxEditor extends EventTarget {
   constructor(container, options = {}) {
     super();
     if (!engineReady()) throw new Error('docx-editor: await initEngine() or use DocxEditor.create()');
-    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', ...options };
+    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, ...options };
+    this.#readOnly = !!this.options.readOnly;
     this.labels = { ...(LABELS[this.options.locale] || LABELS.en), ...options.labels };
     this.#zoom = this.options.zoom;
 
@@ -103,11 +111,14 @@ export class DocxEditor extends EventTarget {
       imageSelected: ref => this.#emit('imageselect', { image: ref ? this.#imageInfo(ref) : null }),
       imageEdited: (ref, change) => this.#userImageEdit(ref, change),
       imageDeleted: ref => this.#userImageEdit(ref, null),
+      readOnly: () => this.#readOnly,
     });
+    this.root.classList.toggle('read-only', this.#readOnly);
+    this.#canvasEditor.readOnlyChanged();
 
     // Formatting shortcuts while the caret is in this editor
     this.#onKeyDown = e => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || !this.#session) return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || !this.#session || this.#readOnly) return;
       const action = { b: 'toggleBold', i: 'toggleItalic', u: 'toggleUnderline' }[e.key.toLowerCase()];
       if (action && !e.shiftKey) {
         e.preventDefault();
@@ -400,10 +411,11 @@ export class DocxEditor extends EventTarget {
   // ---------- Pictures ----------
 
   /**
-   * Every picture of the document body (table cells included) in document order. A picture is
-   * addressed by `{ paragraph, index }` (its paragraph and its position among that paragraph's
-   * pictures); any object with those two fields, such as an item of this list, works as `ref`.
-   * Lengths are CSS px at 100 % zoom.
+   * Every picture, text box and shape of the document body (table cells included) in document
+   * order (`kind` tells them apart). Each is addressed by `{ paragraph, index }` (its paragraph
+   * and its position among that paragraph's drawings); any object with those two fields, such
+   * as an item of this list, works as `ref`, and the methods below work on all three kinds.
+   * Lengths are CSS px at 100 % zoom. Legacy VML text boxes are drawn but not listed.
    * @returns {ImageInfo[]}
    */
   images() {
@@ -577,6 +589,28 @@ export class DocxEditor extends EventTarget {
 
   // ---------- View ----------
 
+  /** True while the user cannot edit the document (see `setReadOnly`) */
+  get readOnly() {
+    return this.#readOnly;
+  }
+
+  /**
+   * Read-only mode: the user can still move the caret, select and copy text, zoom and scroll,
+   * but typing, deleting, pasting, cutting, formatting shortcuts, undo/redo and moving or
+   * resizing pictures are ignored, and the optional toolbar disables its editing buttons.
+   * Calls from code (`replaceVariables`, `insertText`, `updateImage`…) still work, so an app
+   * can fill a document that its users only view. Editable by default.
+   * @param {boolean} readOnly
+   */
+  setReadOnly(readOnly = true) {
+    const next = !!readOnly;
+    if (next === this.#readOnly) return;
+    this.#readOnly = next;
+    this.root.classList.toggle('read-only', next);
+    this.#canvasEditor.readOnlyChanged();
+    this.#emit('readonlychange', { readOnly: next });
+  }
+
   get zoom() {
     return this.#zoom;
   }
@@ -647,12 +681,22 @@ export class DocxEditor extends EventTarget {
   #paragraphs() {
     if (this.#paragraphCache.source !== this.#elements) {
       const list = [];
+      // Text box paragraphs (numbered from TEXT_BOX_BASE) belong to "tb:<anchor>:<index>"
+      const addTextBoxes = p => (p.images || []).forEach((img, k) => {
+        (img.text_box?.paragraphs || []).forEach(inner => {
+          if (inner.index >= TEXT_BOX_BASE) list.push({ ...inner, container: `tb:${p.index}:${k}` });
+        });
+      });
       this.#elements.forEach(el => {
         if (el.type === 'paragraph') {
           list.push({ ...el, container: 'body' });
+          addTextBoxes(el);
         } else if (el.type === 'table') {
           (el.rich_rows || []).forEach((row, r) => row.cells.forEach((cell, c) => {
-            (cell.paragraphs || []).forEach(p => list.push({ ...p, container: `${el.index}:${r}:${c}` }));
+            (cell.paragraphs || []).forEach(p => {
+              list.push({ ...p, container: `${el.index}:${r}:${c}` });
+              addTextBoxes(p);
+            });
           }));
         }
       });
@@ -905,7 +949,8 @@ const sameRef = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.index =
  * @typedef {'inline'|'square'|'tight'|'through'|'topAndBottom'|'behind'|'inFront'} ImageWrap
  * @typedef {object} ImageInfo
  * @property {number} paragraph
- * @property {number} index         among the paragraph's pictures
+ * @property {number} index         among the paragraph's pictures, text boxes and shapes
+ * @property {'picture'|'textbox'|'shape'} kind
  * @property {number} width
  * @property {number} height
  * @property {ImageWrap} wrap
@@ -915,14 +960,19 @@ const sameRef = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.index =
  * @property {{relativeTo: string, offset: number, align: string|null}|null} vertical
  * @property {{top: number, bottom: number, left: number, right: number}} distance  space kept from the text
  * @property {string} alt
+ * @property {string} text          text of a text box (paragraphs separated by "\n")
+ * @property {{geometry: string, fill: string|null, stroke: string|null, strokeWidth: number}|null} shape  outline and fill of a text box or shape
  * @property {number} textOffset    character offset in the paragraph where it sits
  * @property {{page: number, x: number, y: number, width: number, height: number}|null} bounds  where it is drawn
  */
+const hexColor = c => (c ? `#${c}` : null);
+
 function imageInfo(raw) {
   const axis = (relativeTo, offset, align) => (raw.anchored ? { relativeTo, offset, align: align ?? null } : null);
   return {
     paragraph: raw.paragraph,
     index: raw.index,
+    kind: raw.kind || 'picture',
     width: raw.width,
     height: raw.height,
     wrap: raw.wrap || (raw.anchored ? (raw.behind_text ? 'behind' : 'inFront') : 'inline'),
@@ -932,6 +982,8 @@ function imageInfo(raw) {
     vertical: axis(raw.v_relative, raw.v_offset, raw.v_align),
     distance: { top: raw.dist_top, bottom: raw.dist_bottom, left: raw.dist_left, right: raw.dist_right },
     alt: raw.alt || '',
+    text: raw.text || '',
+    shape: raw.shape ? { geometry: raw.shape.geometry, fill: hexColor(raw.shape.fill), stroke: hexColor(raw.shape.stroke), strokeWidth: raw.shape.stroke_width } : null,
     textOffset: raw.offset,
     bounds: raw.bounds ?? null,
   };

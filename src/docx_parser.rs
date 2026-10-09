@@ -103,6 +103,29 @@ pub struct ParagraphInfo {
     /// Pictures anchored in or inline with this paragraph
     #[serde(default)]
     pub images: Vec<ImageRef>,
+    /// Page-number fields (`PAGE`, `NUMPAGES`, `SECTIONPAGES`): the characters of the text
+    /// that show their last computed value
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<PageField>,
+}
+
+/// A field whose value depends on the page it is drawn on
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PageField {
+    /// "PAGE" or "NUMPAGES"
+    pub kind: String,
+    /// Character range `[start, end)` of the paragraph text holding its cached result
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The field kind of an instruction like ` PAGE  \* MERGEFORMAT `, if it is a page number
+fn page_field_kind(instr: &str) -> Option<String> {
+    match instr.split_whitespace().next()?.to_ascii_uppercase().as_str() {
+        "PAGE" => Some("PAGE".into()),
+        "NUMPAGES" | "SECTIONPAGES" => Some("NUMPAGES".into()),
+        _ => None,
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -145,6 +168,17 @@ pub struct TableCellData {
     pub valign: Option<String>,
     #[serde(default)]
     pub margins: Option<CellMargins>,
+    /// Grid columns the cell spans (`w:gridSpan`)
+    #[serde(default = "one")]
+    pub grid_span: usize,
+    /// Vertical merge (`w:vMerge`): "restart" starts a merged cell, "continue" extends the one
+    /// above
+    #[serde(default)]
+    pub v_merge: Option<String>,
+}
+
+fn one() -> usize {
+    1
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -157,6 +191,9 @@ pub struct TableRowData {
     pub height_rule: Option<String>,
     #[serde(default)]
     pub cant_split: bool,
+    /// Grid columns skipped before the first cell (`w:gridBefore`)
+    #[serde(default)]
+    pub grid_before: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -318,6 +355,20 @@ pub struct HeaderFooterInfo {
     pub header_images: Vec<PlacedImage>,
     #[serde(default)]
     pub footer_images: Vec<PlacedImage>,
+    /// Content of the header and footer of regular pages (paragraphs and tables)
+    #[serde(default)]
+    pub header: Vec<DocumentElement>,
+    #[serde(default)]
+    pub footer: Vec<DocumentElement>,
+    /// Header and footer of the first page when the section has a different first page
+    /// (`w:titlePg`); an empty list means a blank first-page header
+    #[serde(default)]
+    pub first_header: Option<Vec<DocumentElement>>,
+    #[serde(default)]
+    pub first_footer: Option<Vec<DocumentElement>>,
+    /// Pixels of the pictures of headers and footers, by "part#rId" (their `rel_id`)
+    #[serde(default, skip_serializing)]
+    pub images: HashMap<String, String>,
 }
 
 /// A picture (`w:drawing`) as written in the document. Lengths in px.
@@ -365,6 +416,15 @@ pub struct ImageRef {
     pub doc_pr_id: u64,
     #[serde(default)]
     pub alt: String,
+    /// A shape or text box rather than a picture: how its outline and fill are drawn
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<ShapeStyle>,
+    /// Text of a text box (`w:txbxContent`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_box: Option<TextBox>,
+    /// Read from legacy VML (`w:pict`): drawn, but not editable
+    #[serde(default)]
+    pub vml: bool,
 }
 
 impl ImageRef {
@@ -384,7 +444,7 @@ pub struct PlacedImage {
 const EMU_PER_PX: f64 = 9525.0;
 
 /// Reads the `w:drawing` whose start tag was just consumed
-pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
+pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> Option<ImageRef> {
     let mut img = ImageRef {
         h_relative: "column".into(),
         v_relative: "paragraph".into(),
@@ -393,6 +453,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
     };
     let mut axis = ' ';
     let mut text_kind: Option<&'static str> = None;
+    let mut unsupported = false;
     let mut buf = Vec::new();
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -434,6 +495,23 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
         };
         let name = e.name();
         let n = name.as_ref();
+        if is_start && tag_is(n, "wsp") {
+            buf.clear();
+            let shape = shapes::parse_wsp(reader, styles);
+            img.shape = Some(shape.style);
+            img.text_box = shape.text_box;
+            continue;
+        }
+        if is_start && ["wgp", "grpSp", "wpc", "lockedCanvas", "chart"].iter().any(|t| tag_is(n, t)) {
+            // Groups, drawing canvases and charts are not drawn yet
+            let end = n.to_vec();
+            buf.clear();
+            let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
+            img.shape = None;
+            img.rel_id.clear();
+            unsupported = true;
+            continue;
+        }
         if tag_is(n, "anchor") || tag_is(n, "inline") {
             let dist = |name: &str| get_attr_i64(&e, name).unwrap_or(0) as f64 / EMU_PER_PX;
             img.dist_top = dist("distT");
@@ -467,7 +545,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
         } else if tag_is(n, "extent") && img.width == 0.0 {
             img.width = get_attr_i64(&e, "cx").unwrap_or(0) as f64 / EMU_PER_PX;
             img.height = get_attr_i64(&e, "cy").unwrap_or(0) as f64 / EMU_PER_PX;
-        } else if tag_is(n, "blip") && img.rel_id.is_empty() {
+        } else if tag_is(n, "blip") && img.rel_id.is_empty() && !unsupported {
             img.rel_id = get_attr_value(&e, "embed").unwrap_or_default();
         } else if is_start && tag_is(n, "txbxContent") {
             // Text boxes are not rendered yet; skip their content
@@ -476,7 +554,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>) -> Option<ImageRef> {
         }
         buf.clear();
     }
-    (!img.rel_id.is_empty() && img.width > 0.0).then_some(img)
+    (!unsupported && (!img.rel_id.is_empty() || img.shape.is_some()) && img.width > 0.0).then_some(img)
 }
 
 /// Every picture of an XML part (e.g. a header), in document order
@@ -488,7 +566,7 @@ pub(crate) fn extract_drawings(xml: &str) -> Vec<ImageRef> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) if tag_is(e.name().as_ref(), "drawing") => {
                 buf.clear();
-                if let Some(img) = parse_drawing(&mut reader) {
+                if let Some(img) = parse_drawing(&mut reader, &StyleSheet::default()) {
                     images.push(img);
                 }
                 continue;
@@ -540,8 +618,9 @@ fn placed_images(files: &HashMap<String, Vec<u8>>, part: &str) -> Vec<PlacedImag
         .collect()
 }
 
-/// Part name of the default header or footer of the document's last section
-fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> Option<String> {
+/// Part name of the header or footer (`kind`) of type `ref_type` ("default", "first",
+/// "even") of the document's last section
+fn header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str, ref_type: &str) -> Option<String> {
     let doc = std::str::from_utf8(files.get("word/document.xml")?).ok()?;
     let rels = parse_relationships_map(std::str::from_utf8(files.get("word/_rels/document.xml.rels")?).ok()?);
     let tag = format!("<w:{}Reference ", kind);
@@ -550,13 +629,193 @@ fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> O
     while let Some(i) = doc[from..].find(&tag).map(|i| i + from) {
         let end = doc[i..].find('>').map(|j| i + j).unwrap_or(doc.len());
         let element = &doc[i..end];
-        if element.contains("w:type=\"default\"") {
+        if element.contains(&format!("w:type=\"{}\"", ref_type)) {
             chosen = element.split("r:id=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
         }
         from = end;
     }
     let target = rels.get(&chosen?)?;
     Some(format!("word/{}", target.trim_start_matches('/').trim_start_matches("word/")))
+}
+
+fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> Option<String> {
+    header_footer_part(files, kind, "default")
+}
+
+/// True when the last section shows a different header and footer on its first page
+fn has_title_page(files: &HashMap<String, Vec<u8>>) -> bool {
+    let Some(doc) = files.get("word/document.xml").and_then(|b| std::str::from_utf8(b).ok()) else { return false };
+    let Some(start) = doc.rfind("<w:sectPr") else { return false };
+    let sect = &doc[start..];
+    let sect = &sect[..sect.find("</w:sectPr>").unwrap_or(sect.len())];
+    sect.find("<w:titlePg").is_some_and(|i| {
+        let tag = &sect[i..i + sect[i..].find('>').unwrap_or(0)];
+        !(tag.contains("w:val=\"0\"") || tag.contains("w:val=\"false\""))
+    })
+}
+
+/// Content of a header or footer part, with its pictures renamed "part#rId" and their pixels
+/// added to `images` (relationship ids are per part, so they would clash with the body's)
+fn header_footer_elements(
+    files: &HashMap<String, Vec<u8>>,
+    part: &str,
+    styles: &StyleSheet,
+    images: &mut HashMap<String, String>,
+) -> Vec<DocumentElement> {
+    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else { return Vec::new() };
+    let rels = match part.rsplit_once('/') {
+        Some((dir, file)) => files
+            .get(&format!("{}/_rels/{}.rels", dir, file))
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(parse_relationships_map)
+            .unwrap_or_default(),
+        None => HashMap::new(),
+    };
+    let mut elements = parse_document_elements_with(xml, styles);
+    let mut rename = |img: &mut ImageRef| {
+        if img.rel_id.is_empty() {
+            return;
+        }
+        let key = format!("{}#{}", part, img.rel_id);
+        if let Some(url) = rels.get(&img.rel_id).and_then(|t| image_data_url(files, t)) {
+            images.insert(key.clone(), url);
+        }
+        img.rel_id = key;
+    };
+    for_each_paragraph_mut(&mut elements, &mut |p| {
+        for img in p.images.iter_mut() {
+            rename(img);
+            if let Some(tb) = img.text_box.as_mut() {
+                for inner in tb.paragraphs.iter_mut() {
+                    inner.images.iter_mut().for_each(&mut rename);
+                }
+            }
+        }
+    });
+    elements
+}
+
+/// Text box paragraphs are numbered from here on, apart from body and table paragraphs, so
+/// adding text to a box never renumbers the body
+pub const TEXT_BOX_BASE: usize = 1 << 24;
+
+/// Gives the paragraphs of the body's text boxes (DrawingML ones, anchored in body or table
+/// paragraphs) indices from `TEXT_BOX_BASE` in document order: the order `paragraph_ranges`
+/// finds them in
+pub(crate) fn number_text_box_paragraphs(elements: &mut [DocumentElement]) {
+    let mut anchors: Vec<&mut ParagraphInfo> = Vec::new();
+    for el in elements.iter_mut() {
+        match el {
+            DocumentElement::Paragraph(p) => anchors.push(p),
+            DocumentElement::Table(t) => {
+                for row in t.rich_rows.iter_mut() {
+                    for cell in row.cells.iter_mut() {
+                        anchors.extend(cell.paragraphs.iter_mut());
+                    }
+                }
+            }
+        }
+    }
+    anchors.sort_by_key(|p| p.index);
+    let mut next = TEXT_BOX_BASE;
+    for p in anchors {
+        for img in p.images.iter_mut().filter(|img| !img.vml) {
+            if let Some(tb) = img.text_box.as_mut() {
+                for inner in tb.paragraphs.iter_mut() {
+                    inner.index = next;
+                    next += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Byte ranges of every editable paragraph: body and table paragraphs by index, then text box
+/// paragraphs from `TEXT_BOX_BASE`
+pub(crate) struct ParagraphRanges {
+    body: Vec<std::ops::Range<usize>>,
+    boxes: Vec<std::ops::Range<usize>>,
+}
+
+impl ParagraphRanges {
+    pub fn get(&self, index: usize) -> Option<std::ops::Range<usize>> {
+        if index >= TEXT_BOX_BASE {
+            self.boxes.get(index - TEXT_BOX_BASE).cloned()
+        } else {
+            self.body.get(index).cloned()
+        }
+    }
+}
+
+pub(crate) fn paragraph_ranges(xml: &str) -> Result<ParagraphRanges, String> {
+    let body = body_paragraph_ranges(xml)?;
+    let mut boxes = Vec::new();
+    for range in &body {
+        let fragment = &xml[range.clone()];
+        if !fragment.contains("txbxContent") {
+            continue;
+        }
+        for span in image_edit::drawing_spans(fragment)? {
+            if span.image.vml || span.image.text_box.is_none() {
+                continue;
+            }
+            let start = range.start + span.range.start;
+            for r in text_box_paragraph_ranges(&xml[start..range.start + span.range.end])? {
+                boxes.push(start + r.start..start + r.end);
+            }
+        }
+    }
+    Ok(ParagraphRanges { body, boxes })
+}
+
+/// Paragraphs of the first `w:txbxContent` of a drawing, as `shapes::parse_txbx_content`
+/// reads them (tables and content-control properties skipped)
+fn text_box_paragraph_ranges(drawing: &str) -> Result<Vec<std::ops::Range<usize>>, String> {
+    use crate::paragraph_edit::{element_end, tokenize};
+    let tokens = tokenize(drawing)?;
+    let Some(start) = tokens.iter().position(|t| matches!(&t.ev, Event::Start(e) if tag_is(e.name().as_ref(), "txbxContent"))) else {
+        return Ok(Vec::new());
+    };
+    let end = element_end(&tokens, start);
+    let mut out = Vec::new();
+    let mut i = start + 1;
+    while i < end {
+        match &tokens[i].ev {
+            Event::Start(e) | Event::Empty(e) => {
+                let name = e.name();
+                let n = name.as_ref();
+                if tag_is(n, "p") {
+                    let close = element_end(&tokens, i);
+                    out.push(tokens[i].span.start..tokens[close].span.end);
+                    i = close + 1;
+                    continue;
+                }
+                if tag_is(n, "tbl") || tag_is(n, "sdtPr") {
+                    i = element_end(&tokens, i) + 1;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+/// Calls `f` on every paragraph of `elements`, table cells included
+pub(crate) fn for_each_paragraph_mut(elements: &mut [DocumentElement], f: &mut dyn FnMut(&mut ParagraphInfo)) {
+    for el in elements.iter_mut() {
+        match el {
+            DocumentElement::Paragraph(p) => f(p),
+            DocumentElement::Table(t) => {
+                for row in t.rich_rows.iter_mut() {
+                    for cell in row.cells.iter_mut() {
+                        cell.paragraphs.iter_mut().for_each(&mut *f);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -604,6 +863,9 @@ pub struct ReplaceResult {
 
 #[path = "image_edit.rs"]
 mod image_edit;
+#[path = "shapes.rs"]
+mod shapes;
+pub use shapes::{ShapeStyle, TextBox};
 #[path = "insert_objects.rs"]
 mod insert_objects;
 pub use image_edit::ImageUpdate;
@@ -872,11 +1134,14 @@ impl DocxModifier {
         !self.history.redo.is_empty()
     }
 
+    /// Byte range of paragraph `index`: a body or table paragraph, or a text box paragraph
     fn body_paragraph(&self, xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
-        body_paragraph_ranges(xml)?
-            .get(index)
-            .cloned()
-            .ok_or_else(|| format!("No existe el párrafo {}.", index))
+        let range = if index >= TEXT_BOX_BASE {
+            paragraph_ranges(xml)?.get(index)
+        } else {
+            body_paragraph_ranges(xml)?.get(index).cloned()
+        };
+        range.ok_or_else(|| format!("No existe el párrafo {}.", index))
     }
 
     /// Splits body paragraph `index` at `offset` (Enter)
@@ -898,12 +1163,18 @@ impl DocxModifier {
         if p2 < p1 {
             return self.delete_range(p2, o2, p1, o1);
         }
+        if (p1 >= TEXT_BOX_BASE) != (p2 >= TEXT_BOX_BASE) {
+            return Err("La selección no puede ir del texto del documento a un cuadro de texto.".to_string());
+        }
         let mut xml = self.get_file_string("word/document.xml")?;
-        let ranges = body_paragraph_ranges(&xml)?;
+        let ranges = paragraph_ranges(&xml)?;
         let (r1, r2) = match (ranges.get(p1), ranges.get(p2)) {
-            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            (Some(a), Some(b)) => (a, b),
             _ => return Err("La selección apunta a párrafos que no existen.".to_string()),
         };
+        if r2.start < r1.end {
+            return Err("La selección apunta a párrafos que no existen.".to_string());
+        }
         // Cutting must not tear apart a content control or other wrapper element
         if !is_balanced(&xml[r1.end..r2.start]) {
             return Err("La selección cruza el borde de una tabla o de un control de contenido; no se puede borrar de una vez.".to_string());
@@ -919,12 +1190,12 @@ impl DocxModifier {
     /// Joins body paragraph `index` with the next one when nothing (e.g. a table) sits between
     pub fn merge_with_next(&mut self, index: usize) -> Result<(), String> {
         let xml = self.get_file_string("word/document.xml")?;
-        let ranges = body_paragraph_ranges(&xml)?;
-        match (ranges.get(index), ranges.get(index + 1)) {
-            (Some(a), Some(b)) if is_blank(&xml[a.end..b.start]) => {}
+        let ranges = paragraph_ranges(&xml)?;
+        let current = match (ranges.get(index), ranges.get(index + 1)) {
+            (Some(a), Some(b)) if a.end <= b.start && is_blank(&xml[a.end..b.start]) => a,
             _ => return Err("Solo se pueden unir párrafos contiguos.".to_string()),
-        }
-        let len = parse_paragraph_fragment(&xml[ranges[index].clone()], &self.styles).text.chars().count();
+        };
+        let len = parse_paragraph_fragment(&xml[current], &self.styles).text.chars().count();
         self.delete_range(index, len, index + 1, 0)
     }
 
@@ -1039,7 +1310,9 @@ impl DocxModifier {
             }
         }
         let doc_xml = self.get_file_string("word/document.xml")?;
-        let elements = Rc::new(parse_document_elements_with(&doc_xml, &self.styles));
+        let mut elements = parse_document_elements_with(&doc_xml, &self.styles);
+        number_text_box_paragraphs(&mut elements);
+        let elements = Rc::new(elements);
         self.cache.borrow_mut().elements = Some((self.revision, elements.clone()));
         Ok(elements)
     }
@@ -1206,10 +1479,7 @@ impl DocxModifier {
         text: &str,
     ) -> Result<bool, String> {
         let mut xml = self.get_file_string("word/document.xml")?;
-        let range = body_paragraph_ranges(&xml)?
-            .get(index)
-            .cloned()
-            .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+        let range = self.body_paragraph(&xml, index)?;
         let edited = edit_paragraph_range(&xml[range.clone()], &self.styles, start, end, text)?;
         xml.replace_range(range, &edited);
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
@@ -1256,6 +1526,17 @@ impl DocxModifier {
     /// Applies minimal edits to body paragraphs, preserving everything the editor doesn't model
     fn edit_body_paragraphs(&mut self, edits: &[ParagraphEdit]) -> Result<usize, String> {
         let mut xml = self.get_file_string("word/document.xml")?;
+        if edits.iter().any(|e| e.index >= TEXT_BOX_BASE) {
+            // A text box paragraph lies inside its anchor paragraph: edit one at a time,
+            // finding each again in the updated document
+            for edit in edits {
+                let range = self.body_paragraph(&xml, edit.index)?;
+                let edited = edit_paragraph(&xml[range.clone()], &self.styles, edit.text, edit.formats.as_deref(), edit.align)?;
+                xml.replace_range(range, &edited);
+            }
+            self.put_file("word/document.xml".to_string(), xml.into_bytes());
+            return Ok(edits.len());
+        }
         let ranges = body_paragraph_ranges(&xml)?;
 
         // Splice from the end so earlier byte ranges stay valid
@@ -1469,7 +1750,20 @@ impl DocxModifier {
 
     /// Gets header and footer info (text, images) from header/footer XML files
     pub fn get_header_footer(&self) -> HeaderFooterInfo {
-        extract_header_footer_quick_xml(&self.files)
+        let mut info = extract_header_footer_quick_xml(&self.files);
+        let files = &self.files;
+        let mut images = HashMap::new();
+        let mut content = |kind: &str, ref_type: &str| {
+            header_footer_part(files, kind, ref_type).map(|part| header_footer_elements(files, &part, &self.styles, &mut images))
+        };
+        info.header = content("header", "default").unwrap_or_default();
+        info.footer = content("footer", "default").unwrap_or_default();
+        if has_title_page(files) {
+            info.first_header = Some(content("header", "first").unwrap_or_default());
+            info.first_footer = Some(content("footer", "first").unwrap_or_default());
+        }
+        info.images = images;
+        info
     }
 
     /// Pixels of every picture referenced by document.xml, by relationship id
@@ -1860,7 +2154,8 @@ pub fn parse_document_elements_with(xml: &str, styles: &StyleSheet) -> Vec<Docum
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let name = e.name();
-                if tag_is(name.as_ref(), "body") {
+                // Headers and footers (w:hdr / w:ftr) hold the same content as the body
+                if tag_is(name.as_ref(), "body") || tag_is(name.as_ref(), "hdr") || tag_is(name.as_ref(), "ftr") {
                     in_body = true;
                 } else if in_body && tag_is(name.as_ref(), "p") {
                     let p = parse_paragraph_with(&mut reader, p_index, styles, Some(&mut counters));
@@ -1971,6 +2266,8 @@ pub fn parse_paragraph_with(
     let mut mark_rpr = RunProps::default();
     let mut raw_runs: Vec<RawRun> = Vec::new();
     let mut images: Vec<ImageRef> = Vec::new();
+    // Legacy VML shapes go after the DrawingML ones, whose indices editing relies on
+    let mut vml_images: Vec<ImageRef> = Vec::new();
     let mut ends_section = false;
 
     let mut in_ppr = false;
@@ -1980,9 +2277,18 @@ pub fn parse_paragraph_with(
     let mut in_rpr = false;
     let mut in_t = false;
     let mut run = RawRun::default();
+    // Page-number fields: complex (fldChar begin/separate/end + instrText) or w:fldSimple
+    let mut fields: Vec<PageField> = Vec::new();
+    let mut in_instr = false;
+    let mut field_instr = String::new();
+    let mut field_result: Option<usize> = None;
+    let mut simple_field: Option<(String, usize)> = None;
     let mut buf = Vec::new();
 
     loop {
+        let chars_so_far = |raw_runs: &[RawRun], run: &RawRun, in_r: bool| {
+            raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>() + if in_r { run.text.chars().count() } else { 0 }
+        };
         let (e, is_start) = match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => (e, true),
             Ok(Event::Empty(e)) => (e, false),
@@ -1990,6 +2296,10 @@ pub fn parse_paragraph_with(
                 if in_t {
                     if let Ok(s) = t.unescape() {
                         run.text.push_str(&s);
+                    }
+                } else if in_instr {
+                    if let Ok(s) = t.unescape() {
+                        field_instr.push_str(&s);
                     }
                 }
                 buf.clear();
@@ -2000,6 +2310,13 @@ pub fn parse_paragraph_with(
                 let n = name.as_ref();
                 if tag_is(n, "t") {
                     in_t = false;
+                } else if tag_is(n, "instrText") {
+                    in_instr = false;
+                } else if tag_is(n, "fldSimple") {
+                    if let Some((kind, start)) = simple_field.take() {
+                        let end = chars_so_far(&raw_runs, &run, in_r);
+                        fields.push(PageField { kind, start, end });
+                    }
                 } else if tag_is(n, "rPr") {
                     if in_r {
                         in_rpr = false;
@@ -2032,17 +2349,33 @@ pub fn parse_paragraph_with(
         let n = name.as_ref();
         if is_start && tag_is(n, "drawing") {
             buf.clear();
-            if let Some(mut img) = parse_drawing(reader) {
+            if let Some(mut img) = parse_drawing(reader, styles) {
                 img.offset = raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>()
                     + if in_r { run.text.chars().count() } else { 0 };
                 images.push(img);
             }
             continue;
         }
+        // The fallback of mc:AlternateContent repeats the drawing above in VML
+        if is_start && tag_is(n, "Fallback") {
+            let end_name = n.to_vec();
+            buf.clear();
+            let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut Vec::new());
+            continue;
+        }
+        if is_start && tag_is(n, "pict") {
+            buf.clear();
+            if let Some(mut img) = shapes::parse_vml_pict(reader, styles) {
+                img.offset = raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>()
+                    + if in_r { run.text.chars().count() } else { 0 };
+                vml_images.push(img);
+            }
+            continue;
+        }
         // VML/objects may hold text boxes with their own paragraphs, and tracked property
         // changes hold the *old* properties: none of them belong to this paragraph
         if is_start
-            && ["pict", "object", "txbxContent", "pPrChange", "rPrChange"]
+            && ["object", "txbxContent", "pPrChange", "rPrChange"]
                 .iter()
                 .any(|t| tag_is(n, t))
         {
@@ -2053,6 +2386,28 @@ pub fn parse_paragraph_with(
             continue;
         }
 
+        if is_start && tag_is(n, "fldSimple") {
+            let instr = get_attr_value(&e, "instr").unwrap_or_default();
+            simple_field = page_field_kind(&instr).map(|kind| (kind, chars_so_far(&raw_runs, &run, in_r)));
+        }
+        if in_r && tag_is(n, "fldChar") {
+            match get_attr_value(&e, "fldCharType").as_deref() {
+                Some("begin") => {
+                    field_instr.clear();
+                    field_result = None;
+                }
+                Some("separate") => field_result = Some(chars_so_far(&raw_runs, &run, in_r)),
+                Some("end") => {
+                    if let (Some(start), Some(kind)) = (field_result.take(), page_field_kind(&field_instr)) {
+                        fields.push(PageField { kind, start, end: chars_so_far(&raw_runs, &run, in_r) });
+                    }
+                    field_instr.clear();
+                }
+                _ => {}
+            }
+        } else if in_r && tag_is(n, "instrText") {
+            in_instr = is_start;
+        }
         if in_r {
             if in_rpr {
                 if tag_is(n, "rStyle") {
@@ -2103,7 +2458,9 @@ pub fn parse_paragraph_with(
 
     let mut info = resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs);
     info.ends_section = ends_section;
+    images.extend(vml_images);
     info.images = images;
+    info.fields = fields;
     info
 }
 
@@ -2260,6 +2617,7 @@ fn resolve_paragraph(
         section_break_after: false,
         ends_section: false,
         images: Vec::new(),
+        fields: Vec::new(),
     }
 }
 
@@ -2342,6 +2700,9 @@ pub fn parse_table_with(
     let mut current_cell_borders = CellBorders::default();
     let mut current_cell_valign: Option<String> = None;
     let mut current_cell_margins: Option<CellMargins> = None;
+    let mut current_cell_span: usize = 1;
+    let mut current_cell_vmerge: Option<String> = None;
+    let mut current_row_grid_before: usize = 0;
 
     let mut current_row_is_header = false;
     let mut current_row_height: Option<f64> = None;
@@ -2389,6 +2750,7 @@ pub fn parse_table_with(
                     current_row_height = None;
                     current_row_height_rule = None;
                     current_row_cant_split = false;
+                    current_row_grid_before = 0;
                 } else if in_tr && tag_is(name.as_ref(), "trPr") {
                     in_tr_pr = true;
                 } else if in_tr && tag_is(name.as_ref(), "tc") {
@@ -2399,6 +2761,8 @@ pub fn parse_table_with(
                     current_cell_borders = CellBorders::default();
                     current_cell_valign = None;
                     current_cell_margins = None;
+                    current_cell_span = 1;
+                    current_cell_vmerge = None;
                 } else if in_tc && tag_is(name.as_ref(), "tcPr") {
                     in_tc_pr = true;
                 } else if in_tc_pr && tag_is(name.as_ref(), "tcBorders") {
@@ -2482,6 +2846,15 @@ pub fn parse_table_with(
                     current_cell_margins = Some(mar);
                 } else if in_tc_pr && tag_is(name.as_ref(), "vAlign") {
                     current_cell_valign = get_attr_value(e, "val");
+                } else if in_tc_pr && tag_is(name.as_ref(), "gridSpan") {
+                    current_cell_span = get_attr_i64(e, "val").unwrap_or(1).clamp(1, 64) as usize;
+                } else if in_tc_pr && tag_is(name.as_ref(), "vMerge") {
+                    current_cell_vmerge = Some(match get_attr_value(e, "val").as_deref() {
+                        Some("restart") => "restart".to_string(),
+                        _ => "continue".to_string(),
+                    });
+                } else if in_tr_pr && tag_is(name.as_ref(), "gridBefore") {
+                    current_row_grid_before = get_attr_i64(e, "val").unwrap_or(0).clamp(0, 64) as usize;
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -2562,6 +2935,8 @@ pub fn parse_table_with(
                         paragraphs: current_cell_paragraphs.clone(),
                         valign: current_cell_valign.clone(),
                         margins: current_cell_margins.clone(),
+                        grid_span: current_cell_span,
+                        v_merge: current_cell_vmerge.clone(),
                     });
                 } else if in_tr && tag_is(name.as_ref(), "tr") {
                     in_tr = false;
@@ -2572,6 +2947,7 @@ pub fn parse_table_with(
                         height_px: current_row_height,
                         height_rule: current_row_height_rule.clone(),
                         cant_split: current_row_cant_split,
+                        grid_before: current_row_grid_before,
                     });
                 } else if tag_is(name.as_ref(), "tbl") {
                     break;

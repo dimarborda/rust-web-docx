@@ -113,6 +113,34 @@ fn take_border<T: Clone>(dst: &mut Option<T>, src: &Option<T>) {
 pub struct ThemeFonts {
     pub major: Option<String>,
     pub minor: Option<String>,
+    /// Color scheme of the theme ("dk1", "lt1", "accent1", …) as "RRGGBB"
+    pub colors: HashMap<String, String>,
+}
+
+impl ThemeFonts {
+    /// A scheme color by the name shapes use ("tx1" is "dk1", "bg1" is "lt1", …)
+    pub fn color(&self, name: &str) -> Option<String> {
+        let key = match name {
+            "tx1" => "dk1",
+            "bg1" => "lt1",
+            "tx2" => "dk2",
+            "bg2" => "lt2",
+            other => other,
+        };
+        self.colors.get(key).cloned().or_else(|| match key {
+            "dk1" => Some("000000".into()),
+            "lt1" => Some("FFFFFF".into()),
+            "dk2" => Some("44546A".into()),
+            "lt2" => Some("E7E6E6".into()),
+            "accent1" => Some("4472C4".into()),
+            "accent2" => Some("ED7D31".into()),
+            "accent3" => Some("A5A5A5".into()),
+            "accent4" => Some("FFC000".into()),
+            "accent5" => Some("5B9BD5".into()),
+            "accent6" => Some("70AD47".into()),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -486,12 +514,24 @@ fn parse_theme_fonts(xml: &str) -> ThemeFonts {
     let mut fonts = ThemeFonts::default();
     let mut in_major = false;
     let mut in_minor = false;
+    let mut in_colors = false;
+    let mut scheme_slot: Option<String> = None;
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let n = e.name();
-                if tag_is(n.as_ref(), "majorFont") {
+                let local = std::str::from_utf8(n.as_ref()).unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
+                if local == "clrScheme" {
+                    in_colors = true;
+                } else if in_colors && scheme_slot.is_none() && local != "srgbClr" && local != "sysClr" {
+                    scheme_slot = Some(local);
+                } else if in_colors && (local == "srgbClr" || local == "sysClr") {
+                    let value = get_attr_value(&e, "lastClr").or_else(|| get_attr_value(&e, "val"));
+                    if let (Some(slot), Some(v)) = (scheme_slot.take(), value) {
+                        fonts.colors.insert(slot, v.to_ascii_uppercase());
+                    }
+                } else if tag_is(n.as_ref(), "majorFont") {
                     in_major = true;
                 } else if tag_is(n.as_ref(), "minorFont") {
                     in_minor = true;
@@ -505,6 +545,11 @@ fn parse_theme_fonts(xml: &str) -> ThemeFonts {
                 }
             }
             Ok(Event::End(e)) => {
+                if tag_is(e.name().as_ref(), "clrScheme") {
+                    in_colors = false;
+                } else if in_colors {
+                    scheme_slot = None;
+                }
                 if tag_is(e.name().as_ref(), "majorFont") {
                     in_major = false;
                 } else if tag_is(e.name().as_ref(), "minorFont") {

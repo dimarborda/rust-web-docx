@@ -52,6 +52,8 @@ struct Line<'a> {
     runs: &'a [TextRun],
     /// Ends its paragraph or a manual break (false for automatically wrapped lines)
     ends_with_break: bool,
+    /// Text box holding the line (absent for the body and tables)
+    text_box: Option<[usize; 2]>,
 }
 
 fn char_len(s: &str) -> usize {
@@ -186,6 +188,7 @@ fn lines(layout: &DocumentLayout) -> Vec<Line<'_>> {
                     family: font_family,
                     runs,
                     ends_with_break: *is_last_line,
+                    text_box: range.text_box,
                 });
             }
         }
@@ -219,10 +222,25 @@ fn line_index(lines: &[Line], pos: TextPosition) -> Option<usize> {
 pub fn hit_test(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dyn TextMeasurer) -> Option<TextPosition> {
     let all = lines(layout);
     let score = |l: &Line| (l.distance_x(x) > 0.5, l.distance_y(y), l.distance_x(x));
-    let line = all.iter().filter(|l| l.page == page).min_by(|a, b| {
+    // Inside an editable text box only its own lines count; elsewhere only the body's
+    let in_box = text_box_at(layout, page, x, y);
+    let line = all.iter().filter(|l| l.page == page && l.text_box == in_box).min_by(|a, b| {
         score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
     })?;
     Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
+}
+
+/// The topmost editable text box under a point of a page, as `[anchor paragraph, index]`
+fn text_box_at(layout: &DocumentLayout, page: usize, x: f64, y: f64) -> Option<[usize; 2]> {
+    let page = layout.pages.iter().find(|p| p.page_number == page)?;
+    page.items.iter().rev().find_map(|item| match item {
+        RenderCommand::Shape { x: sx, y: sy, width, height, editable_text: true, paragraph_index: Some(p), image_index: Some(i), .. }
+            if x >= *sx && x <= sx + width && y >= *sy && y <= sy + height =>
+        {
+            Some([*p, *i])
+        }
+        _ => None,
+    })
 }
 
 pub fn caret_box(layout: &DocumentLayout, pos: TextPosition, m: &mut dyn TextMeasurer) -> Option<CaretBox> {
@@ -276,7 +294,8 @@ pub fn move_vertical(
         }
         best.map(|(i, _)| i)
     };
-    let candidates: Vec<&Line> = all.iter().filter(beyond).collect();
+    // Up and down stay in the text box (or the body) the caret is in
+    let candidates: Vec<&Line> = all.iter().filter(beyond).filter(|l| l.text_box == current.text_box).collect();
     let in_column: Vec<&Line> = candidates.iter().copied().filter(|l| l.distance_x(goal_x) == 0.0).collect();
     let target = match nearest(in_column.clone()) {
         Some(i) => in_column[i],

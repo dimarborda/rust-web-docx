@@ -28,6 +28,8 @@ const TYPING_GROUP_MS = 1500;
  * @param {(ref, change) => void} env.imageEdited  the user resized or moved a picture with the mouse or
  *        keyboard: change = { width?, height?, dx?, dy? } in page px
  * @param {(ref) => void} env.imageDeleted    Delete / Backspace on a selected picture
+ * @param {() => boolean} env.readOnly        when true the user can move the caret, select and copy, but
+ *        not change the document (typing, deleting, pasting, undo and picture editing are ignored)
  */
 export function createCanvasEditor(env) {
   let anchor = null;
@@ -72,9 +74,25 @@ export function createCanvasEditor(env) {
     return p ? Array.from(p.text || '') : [];
   }
 
-  function lastParagraphIndex() {
-    const list = env.paragraphs().list;
+  // Text box paragraphs live in containers "tb:<anchor>:<index>"; the caret never wanders
+  // between a text box and the rest of the document
+  const isBox = p => !!p && p.container.startsWith('tb:');
+  const sameFlow = (a, b) => !!a && !!b && (isBox(a) || isBox(b) ? a.container === b.container : true);
+
+  /** Paragraphs the caret at `index` can reach: its text box, or the body and its tables */
+  function flowOf(index) {
+    const here = paragraph(index);
+    return env.paragraphs().list.filter(p => (here ? sameFlow(here, p) : !isBox(p)));
+  }
+
+  function lastParagraphIndex(index) {
+    const list = index === undefined ? env.paragraphs().list.filter(p => !isBox(p)) : flowOf(index);
     return list.length ? list[list.length - 1].index : -1;
+  }
+
+  function firstParagraphIndex(index) {
+    const list = index === undefined ? env.paragraphs().list.filter(p => !isBox(p)) : flowOf(index);
+    return list.length ? list[0].index : 0;
   }
 
   /** True when paragraphs `a` and `a + 1` can be joined: same container, nothing between */
@@ -87,7 +105,7 @@ export function createCanvasEditor(env) {
   /** First paragraph of the next (dir > 0) or previous table cell, for Tab / Shift+Tab */
   function neighbourCell(index, dir) {
     const current = paragraph(index);
-    if (!current || current.container === 'body') return null;
+    if (!current || current.container === 'body' || isBox(current)) return null;
     const table = current.container.split(':')[0];
     const list = env.paragraphs().list;
     const inTable = list.filter(p => p.container !== 'body' && p.container.split(':')[0] === table);
@@ -157,12 +175,14 @@ export function createCanvasEditor(env) {
       if (pos.offset > 0) {
         return { paragraph: pos.paragraph, offset: byWord ? wordStart(text, pos.offset) : pos.offset - 1 };
       }
-      return pos.paragraph > 0 ? { paragraph: pos.paragraph - 1, offset: chars(pos.paragraph - 1).length } : pos;
+      const prev = paragraph(pos.paragraph - 1);
+      return prev && sameFlow(prev, paragraph(pos.paragraph)) ? { paragraph: prev.index, offset: chars(prev.index).length } : pos;
     }
     if (pos.offset < text.length) {
       return { paragraph: pos.paragraph, offset: byWord ? wordEnd(text, pos.offset) : pos.offset + 1 };
     }
-    return pos.paragraph < lastParagraphIndex() ? { paragraph: pos.paragraph + 1, offset: 0 } : pos;
+    const next = paragraph(pos.paragraph + 1);
+    return next && sameFlow(next, paragraph(pos.paragraph)) ? { paragraph: next.index, offset: 0 } : pos;
   }
 
   // ---------- Editing ----------
@@ -173,7 +193,7 @@ export function createCanvasEditor(env) {
    * starting a new step at each space so undo goes back word by word.
    */
   function edit(text, kind, range = ordered()) {
-    if (!session() || !focus) return;
+    if (!session() || !focus || env.readOnly()) return;
     const [start, end] = range;
     const continues = lastEdit && lastEdit.kind === kind && Date.now() - lastEdit.time < TYPING_GROUP_MS &&
       (samePos(lastEdit.caret, start) || samePos(lastEdit.caret, end));
@@ -205,7 +225,7 @@ export function createCanvasEditor(env) {
     }
     // At the start of a paragraph: join it with the previous one
     const prev = focus.paragraph - 1;
-    if (prev < 0) return;
+    if (prev < 0 || !sameFlow(paragraph(prev), paragraph(focus.paragraph))) return;
     const prevEnd = { paragraph: prev, offset: chars(prev).length };
     if (adjacent(prev)) {
       edit('', 'join', [prevEnd, focus]);
@@ -222,7 +242,7 @@ export function createCanvasEditor(env) {
       return edit('', 'delete', [focus, to]);
     }
     const next = focus.paragraph + 1;
-    if (next > lastParagraphIndex()) return;
+    if (!sameFlow(paragraph(next), paragraph(focus.paragraph))) return;
     if (adjacent(focus.paragraph)) {
       edit('', 'join', [focus, { paragraph: next, offset: 0 }]);
     } else {
@@ -288,6 +308,7 @@ export function createCanvasEditor(env) {
       });
     }
 
+    paintTextBoxOutline(zoom);
     const box = caretBox(focus);
     const page = box && pages.get(box.page);
     if (page) {
@@ -317,8 +338,10 @@ export function createCanvasEditor(env) {
   // ---------- Pictures ----------
 
   const sameImage = (a, b) => !!a && !!b && a.paragraph === b.paragraph && a.index === b.index;
-  const isBodyImage = item => item.type === 'image' && item.paragraph_index != null && item.image_index != null;
+  // Pictures, text boxes and shapes of the body are selected and edited the same way
+  const isBodyImage = item => (item.type === 'image' || item.type === 'shape') && item.paragraph_index != null && item.image_index != null;
   const RESIZE_DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const BOX_EDGE = 5; // px of a text box's border that select the box instead of its text
   const MIN_IMAGE_PX = 8;
 
   function selectImage(ref) {
@@ -348,6 +371,12 @@ export function createCanvasEditor(env) {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if (!isBodyImage(it) || !inside(it, it.width, it.height)) continue;
+      // Inside an editable text box a click edits its text; its border selects the box
+      if (it.editable_text) {
+        const edge = Math.min(BOX_EDGE, it.width / 4, it.height / 4);
+        const nearEdge = x - it.x < edge || it.x + it.width - x < edge || y - it.y < edge || it.y + it.height - y < edge;
+        return nearEdge ? it : null;
+      }
       if (it.is_background && overText()) continue;
       return it;
     }
@@ -455,6 +484,27 @@ export function createCanvasEditor(env) {
     env.imageEdited(image, change);
   }
 
+  /** Dashed outline around the text box the caret is in, as Word shows it */
+  function paintTextBoxOutline(zoom) {
+    const p = paragraph(focus.paragraph);
+    if (!isBox(p)) return;
+    const [, anchorIndex, k] = p.container.split(':').map(Number);
+    for (const { page, overlay } of pages.values()) {
+      const shape = page.items?.find(it => it.type === 'shape' && it.paragraph_index === anchorIndex && it.image_index === k);
+      if (!shape) continue;
+      const outline = document.createElement('div');
+      outline.className = 'canvas-textbox-outline';
+      Object.assign(outline.style, {
+        left: `${shape.x * zoom}px`,
+        top: `${shape.y * zoom}px`,
+        width: `${shape.width * zoom}px`,
+        height: `${shape.height * zoom}px`,
+      });
+      overlay.appendChild(outline);
+      return;
+    }
+  }
+
   // ---------- Pointer input ----------
 
   function pagePoint(canvas, e) {
@@ -474,7 +524,8 @@ export function createCanvasEditor(env) {
   function onMouseDown(e, page, card, canvas) {
     if (e.button !== 0) return;
     const pt = pagePoint(canvas, e);
-    const picture = imageAt(pages.get(page.page_number)?.page || page, pt.x, pt.y);
+    // Read-only: pictures are not selected, clicks always reach the text
+    const picture = !env.readOnly() && imageAt(pages.get(page.page_number)?.page || page, pt.x, pt.y);
     if (picture) {
       e.preventDefault();
       selectImage({ paragraph: picture.paragraph_index, index: picture.image_index });
@@ -521,7 +572,8 @@ export function createCanvasEditor(env) {
       return;
     }
     const pos = positionAt(e.clientX, e.clientY);
-    if (pos) {
+    // A selection stays in the text box (or the body) it started in
+    if (pos && sameFlow(paragraph(pos.paragraph), paragraph(anchor?.paragraph))) {
       setCaret(pos, true);
       paint();
     }
@@ -596,9 +648,10 @@ export function createCanvasEditor(env) {
       case 'ArrowDown': {
         const dir = key === 'ArrowUp' ? -1 : 1;
         if (lineEdge) {
+          const last = lastParagraphIndex(focus.paragraph);
           const target = dir < 0
-            ? { paragraph: 0, offset: 0 }
-            : { paragraph: lastParagraphIndex(), offset: chars(lastParagraphIndex()).length };
+            ? { paragraph: firstParagraphIndex(focus.paragraph), offset: 0 }
+            : { paragraph: last, offset: chars(last).length };
           setCaret(target, e.shiftKey);
           break;
         }
@@ -634,7 +687,7 @@ export function createCanvasEditor(env) {
         if (cell) {
           anchor = { paragraph: cell.index, offset: 0 };
           focus = { paragraph: cell.index, offset: chars(cell.index).length };
-        } else if (paragraph(focus.paragraph)?.container !== 'body') {
+        } else if (paragraph(focus.paragraph)?.container !== 'body' && !isBox(paragraph(focus.paragraph))) {
           // Last cell (or first with Shift): stay put rather than typing a tab
         } else {
           edit('\t', 'type');
@@ -648,17 +701,21 @@ export function createCanvasEditor(env) {
         break;
       case 'a':
         if (!mod) { handled = false; break; }
-        anchor = { paragraph: 0, offset: 0 };
-        focus = { paragraph: lastParagraphIndex(), offset: chars(lastParagraphIndex()).length };
+        {
+          // Select all: the whole text box when the caret is in one, else the document
+          const last = lastParagraphIndex(focus.paragraph);
+          anchor = { paragraph: firstParagraphIndex(focus.paragraph), offset: 0 };
+          focus = { paragraph: last, offset: chars(last).length };
+        }
         break;
       case 'z':
         if (!mod) { handled = false; break; }
-        undoRedo(e.shiftKey);
+        if (!env.readOnly()) undoRedo(e.shiftKey);
         moved = false;
         break;
       case 'y':
         if (!mod || IS_MAC) { handled = false; break; }
-        undoRedo(true);
+        if (!env.readOnly()) undoRedo(true);
         moved = false;
         break;
       default:
@@ -702,7 +759,7 @@ export function createCanvasEditor(env) {
     if (!text) return;
     e.preventDefault();
     e.clipboardData.setData('text/plain', text);
-    edit('', 'cut');
+    edit('', 'cut'); // read-only: copies without deleting
   });
 
   input.addEventListener('paste', e => {
@@ -757,7 +814,9 @@ export function createCanvasEditor(env) {
       if (focus) {
         const last = Math.max(0, lastParagraphIndex());
         const clamp = pos => {
-          const p = Math.min(pos.paragraph, last);
+          // A paragraph that no longer exists (e.g. a text box paragraph that was deleted)
+          // falls back to the end of the body
+          const p = paragraph(pos.paragraph) ? pos.paragraph : Math.min(pos.paragraph, last);
           return { paragraph: p, offset: Math.min(pos.offset, chars(p).length) };
         };
         focus = clamp(focus);
@@ -779,6 +838,14 @@ export function createCanvasEditor(env) {
         paint({ reveal: true });
       }
       input.focus({ preventScroll: true });
+    },
+
+    /** Applies `env.readOnly()`: drops a selected picture and keeps the IME / virtual keyboard away */
+    readOnlyChanged() {
+      input.readOnly = env.readOnly();
+      if (env.readOnly()) selectImage(null);
+      lastEdit = null;
+      paint();
     },
 
     clear() {

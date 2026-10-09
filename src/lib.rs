@@ -78,16 +78,35 @@ fn with_measurer<R>(
     }
 }
 
+/// A picture or shape for the frontend: its kind and text instead of the parsed paragraphs
+fn image_json(img: &docx_parser::ImageRef) -> serde_json::Value {
+    let mut value = serde_json::to_value(img).unwrap_or_default();
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("rel_id");
+        obj.remove("text_box");
+        obj.remove("vml");
+        let kind = if img.text_box.is_some() { "textbox" } else if img.shape.is_some() { "shape" } else { "picture" };
+        obj.insert("kind".into(), kind.into());
+        obj.insert("text".into(), img.text_box.as_ref().map(|t| t.text()).unwrap_or_default().into());
+    }
+    value
+}
+
 impl DocxSession {
     /// Where the last layout drew a body picture: `{ page, x, y, width, height }` or null
     fn image_bounds(&self, paragraph: usize, index: usize) -> serde_json::Value {
         let Some(layout) = &self.layout else { return serde_json::Value::Null };
         for page in &layout.pages {
             for item in &page.items {
-                if let layout_engine::RenderCommand::Image { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. } = item {
-                    if *p == paragraph && *i == index {
-                        return serde_json::json!({ "page": page.page_number, "x": x, "y": y, "width": width, "height": height });
+                let found = match item {
+                    layout_engine::RenderCommand::Image { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. }
+                    | layout_engine::RenderCommand::Shape { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. } => {
+                        (*p == paragraph && *i == index).then_some((*x, *y, *width, *height))
                     }
+                    _ => None,
+                };
+                if let Some((x, y, width, height)) = found {
+                    return serde_json::json!({ "page": page.page_number, "x": x, "y": y, "width": width, "height": height });
                 }
             }
         }
@@ -342,10 +361,12 @@ impl DocxSession {
         to_json(&serde_json::json!({ "paragraph": index, "caret": caret }))
     }
 
-    /// Every picture of the body (table cells included) in document order:
-    /// `[{ paragraph, index, width, height, wrap, wrap_side, anchored, behind_text, h_relative,
-    /// h_offset, h_align, v_relative, v_offset, v_align, dist_top…, offset, alt, doc_pr_id,
-    /// bounds: { page, x, y, width, height } | null }]`. `bounds` is where the last layout drew it.
+    /// Every picture, text box and shape of the body (table cells included) in document order:
+    /// `[{ paragraph, index, kind: "picture" | "textbox" | "shape", width, height, wrap,
+    /// wrap_side, anchored, behind_text, h_relative, h_offset, h_align, v_relative, v_offset,
+    /// v_align, dist_top…, offset, alt, doc_pr_id, shape, text, bounds: { page, x, y, width,
+    /// height } | null }]`. `bounds` is where the last layout drew it. Legacy VML shapes are
+    /// drawn but left out (they cannot be edited).
     #[wasm_bindgen]
     pub fn list_images(&self) -> Result<String, JsValue> {
         let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
@@ -366,10 +387,10 @@ impl DocxSession {
         let images: Vec<serde_json::Value> = paragraphs
             .iter()
             .flat_map(|p| p.images.iter().enumerate().map(move |(i, img)| (p.index, i, img)))
+            .filter(|(_, _, img)| !img.vml)
             .map(|(paragraph, index, img)| {
-                let mut value = serde_json::to_value(img).unwrap_or_default();
+                let mut value = image_json(img);
                 if let Some(obj) = value.as_object_mut() {
-                    obj.remove("rel_id");
                     obj.insert("paragraph".into(), paragraph.into());
                     obj.insert("index".into(), index.into());
                     obj.insert("bounds".into(), self.image_bounds(paragraph, index));
@@ -400,9 +421,8 @@ impl DocxSession {
             .update_image(paragraph, index, &update)
             .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
-        let mut value = serde_json::to_value(&image).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let mut value = image_json(&image);
         if let Some(obj) = value.as_object_mut() {
-            obj.remove("rel_id");
             obj.insert("paragraph".into(), paragraph.into());
             obj.insert("index".into(), index.into());
         }

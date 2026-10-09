@@ -59,7 +59,8 @@ docx-toolbar {
 }
 
 .docx-editor .canvas-caret.with-selection,
-.docx-editor .canvas-overlay.inactive .canvas-caret {
+.docx-editor .canvas-overlay.inactive .canvas-caret,
+.docx-editor.read-only .canvas-caret {
   display: none;
 }
 
@@ -108,6 +109,18 @@ docx-toolbar {
 .docx-editor .canvas-image-handle.s { left: calc(50% - 4.5px); bottom: -5px; cursor: ns-resize; }
 .docx-editor .canvas-image-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
 .docx-editor .canvas-image-handle.w { left: -5px; top: calc(50% - 4.5px); cursor: ew-resize; }
+
+/* Text box the caret is in */
+.docx-editor .canvas-textbox-outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--docx-image-frame, #2563eb);
+  pointer-events: none;
+}
+
+.docx-editor .canvas-overlay.inactive .canvas-textbox-outline {
+  display: none;
+}
 
 .docx-editor .canvas-overlay.inactive .canvas-image-frame {
   border-color: var(--docx-image-frame-inactive, #94a3b8);
@@ -170,6 +183,13 @@ docx-toolbar {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.docx-toolbar-button:disabled,
+.docx-toolbar-color:has(input:disabled) {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 .docx-toolbar-button:hover {

@@ -23,6 +23,9 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 - **Ediciones sin pérdidas.** Solo se reescriben los fragmentos XML que cambiaste; estilos, temas, relaciones, imágenes y secciones del archivo original quedan intactos.
 - **Variables de plantilla.** Detecta `{{CAMPO}}` aunque Word lo haya partido en varios fragmentos (`<w:r>`) y lo reemplaza respetando el formato.
 - **Maquetación parecida a Word.** Cascada de estilos `docDefaults → styles.xml → numbering.xml → formato directo`, medición real de fuentes, paginación, sangrías, interlineado, listas numeradas y tablas con bordes resueltos por lado. Las imágenes en línea fluyen con el texto y el texto rodea a las flotantes (cuadrado, estrecho, arriba y abajo, detrás o delante).
+- **Cuadros de texto y formas.** Se dibujan los cuadros de texto de Word, tanto los actuales (DrawingML) como los de documentos antiguos (VML), con su relleno, su borde, sus márgenes internos y su alineación vertical, además de rectángulos, rectángulos redondeados y elipses. El texto los rodea igual que a las imágenes, y el texto de los cuadros actuales se edita haciendo clic dentro (un clic en el borde selecciona el cuadro para moverlo).
+- **Encabezados y pies de página.** Se dibujan con su texto, tablas, imágenes y cuadros, con el número de página real en cada hoja (`PAGE`, `NUMPAGES`) y con primera página distinta. Si no caben en el margen, el cuerpo se desplaza como en Word.
+- **Celdas combinadas.** Celdas que ocupan varias columnas (`gridSpan`) o varias filas (`vMerge`), dibujadas como una sola y sin partirse entre páginas cuando caben.
 - **Imágenes editables.** Se seleccionan con un clic, se redimensionan con las asas, las flotantes se arrastran y cambian de ajuste, y todo está disponible desde código (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`).
 - **Valores por defecto de Word.** Lo que el documento no especifica se dibuja como lo haría Word (Times New Roman 10 pt, sin bordes inventados), en lugar de "mejorarlo".
 - **Buscar y reemplazar** con mayúsculas/minúsculas y expresiones regulares.
@@ -46,6 +49,7 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 | [`src/paragraph_edit.rs`](src/paragraph_edit.rs) | Ediciones de texto, división y unión de párrafos sin pérdidas |
 | [`src/insert_objects.rs`](src/insert_objects.rs) | Tablas e imágenes insertadas desde código |
 | [`src/image_edit.rs`](src/image_edit.rs) | Tamaño, posición, ajuste del texto y borrado de imágenes |
+| [`src/shapes.rs`](src/shapes.rs) | Cuadros de texto y formas (DrawingML y VML): relleno, borde, márgenes internos y texto |
 | [`src/sample_generator.rs`](src/sample_generator.rs) | Documento de demostración generado en memoria |
 | [`packages/docx-editor/`](packages/docx-editor) | Paquete npm reutilizable: `DocxEditor`, `<docx-editor>` y barra de herramientas opcional |
 | [`apps/demo/`](apps/demo) | La demo publicada, construida sobre el paquete |
@@ -75,9 +79,8 @@ La API completa, los ejemplos con React y Tauri y las opciones de fuentes están
 
 Todavía no se soportan, o solo en parte:
 
-- Texto de encabezados y pies de página (las imágenes sí se muestran).
-- Celdas combinadas (`gridSpan`, `vMerge`).
-- Cuadros de texto, formas y ecuaciones.
+- Editar el texto de encabezados y pies de página (se dibujan, pero no se editan en el lienzo).
+- Formas agrupadas, lienzos de dibujo, ecuaciones y tablas dentro de cuadros de texto.
 - El texto rodea las imágenes flotantes por un solo lado y usando su rectángulo (no su contorno); las tablas no las rodean.
 - Comentarios, control de cambios y notas al pie (se conservan en el archivo, pero no se dibujan).
 - Varias columnas por sección.

@@ -28,7 +28,7 @@ npm install @dimarborda/docx-editor
 </script>
 ```
 
-Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `blank` (documento nuevo vacío, con `page-size="a4|letter|legal"` y `autofocus` opcionales), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"` y `wasm-url`.
+Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `blank` (documento nuevo vacío, con `page-size="a4|letter|legal"` y `autofocus` opcionales), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"`, `readonly` (solo lectura; sin el atributo es editable) y `wasm-url`.
 
 `<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items="undo redo | bold italic underline color | left center right both | imageWrap | zoom"`. `imageWrap` es un selector del ajuste de texto que se activa al seleccionar una imagen; con una imagen seleccionada, los botones de alineación alinean la imagen.
 
@@ -76,6 +76,7 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Apariencia. `insertTable(rows, cols, headers)` de versiones anteriores sigue funcionando (tabla vacía al final) |
 | `select(anchor, focus)` | Coloca el cursor o una selección (`{ paragraph, offset }`) |
 | `setZoom(z)` / `focus()` / `destroy()` | Vista y ciclo de vida. Sin cursor previo, `focus()` lo pone al inicio del documento |
+| `setReadOnly(true \| false)` / `readOnly` | Modo de solo lectura (ver [Solo lectura](#solo-lectura)). Por defecto el editor es editable |
 
 El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro del contenedor y `destroy()` lo elimina sin tocar el contenedor (`editor.container`).
 
@@ -85,13 +86,32 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `change` | `{}` |
 | `selectionchange` | `{ selection, format: { bold, italic, underline, color, align } }` |
 | `imageselect` | `{ image }`: la imagen seleccionada con el ratón o `selectImage()`, o cambiada mientras está seleccionada (`null` al deseleccionar) |
+| `readonlychange` | `{ readOnly }`: `setReadOnly()` cambió el modo |
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
 
 Incluye tipos de TypeScript.
 
+### Solo lectura
+
+El editor es editable por defecto. Para mostrar un documento sin que el usuario pueda cambiarlo:
+
+```js
+const editor = await DocxEditor.create(el, { readOnly: true }); // desde el inicio
+editor.setReadOnly(true);   // o en cualquier momento
+editor.setReadOnly(false);  // vuelve a ser editable
+```
+
+```html
+<docx-editor src="/contrato.docx" readonly></docx-editor>
+```
+
+En solo lectura el usuario puede desplazarse, hacer zoom, seleccionar y copiar texto, pero se ignoran la escritura, el borrado, pegar, cortar, los atajos de formato, deshacer y rehacer, y la selección y edición de imágenes. La barra de herramientas desactiva sus botones de edición (el zoom sigue activo). Las llamadas desde código (`replaceVariables`, `insertText`, `updateImage`…) siguen funcionando, para que tu aplicación pueda rellenar un documento que sus usuarios solo ven.
+
 ### Imágenes
 
 Con el ratón: un clic selecciona la imagen y muestra ocho asas. Las esquinas cambian el tamaño manteniendo la proporción (`Shift` la libera) y los lados cambian una sola medida. Una imagen flotante se mueve arrastrándola o con las flechas (`Shift` + flecha = 10 px). `Supr` la elimina y `Esc` vuelve al texto. Una imagen detrás del texto solo se selecciona donde no hay texto encima, así que hacer clic sobre el texto de un membrete sigue colocando el cursor.
+
+Los cuadros de texto y las formas (rectángulos, elipses…) funcionan igual: aparecen en `images()` con `kind: 'textbox'` o `kind: 'shape'`, su texto en `text` y su relleno y borde en `shape`, y se seleccionan, mueven, redimensionan y cambian de ajuste con los mismos métodos.
 
 Desde código, una imagen se identifica con `{ paragraph, index }`: su párrafo y su posición entre las imágenes de ese párrafo. Cualquier elemento de `images()` sirve como referencia. Las medidas están en px CSS a zoom 100 %.
 
@@ -201,7 +221,9 @@ El paquete carga `docx_engine_bg.wasm` con `new URL(..., import.meta.url)`. Vite
 
 ## Limitaciones
 
-Es un prototipo de laboratorio. Todavía no se dibujan el texto de encabezados y pies de página, las celdas combinadas, los cuadros de texto, los comentarios, el control de cambios ni las columnas múltiples. Todo eso se conserva intacto al guardar el documento.
+Es un prototipo de laboratorio. Todavía no se dibujan las formas agrupadas, los comentarios, el control de cambios ni las columnas múltiples. Todo eso se conserva intacto al guardar el documento. Los encabezados y pies de página se dibujan (texto, tablas, imágenes, número de página y primera página distinta), pero su texto no se edita en el lienzo; `replaceVariables` y `findReplace` sí los alcanzan.
+
+Cuadros de texto: un clic dentro coloca el cursor en su texto (escribir, Enter, borrar, formato, deshacer) y un clic en su borde selecciona el cuadro para moverlo, redimensionarlo o cambiar su ajuste como una imagen. La selección y las flechas no salen del cuadro, y ⌘A selecciona todo su texto. No se pueden insertar tablas ni imágenes flotantes dentro de un cuadro. Las tablas dentro de un cuadro y el giro del cuadro no se dibujan, y el texto que no cabe no se recorta. Los cuadros VML de documentos antiguos se dibujan, pero no se pueden editar. En la selección (`selection`), los párrafos de los cuadros usan índices a partir de 16 777 216 (2²⁴), para no desplazar la numeración del cuerpo.
 
 Imágenes flotantes: el texto las rodea por un solo lado (el más ancho con `bothSides`) y usando su rectángulo, no su contorno. Solo desplazan el texto que viene después de su párrafo de anclaje en la misma página, y las tablas no las rodean. Las imágenes de encabezados y pies de página se muestran, pero todavía no se pueden editar.
 

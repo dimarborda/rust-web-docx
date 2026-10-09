@@ -148,20 +148,34 @@ export function createDocxToolbar(editor, container, { items = DEFAULT_TOOLBAR_I
     ['left', 'center', 'right', 'both'].forEach(a => buttons[a]?.classList.toggle('active', format?.align === a));
     if (colorInput && format?.color) colorInput.value = format.color;
   };
+  // Read-only: only zoom stays usable
+  const applyReadOnly = () => {
+    const readOnly = editor.readOnly;
+    Object.entries(buttons).forEach(([name, b]) => {
+      if (name !== 'zoomIn' && name !== 'zoomOut') b.disabled = readOnly;
+    });
+    if (colorInput) colorInput.disabled = readOnly;
+    if (wrapSelect) wrapSelect.disabled = readOnly || !editor.selectedImage;
+    bar.classList.toggle('read-only', readOnly);
+  };
+
   const onImage = e => {
     if (!wrapSelect) return;
     const image = e.detail.image;
-    wrapSelect.disabled = !image;
+    wrapSelect.disabled = !image || editor.readOnly;
     if (image) wrapSelect.value = image.wrap;
   };
   editor.addEventListener('selectionchange', onSelection);
   editor.addEventListener('imageselect', onImage);
+  editor.addEventListener('readonlychange', applyReadOnly);
+  applyReadOnly();
   container.appendChild(bar);
 
   return {
     destroy() {
       editor.removeEventListener('selectionchange', onSelection);
       editor.removeEventListener('imageselect', onImage);
+      editor.removeEventListener('readonlychange', applyReadOnly);
       bar.remove();
     },
   };
