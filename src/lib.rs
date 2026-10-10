@@ -365,6 +365,28 @@ impl DocxSession {
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
 
+    /// Replaces the blocks from paragraph `from` to `to` (included) by paragraphs, as one undo
+    /// step (see `DocxModifier::replace_paragraphs`). Returns `{ "first", "count", "caret" }`.
+    #[wasm_bindgen]
+    pub fn replace_paragraphs(
+        &mut self,
+        from: usize,
+        to: usize,
+        paragraphs_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let paragraphs: Vec<docx_parser::NewParagraph> = serde_json::from_str(paragraphs_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before);
+        let (first, (p, o)) = self
+            .modifier
+            .replace_paragraphs(from, to, &paragraphs)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: p, offset: o };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
+    }
+
     /// Inserts a table at a position as one undo step (see `DocxModifier::insert_table`).
     /// `table_json`: `{ "rows": [["Ítem", "Valor"], ["A", "1"]], "header": true, "widths": [2, 1], "align": ["left", "right"] }`.
     /// Returns `{ "first": n, "caret": { "paragraph": n, "offset": 0 } }` (`first` = first cell's paragraph).

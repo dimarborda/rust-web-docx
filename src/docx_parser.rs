@@ -56,6 +56,9 @@ pub struct ParagraphInfo {
     pub text: String,
     pub style: String,
     pub is_heading: bool,
+    /// Outline level (0 = Heading 1 … 8), from the paragraph or its style; None outside the outline
+    #[serde(default)]
+    pub outline_level: Option<u32>,
     pub run_count: usize,
     pub align: String, // "left", "center", "right", "both"
     pub color: String, // hex without '#' e.g. "1E3A8A" or empty
@@ -932,6 +935,8 @@ mod shapes;
 pub use shapes::{ShapeStyle, TextBox};
 #[path = "insert_objects.rs"]
 mod insert_objects;
+#[path = "structure_edit.rs"]
+mod structure_edit;
 pub use image_edit::ImageUpdate;
 pub use insert_objects::{CellImage, NewCell, NewImage, NewTable};
 
@@ -952,6 +957,9 @@ pub struct NewParagraph {
     /// "left" | "center" | "right" | "both"
     #[serde(default)]
     pub align: Option<String>,
+    /// Word style: "Title" | "Heading1" | "Heading2" | "Heading3" (created if missing)
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 impl NewParagraph {
@@ -1199,7 +1207,10 @@ impl DocxModifier {
                 };
                 (name, current)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if parts.iter().any(|(name, _)| name == "word/styles.xml") {
+            self.reload_styles();
+        }
         UndoStep { parts, selection_before: step.selection_before, selection_after: step.selection_after }
     }
 
@@ -1387,6 +1398,8 @@ impl DocxModifier {
         if !edits.is_empty() {
             self.edit_body_paragraphs(&edits)?;
         }
+
+        self.apply_paragraph_styles(first, paragraphs)?;
 
         let last = first + paragraphs.len() - 1;
         Ok((first, (last, texts.last().map_or(0, |t| t.chars().count()))))
@@ -2741,6 +2754,7 @@ fn resolve_paragraph(
         text: full_text,
         style: style_key,
         is_heading,
+        outline_level: ppr.outline_level.filter(|l| *l < 9),
         run_count: runs.len(),
         align: ppr.align.clone().unwrap_or_else(|| "left".to_string()),
         color: mark.color.clone().unwrap_or_default(),

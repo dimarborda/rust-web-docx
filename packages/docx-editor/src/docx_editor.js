@@ -369,9 +369,7 @@ export class DocxEditor extends EventTarget {
     this.#require();
     const items = (Array.isArray(paragraphs) ? paragraphs : [paragraphs])
       .map(p => (typeof p === 'string' ? { text: p } : p))
-      .map(({ text = '', bold, italic, underline, fontSize, align }) => ({
-        text: String(text), bold, italic, underline, font_size: fontSize, align,
-      }));
+      .map(toNewParagraph);
     if (!items.length) return { first: -1, count: 0 };
 
     const pos = this.#insertionPoint(at);
@@ -466,6 +464,47 @@ export class DocxEditor extends EventTarget {
    * Lengths are CSS px at 100 % zoom. Legacy VML text boxes are drawn but not listed.
    * @returns {ImageInfo[]}
    */
+  /**
+   * Blocks of the body in order: paragraphs with their heading level (1 = Heading 1, null when
+   * not in the outline) and tables with the range of their cells' paragraphs
+   * @returns {Array<{kind: 'paragraph', paragraph: number, text: string, headingLevel: number|null} | {kind: 'table', first: number, last: number, rows: number, cols: number}>}
+   */
+  structure() {
+    if (!this.#session) return [];
+    return (this.#elements || []).flatMap(el => {
+      if (el.type === 'paragraph') {
+        const level = el.outline_level;
+        return [{ kind: 'paragraph', paragraph: el.index, text: el.text || '', headingLevel: level == null ? null : level + 1 }];
+      }
+      if (el.type === 'table') {
+        const indices = (el.rich_rows || []).flatMap(row => row.cells.flatMap(cell => (cell.paragraphs || []).map(p => p.index)));
+        if (!indices.length) return [];
+        const rows = (el.rich_rows || []).length;
+        const cols = Math.max(0, ...(el.rich_rows || []).map(row => row.cells.length));
+        return [{ kind: 'table', first: Math.min(...indices), last: Math.max(...indices), rows, cols }];
+      }
+      return [];
+    });
+  }
+
+  /**
+   * Replaces the blocks from paragraph `from` to `to` (both included, tables between them too)
+   * with new paragraphs, as one undo step; the caret goes after the last one. Throws when the
+   * range cuts a table or holds a section break.
+   * @returns {{first: number, count: number}}
+   */
+  replaceParagraphs({ from, to }, paragraphs) {
+    this.#require();
+    const items = (Array.isArray(paragraphs) ? paragraphs : [paragraphs])
+      .map(p => (typeof p === 'string' ? { text: p } : p))
+      .map(toNewParagraph);
+    if (!items.length) throw new Error('docx-editor: replaceParagraphs needs at least one paragraph');
+    const result = JSON.parse(this.#session.replace_paragraphs(from, to, JSON.stringify(items), this.#selectionJSON()));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { first: result.first, count: result.count };
+  }
+
   images() {
     if (!this.#session) return [];
     return JSON.parse(this.#session.list_images()).map(imageInfo);
@@ -908,6 +947,10 @@ export class DocxEditor extends EventTarget {
 
   /** Where `insertParagraphs` puts new content: the caret, or the start/end of the body */
   #insertionPoint(at) {
+    if (at && typeof at === 'object') {
+      if (!Number.isInteger(at.paragraph) || at.paragraph < 0) throw new Error('docx-editor: at.paragraph must be a paragraph index');
+      return { paragraph: at.paragraph, offset: Math.max(0, at.offset ?? 0) };
+    }
     if (at === 'cursor') {
       const selection = this.#canvasEditor.selection();
       if (selection) return selection.end;
@@ -1096,4 +1139,9 @@ async function toBytes(image) {
     return new TextEncoder().encode(decodeURIComponent(data));
   }
   throw new Error('docx-editor: insertImage needs a Uint8Array, ArrayBuffer, Blob or data: URL');
+}
+
+/** A paragraph for the engine (snake_case, optional Word style) */
+function toNewParagraph({ text = '', bold, italic, underline, fontSize, align, style }) {
+  return { text: String(text), bold, italic, underline, font_size: fontSize, align, style };
 }

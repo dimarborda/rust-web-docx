@@ -64,7 +64,8 @@ export interface DocxEditorLabels {
 export type PageSize = 'a4' | 'letter' | 'legal';
 
 /** `cursor` falls back to the end of the document when there is no caret */
-export type InsertPosition = 'cursor' | 'start' | 'end';
+/** Where new content goes: the caret, the start or end of the body, or an exact position */
+export type InsertPosition = 'cursor' | 'start' | 'end' | TextPosition;
 
 export interface NewParagraph {
   text: string;
@@ -74,7 +75,14 @@ export interface NewParagraph {
   /** Points */
   fontSize?: number;
   align?: Alignment;
+  /** Word style; created in the document when missing (gray tones, Word's sizes) */
+  style?: 'Title' | 'Heading1' | 'Heading2' | 'Heading3';
 }
+
+/** A block of the body, from `structure()` */
+export type DocumentBlock =
+  | { kind: 'paragraph'; paragraph: number; text: string; headingLevel: number | null }
+  | { kind: 'table'; first: number; last: number; rows: number; cols: number };
 
 /** A table cell with a picture (PNG, JPEG or GIF) and optional text below it */
 export interface NewTableImageCell {
@@ -295,6 +303,13 @@ export class DocxEditor extends EventTarget {
    */
   insertImage(image: Uint8Array | ArrayBuffer | Blob | string, options?: InsertImageOptions): Promise<ImageRef>;
 
+  /** Body blocks in order: paragraphs with their heading level and tables with their paragraph range */
+  structure(): DocumentBlock[];
+  /**
+   * Replaces the blocks from paragraph `from` to `to` (included, with the tables between them)
+   * as one undo step. Throws when the range cuts a table or holds a section break.
+   */
+  replaceParagraphs(range: { from: number; to: number }, paragraphs: string | Array<string | NewParagraph>): { first: number; count: number };
   /** Every picture, text box and shape of the body (table cells included) in document order */
   images(): ImageInfo[];
   /** The picture selected with the mouse or `selectImage()`, or null */
