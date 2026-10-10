@@ -67,8 +67,8 @@ impl TextBox {
     }
 }
 
-fn local_name(n: &[u8]) -> String {
-    std::str::from_utf8(n).unwrap_or("").rsplit(':').next().unwrap_or("").to_string()
+fn local_name(n: impl AsRef<[u8]>) -> String {
+    utf8(&n).rsplit(':').next().unwrap_or("").to_string()
 }
 
 /// Reads the paragraphs of the `w:txbxContent` whose start tag was just consumed
@@ -78,7 +78,7 @@ fn parse_txbx_content(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> Vec<Pa
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name = e.name().as_ref().to_vec();
+                let name = e.name().as_ref().to_string();
                 buf.clear();
                 if tag_is(&name, "p") {
                     paragraphs.push(parse_paragraph_with(reader, 0, styles, None));
@@ -494,7 +494,7 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
 
         // Templates and groups are not drawn
         if is_start && (local == "shapetype" || local == "group") {
-            let end = n.to_vec();
+            let end = n.to_string();
             let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
             continue;
         }
@@ -508,7 +508,7 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
         }
         let Some(current) = img.as_mut() else {
             if is_start {
-                let end = n.to_vec();
+                let end = n.to_string();
                 let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
             }
             continue;

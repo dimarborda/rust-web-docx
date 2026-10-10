@@ -469,7 +469,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             Ok(Event::Start(e)) => (e, true),
             Ok(Event::Empty(e)) => (e, false),
             Ok(Event::Text(t)) => {
-                if let (Some(kind), Ok(value)) = (text_kind, t.unescape()) {
+                if let (Some(kind), Ok(value)) = (text_kind, unescaped(&t)) {
                     let value = value.trim().to_string();
                     match (axis, kind) {
                         ('h', "offset") => img.h_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX,
@@ -514,7 +514,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
         }
         if is_start && ["wgp", "grpSp", "wpc", "lockedCanvas", "chart"].iter().any(|t| tag_is(n, t)) {
             // Groups, drawing canvases and charts are not drawn yet
-            let end = n.to_vec();
+            let end = n.to_string();
             buf.clear();
             let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
             img.shape = None;
@@ -536,7 +536,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
                 img.wrap = if img.behind_text { "behind" } else { "inFront" }.into();
             }
         } else if img.anchored && ["wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom"].iter().any(|t| tag_is(n, t)) {
-            let local = std::str::from_utf8(n).unwrap_or("").rsplit(':').next().unwrap_or("");
+            let local = utf8(n).rsplit(':').next().unwrap_or("");
             let kind = &local["wrap".len()..];
             let mut chars = kind.chars();
             img.wrap = chars.next().map(|c| c.to_ascii_lowercase().to_string() + chars.as_str()).unwrap_or_default();
@@ -566,7 +566,7 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             img.rel_id = get_attr_value(&e, "embed").unwrap_or_default();
         } else if is_start && tag_is(n, "txbxContent") {
             // Text boxes are not rendered yet; skip their content
-            let end = n.to_vec();
+            let end = n.to_string();
             let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
         }
         buf.clear();
@@ -714,6 +714,24 @@ fn header_footer_elements(
         }
     });
     elements
+}
+
+/// What a .docx (a ZIP archive) may expand to when it is opened. The defaults are far above
+/// any real document and keep a malicious file from exhausting the browser's memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZipLimits {
+    /// Entries in the archive
+    pub max_entries: usize,
+    /// Uncompressed size of one part (e.g. one picture or video), in bytes
+    pub max_part_bytes: u64,
+    /// Uncompressed size of all parts together, in bytes
+    pub max_total_bytes: u64,
+}
+
+impl Default for ZipLimits {
+    fn default() -> Self {
+        ZipLimits { max_entries: 10_000, max_part_bytes: 256 * 1024 * 1024, max_total_bytes: 512 * 1024 * 1024 }
+    }
 }
 
 /// Text box paragraphs are numbered from here on, apart from body and table paragraphs, so
@@ -1025,6 +1043,11 @@ const MAX_UNDO_STEPS: usize = 200;
 impl DocxModifier {
     /// Loads a docx from byte buffer
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        Self::from_bytes_with_limits(bytes, &ZipLimits::default())
+    }
+
+    /// Like `from_bytes`, with explicit limits on what the ZIP may expand to
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: &ZipLimits) -> Result<Self, String> {
         if bytes.len() < 4 {
             return Err("El archivo proporcionado está vacío o es demasiado pequeño.".to_string());
         }
@@ -1037,14 +1060,42 @@ impl DocxModifier {
         let mut files = HashMap::new();
         let mut original_order = Vec::new();
 
+        // A .docx is a ZIP: a tiny malicious file could expand to gigabytes (a "zip bomb").
+        // Sizes declared in the archive are not trusted: reading stops once a limit is passed.
+        if archive.len() > limits.max_entries {
+            return Err(format!(
+                "El archivo tiene demasiadas partes ({}; el máximo es {}).",
+                archive.len(),
+                limits.max_entries
+            ));
+        }
+        let mut total: u64 = 0;
         for i in 0..archive.len() {
             let mut file = archive
                 .by_index(i)
                 .map_err(|e| format!("Error al leer entrada ZIP {}: {}", i, e))?;
             let name = file.name().to_string();
-            let mut content = Vec::new();
-            file.read_to_end(&mut content)
+            let cap = limits.max_part_bytes.min(limits.max_total_bytes.saturating_sub(total));
+            let mut content = Vec::with_capacity(file.size().min(cap).min(16 * 1024 * 1024) as usize);
+            (&mut file)
+                .take(cap + 1)
+                .read_to_end(&mut content)
                 .map_err(|e| format!("Error al extraer '{}': {}", name, e))?;
+            if content.len() as u64 > cap {
+                return Err(if cap < limits.max_part_bytes {
+                    format!(
+                        "El documento ocupa más de {} MB al descomprimirse; no se abre por seguridad.",
+                        limits.max_total_bytes / (1024 * 1024)
+                    )
+                } else {
+                    format!(
+                        "La parte '{}' ocupa más de {} MB al descomprimirse; no se abre por seguridad.",
+                        name,
+                        limits.max_part_bytes / (1024 * 1024)
+                    )
+                });
+            }
+            total += content.len() as u64;
 
             files.insert(name.clone(), content);
             original_order.push(name);
@@ -2127,11 +2178,12 @@ fn extract_text_runs_quick_xml(xml: &str) -> String {
             }
             Ok(Event::Text(ref e)) => {
                 if in_t {
-                    if let Ok(unescaped) = e.unescape() {
+                    if let Ok(unescaped) = unescaped(e) {
                         text_parts.push(unescaped.to_string());
                     }
                 }
             }
+            Ok(Event::GeneralRef(ref r)) if in_t => text_parts.push(general_ref_text(r)),
             Ok(Event::End(ref e)) => {
                 if tag_is(e.name().as_ref(), "t") {
                     in_t = false;
@@ -2147,20 +2199,41 @@ fn extract_text_runs_quick_xml(xml: &str) -> String {
     text_parts.join(" ")
 }
 
-pub(crate) fn tag_is(tag_bytes: &[u8], name: &str) -> bool {
-    if let Ok(s) = std::str::from_utf8(tag_bytes) {
+/// Whether an element name (with or without a namespace prefix) is `name`
+pub(crate) fn tag_is(tag: impl AsRef<[u8]>, name: &str) -> bool {
+    if let Ok(s) = std::str::from_utf8(tag.as_ref()) {
         s == name || s.ends_with(&format!(":{}", name))
     } else {
         false
     }
 }
 
+/// Text of a text event with XML line endings normalized. Since quick-xml 0.38 entities
+/// (`&amp;`, `&#233;`) arrive as separate `Event::GeneralRef` events: see `general_ref_text`.
+/// An element or attribute name as text, whether given as text or bytes
+pub(crate) fn utf8<T: AsRef<[u8]> + ?Sized>(name: &T) -> &str {
+    std::str::from_utf8(name.as_ref()).unwrap_or("")
+}
+
+pub(crate) fn unescaped<'a>(t: &BytesText<'a>) -> Result<std::borrow::Cow<'a, str>, String> {
+    Ok(t.xml10_content())
+}
+
+/// The character(s) a general reference stands for: `&amp;` → "&", `&#233;` → "é"
+pub(crate) fn general_ref_text(r: &quick_xml::events::BytesRef) -> String {
+    if r.is_char_ref() {
+        r.resolve_char_ref().ok().flatten().map(|c| c.to_string()).unwrap_or_default()
+    } else {
+        quick_xml::escape::resolve_predefined_entity(r).map(str::to_string).unwrap_or_default()
+    }
+}
+
 pub(crate) fn get_attr_value(e: &BytesStart, local_name: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
         let key = attr.key.as_ref();
-        let key_str = std::str::from_utf8(key).unwrap_or("");
+        let key_str = utf8(key);
         if key_str == local_name || key_str.ends_with(&format!(":{}", local_name)) {
-            return attr.unescape_value().ok().map(|s| s.to_string());
+            return attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok().map(|s| s.to_string());
         }
     }
     None
@@ -2308,7 +2381,7 @@ fn section_types(xml: &str) -> Vec<String> {
             Ok(Event::End(ref e)) if tag_is(e.name().as_ref(), "sectPr") => in_sect = false,
             // Tracked section changes hold the old properties
             Ok(Event::Start(ref e)) if tag_is(e.name().as_ref(), "sectPrChange") => {
-                let end = e.name().as_ref().to_vec();
+                let end = e.name().as_ref().to_string();
                 let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -2365,13 +2438,22 @@ pub fn parse_paragraph_with(
             Ok(Event::Empty(e)) => (e, false),
             Ok(Event::Text(ref t)) => {
                 if in_t {
-                    if let Ok(s) = t.unescape() {
+                    if let Ok(s) = unescaped(t) {
                         run.text.push_str(&s);
                     }
                 } else if in_instr {
-                    if let Ok(s) = t.unescape() {
+                    if let Ok(s) = unescaped(t) {
                         field_instr.push_str(&s);
                     }
+                }
+                buf.clear();
+                continue;
+            }
+            Ok(Event::GeneralRef(ref r)) => {
+                if in_t {
+                    run.text.push_str(&general_ref_text(r));
+                } else if in_instr {
+                    field_instr.push_str(&general_ref_text(r));
                 }
                 buf.clear();
                 continue;
@@ -2429,7 +2511,7 @@ pub fn parse_paragraph_with(
         }
         // The fallback of mc:AlternateContent repeats the drawing above in VML
         if is_start && tag_is(n, "Fallback") {
-            let end_name = n.to_vec();
+            let end_name = n.to_string();
             buf.clear();
             let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut Vec::new());
             continue;
@@ -2450,7 +2532,7 @@ pub fn parse_paragraph_with(
                 .iter()
                 .any(|t| tag_is(n, t))
         {
-            let end_name = n.to_vec();
+            let end_name = n.to_string();
             let mut skip_buf = Vec::new();
             let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
             buf.clear();
@@ -2501,7 +2583,7 @@ pub fn parse_paragraph_with(
             if tag_is(n, "sectPr") {
                 ends_section = true;
                 if is_start {
-                    let end_name = n.to_vec();
+                    let end_name = n.to_string();
                     let mut skip_buf = Vec::new();
                     let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
                 }
@@ -3104,7 +3186,8 @@ const TEXT_FLOW_BREAKS: &[&str] = &[
     "noBreakHyphen", "softHyphen", "delText", "txbxContent", "tc",
 ];
 
-fn is_text_flow_break(tag: &[u8]) -> bool {
+fn is_text_flow_break(tag: impl AsRef<[u8]>) -> bool {
+    let tag = tag.as_ref();
     TEXT_FLOW_BREAKS.iter().any(|name| tag_is(tag, name))
 }
 
@@ -3139,12 +3222,17 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
             }
             Event::Text(t) => {
                 if let Some((_, ref mut text)) = open_t {
-                    text.push_str(&t.unescape().map_err(|e| e.to_string())?);
+                    text.push_str(&unescaped(t).map_err(|e| e.to_string())?);
                 }
             }
             Event::CData(c) => {
                 if let Some((_, ref mut text)) = open_t {
-                    text.push_str(&String::from_utf8_lossy(c));
+                    text.push_str(c);
+                }
+            }
+            Event::GeneralRef(r) => {
+                if let Some((_, ref mut text)) = open_t {
+                    text.push_str(&general_ref_text(r));
                 }
             }
             Event::End(e) if open_t.is_some() && tag_is(e.name().as_ref(), "t") => {
@@ -3230,9 +3318,9 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
     let mut i = 0;
     while i < events.len() {
         if let (Some(node), Event::Start(e)) = (modified.get(&i), &events[i]) {
-            let mut t_start = BytesStart::new(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+            let mut t_start = BytesStart::new(utf8(e.name().as_ref()).to_string());
             for attr in e.attributes().flatten() {
-                if attr.key.as_ref() != b"xml:space" {
+                if attr.key.as_ref() != "xml:space" {
                     t_start.push_attribute(attr);
                 }
             }

@@ -1,4 +1,5 @@
-# Builds the Rust → WebAssembly engine and the Vite app, then publishes it to Cloudflare
+# Tests and audits the dependencies, builds the Rust → WebAssembly engine and the Vite app,
+# then publishes it to Cloudflare
 # (Workers static assets, configured in wrangler.toml). Needs two repository secrets:
 # CLOUDFLARE_API_TOKEN (template "Edit Cloudflare Workers") and CLOUDFLARE_ACCOUNT_ID.
 name: Deploy to Cloudflare
@@ -30,12 +31,24 @@ jobs:
       - name: Rust tests
         run: cargo test
 
+      # Known vulnerabilities in the Rust dependencies (RustSec advisory database) stop the deploy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
       - run: npm ci
+
+      # High or critical advisories in the editor package's runtime dependencies stop the deploy
+      - name: Audit npm dependencies
+        run: npm audit --omit=dev --audit-level=high -w packages/docx-editor
 
       - name: Build (wasm-pack + Vite)
         run: npm run build

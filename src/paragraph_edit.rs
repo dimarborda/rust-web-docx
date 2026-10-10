@@ -7,7 +7,7 @@
 //! (highlight, rStyle, lang, ...), and everything that is not text — hyperlinks,
 //! fields, bookmarks, comments, drawings — stays exactly where it was.
 
-use crate::docx_parser::{break_char, parse_paragraph_with, tag_is, ParagraphInfo, RunInfo, PAGE_BREAK};
+use crate::docx_parser::{break_char, general_ref_text, parse_paragraph_with, tag_is, unescaped, ParagraphInfo, RunInfo, PAGE_BREAK};
 use crate::styles::StyleSheet;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -153,7 +153,7 @@ pub(crate) fn element_end(tokens: &[Token], i: usize) -> usize {
 }
 
 /// Qualified name of an element token, if it is one
-fn element_name<'t>(tok: &'t Token) -> Option<&'t [u8]> {
+fn element_name<'t>(tok: &'t Token) -> Option<&'t str> {
     match &tok.ev {
         Event::Start(e) | Event::Empty(e) => Some(e.name().into_inner()),
         _ => None,
@@ -164,14 +164,14 @@ fn is_element(tok: &Token, local: &str) -> bool {
     element_name(tok).is_some_and(|n| tag_is(n, local))
 }
 
-fn local_name_of(name: &[u8]) -> &str {
-    let s = std::str::from_utf8(name).unwrap_or("");
+fn local_name_of(name: &str) -> &str {
+    let s = name;
     s.rsplit(':').next().unwrap_or(s)
 }
 
 /// Namespace prefix of an element name ("w" for "w:r"), used to name generated elements
-fn prefix_of(name: &[u8]) -> String {
-    let s = std::str::from_utf8(name).unwrap_or("");
+fn prefix_of(name: &str) -> String {
+    let s = name;
     s.split_once(':').map(|(p, _)| p.to_string()).unwrap_or_default()
 }
 
@@ -359,7 +359,7 @@ fn last_text_run_rpr(p_xml: &str) -> Result<Option<String>, String> {
         if matches!(tokens[i].ev, Event::Start(_)) && is_element(&tokens[i], "r") {
             let end = element_end(&tokens, i);
             let run = &tokens[i + 1..end];
-            let has_text = run.iter().any(|t| matches!(t.ev, Event::Text(_)));
+            let has_text = run.iter().any(|t| matches!(t.ev, Event::Text(_) | Event::GeneralRef(_)));
             if has_text {
                 last = run
                     .iter()
@@ -403,7 +403,7 @@ struct ParagraphParts {
 
 fn paragraph_parts(tokens: &[Token], xml: &str) -> Result<ParagraphParts, String> {
     let name = element_name(tokens.first().ok_or("Párrafo vacío")?).ok_or("El fragmento no es un párrafo.")?;
-    let end = format!("</{}>", String::from_utf8_lossy(name));
+    let end = format!("</{}>", name);
     if matches!(tokens[0].ev, Event::Empty(_)) {
         return Ok(ParagraphParts { start: open_tag_of(tokens, xml, 0, 0), ppr: String::new(), content: String::new(), end });
     }
@@ -469,13 +469,13 @@ fn strip_unique_markers(p_xml: &str) -> Result<String, String> {
         let tok = &tokens[i];
         if i == 0 {
             if let Event::Start(e) | Event::Empty(e) = &tok.ev {
-                let mut tag = format!("<{}", String::from_utf8_lossy(e.name().as_ref()));
+                let mut tag = format!("<{}", e.name().as_ref());
                 for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                    let key = attr.key.as_ref().to_string();
                     if key.ends_with(":paraId") || key.ends_with(":textId") {
                         continue;
                     }
-                    tag.push_str(&format!(" {}=\"{}\"", key, String::from_utf8_lossy(&attr.value)));
+                    tag.push_str(&format!(" {}=\"{}\"", key, attr.value));
                 }
                 tag.push_str(if matches!(tok.ev, Event::Empty(_)) { "/>" } else { ">" });
                 out.push_str(&tag);
@@ -584,8 +584,9 @@ fn parse_run(tokens: &[Token], start: usize, end: usize) -> Result<RunModel, Str
                 let mut text = String::new();
                 for tok in &tokens[j + 1..child_end] {
                     match &tok.ev {
-                        Event::Text(t) => text.push_str(&t.unescape().map_err(|e| e.to_string())?),
-                        Event::CData(c) => text.push_str(&String::from_utf8_lossy(c)),
+                        Event::Text(t) => text.push_str(&unescaped(t).map_err(|e| e.to_string())?),
+                        Event::CData(c) => text.push_str(c),
+                        Event::GeneralRef(r) => text.push_str(&general_ref_text(r)),
                         _ => {}
                     }
                 }
@@ -684,7 +685,7 @@ fn apply_change(
         Some(Event::Empty(e)) if tag_is(e.name().as_ref(), "p") => true,
         _ => return Err("El fragmento no es un párrafo.".to_string()),
     };
-    let p_name = element_name(&tokens[0]).unwrap_or(b"w:p");
+    let p_name = element_name(&tokens[0]).unwrap_or("w:p");
     let p_prefix = prefix_of(p_name);
     let content_end = if p_is_empty_tag { 1 } else { tokens.len() - 1 };
 
@@ -891,7 +892,7 @@ fn apply_change(
     }
 
     if p_is_empty_tag {
-        out.push_str(&format!("</{}>", String::from_utf8_lossy(p_name)));
+        out.push_str(&format!("</{}>", p_name));
     } else {
         out.push_str(raw(tokens.len() - 1, tokens.len() - 1));
     }
@@ -961,7 +962,7 @@ fn open_tag_of(tokens: &[Token], xml: &str, first: usize, last: usize) -> String
 }
 
 fn rebuild_ppr_with_jc(tokens: &[Token], xml: &str, first: usize, last: usize, align: &str) -> String {
-    let name = element_name(&tokens[first]).unwrap_or(b"w:pPr");
+    let name = element_name(&tokens[first]).unwrap_or("w:pPr");
     let prefix = prefix_of(name);
     let mut kids = children(tokens, xml, first, last);
     kids.retain(|(n, _)| n != "jc");
@@ -971,7 +972,7 @@ fn rebuild_ppr_with_jc(tokens: &[Token], xml: &str, first: usize, last: usize, a
     ));
     sort_children(&mut kids, PPR_ORDER);
     let body: String = kids.into_iter().map(|(_, x)| x).collect();
-    format!("{}{}</{}>", open_tag_of(tokens, xml, first, last), body, String::from_utf8_lossy(name))
+    format!("{}{}</{}>", open_tag_of(tokens, xml, first, last), body, name)
 }
 
 /// The `w:rPr` inside `w:pPr` (paragraph mark formatting) as a list of children
@@ -1032,10 +1033,10 @@ fn emit_run(out: &mut String, tokens: &[Token], xml: &str, run: &RunModel, items
         // Every character of this run was deleted and it held nothing else
         return;
     }
-    let run_name = element_name(&tokens[run.start]).unwrap_or(b"w:r");
+    let run_name = element_name(&tokens[run.start]).unwrap_or("w:r");
     let prefix = prefix_of(run_name);
     let open = &xml[tokens[run.start].span.clone()];
-    let close = format!("</{}>", String::from_utf8_lossy(run_name));
+    let close = format!("</{}>", run_name);
     let original_rpr = run.rpr.map(|(a, b)| &xml[tokens[a].span.start..tokens[b].span.end]);
 
     for group in group_items(items) {

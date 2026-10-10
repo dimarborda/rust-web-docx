@@ -374,7 +374,7 @@ impl StyleSheet {
 
 fn local_name(e: &BytesStart) -> String {
     let name = e.name();
-    let s = std::str::from_utf8(name.as_ref()).unwrap_or("");
+    let s = crate::docx_parser::utf8(name.as_ref());
     s.rsplit(':').next().unwrap_or(s).to_string()
 }
 
@@ -521,7 +521,7 @@ fn parse_theme_fonts(xml: &str) -> ThemeFonts {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let n = e.name();
-                let local = std::str::from_utf8(n.as_ref()).unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
+                let local = crate::docx_parser::utf8(n.as_ref()).rsplit(':').next().unwrap_or("").to_string();
                 if local == "clrScheme" {
                     in_colors = true;
                 } else if in_colors && scheme_slot.is_none() && local != "srgbClr" && local != "sysClr" {

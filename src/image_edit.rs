@@ -149,7 +149,7 @@ pub(crate) fn drawing_spans(p_xml: &str) -> Result<Vec<DrawingSpan>, String> {
                     i = end + 1;
                     continue;
                 }
-                let local = std::str::from_utf8(n).unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
+                let local = utf8(n).rsplit(':').next().unwrap_or("").to_string();
                 stack.push((local, i));
             }
             Event::End(_) => {
@@ -357,7 +357,7 @@ fn drawing_parts(drawing: &str) -> Result<DrawingParts<'_>, String> {
         let raw = &drawing[tokens[i].span.start..tokens[end].span.end];
         let name = e.name();
         let n = name.as_ref();
-        let local = std::str::from_utf8(n).unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
+        let local = utf8(n).rsplit(':').next().unwrap_or("").to_string();
         match local.as_str() {
             "effectExtent" => parts.effect_extent = Some(raw),
             "wrapTight" | "wrapThrough" => {
@@ -418,10 +418,10 @@ fn rebuild_drawing(drawing: &str, current: &ImageRef, img: &ImageRef, relative_h
                 .attributes()
                 .flatten()
                 .filter_map(|a| {
-                    let key = std::str::from_utf8(a.key.as_ref()).ok()?.to_string();
+                    let key = utf8(a.key.as_ref()).to_string();
                     let local = key.rsplit(':').next().unwrap_or("");
                     let replaced = ["distT", "distB", "distL", "distR", "behindDoc", "simplePos"].contains(&local);
-                    let value = a.unescape_value().ok()?;
+                    let value = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok()?;
                     (!replaced).then(|| format!(r#"{}="{}""#, key, escape_xml(&value)))
                 })
                 .collect::<Vec<_>>(),
