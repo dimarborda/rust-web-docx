@@ -70,9 +70,10 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
 | `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
 | `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio, al final o en una posición exacta (`at: { paragraph, offset }`), como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align, style }`; `style` (`'Title'`, `'Heading1'`, `'Heading2'`, `'Heading3'`) aplica el estilo de Word y lo crea si el documento no lo tiene. Los párrafos sin `style` insertados antes de un título no heredan su estilo |
-| `structure()` | Bloques del cuerpo en orden: `{ kind: 'paragraph', paragraph, text, headingLevel }` (1 = Título 1; `null` fuera del esquema) y `{ kind: 'table', first, last, rows, cols }` (párrafos de sus celdas). Base para trabajar por secciones |
+| `structure()` | Bloques del cuerpo en orden: `{ kind: 'paragraph', paragraph, text, headingLevel }` (1 = Título 1; `null` fuera del esquema) y `{ kind: 'table', index, first, last, rows, cols }` (párrafos de sus celdas; `index` es el de `tables()`). Base para trabajar por secciones |
 | `replaceParagraphs({ from, to }, paragraphs)` | Reemplaza los bloques del párrafo `from` al `to` (incluidas las tablas entre ellos) como un solo paso de deshacer. Falla si el rango corta una tabla o incluye un salto de sección |
 | `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. Cada celda es un texto (`\n` = salto de línea en la celda) o `{ text, image, width, height, alt }` con una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer` o URL `data:`) que ocupa el ancho de la columna salvo que indiques `width`/`height`, con el texto debajo; `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
+| `tables()` / `setTableCell(table, row, col, text)` / `insertTableRows(table, at, rows, { copyFormatFrom })` / `deleteTableRows(table, from, count)` | Completar tablas que ya están en el documento: escribir celdas y agregar o quitar filas copiando el formato de una fila existente, cada llamada como un paso de deshacer (ver [Tablas existentes](#tablas-existentes)) |
 | `insertImage(image, { at, width, height, align, alt, wrap, wrapSide, horizontal, vertical, distance })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. En línea (predeterminado) va en su propio párrafo; con otro `wrap` queda flotante, anclada al párrafo del cursor (ver [Imágenes](#imágenes)). Devuelve una promesa con `{ paragraph, index }` |
 | `images()` / `selectedImage` / `selectImage(ref)` | Imágenes del documento y la seleccionada (ver [Imágenes](#imágenes)) |
 | `updateImage(ref, changes)` / `resizeImage` / `moveImage` / `setImageWrap` / `alignImage` / `deleteImage` | Tamaño, posición y ajuste del texto de una imagen, cada cambio como un paso de deshacer |
@@ -95,6 +96,35 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
 
 Incluye tipos de TypeScript.
+
+### Tablas existentes
+
+Para completar una tabla de una plantilla (por ejemplo, las filas de una matriz de riesgos), ubícala con `tables()` y escribe en ella:
+
+```js
+// Cada tabla del cuerpo: { index, rows, cols, header, first, last }
+const matriz = editor.tables().find(t => t.header[0] === 'Riesgo');
+if (!matriz) throw new Error('La plantilla no tiene la matriz de riesgos');
+
+// Dos filas al final, con el formato de la última fila (bordes, sombreado, fuente…)
+const { first } = editor.insertTableRows(matriz.index, matriz.rows, [
+  ['Caída del servidor', 'Media', 'Alto'],
+  ['Fuga de datos', 'Baja', 'Crítico\nrevisar cada mes'],
+]);
+
+// Corregir una celda: conserva el formato del texto que había
+editor.setTableCell(matriz.index, first, 1, 'Alta');
+
+editor.undo();   // deshace solo la corrección
+editor.undo();   // deshace las dos filas de una vez
+```
+
+- **Índices.** Las tablas se numeran desde 0 en el orden del documento, sin contar las anidadas ni las de cuadros de texto. Las filas y columnas también empiezan en 0. Las columnas son las de la cuadrícula: a una celda combinada horizontalmente se le escribe por su primera columna. `first`/`last` son el rango de párrafos de sus celdas, con la misma numeración de `structure()` y de `selection`.
+- **`setTableCell`** reemplaza el texto de la celda y conserva sus propiedades de párrafo y el formato de su primer *run* (fuente, tamaño, color, negrita). `\n` es un salto de línea dentro de la celda.
+- **`insertTableRows(table, at, rows, { copyFormatFrom })`** inserta antes de la fila `at`: `0` al principio, `rows` (la cantidad de filas) al final. Cada fila nueva copia la fila `copyFormatFrom` (por defecto la anterior a `at`, o la siguiente si insertas al principio): alto, bordes, sombreado, ancho de celdas, propiedades de párrafo y formato del primer *run*. Las filas con menos valores se completan con celdas vacías, que conservan el formato para lo que se escriba después; las filas con más valores que celdas producen un error. Devuelve `{ first, count }`: la primera fila nueva y cuántas se insertaron. Una fila de encabezado repetido solo se copia como encabezado si la insertas al principio. Ojo al insertar justo debajo del encabezado: la fila anterior es el encabezado y se copiaría su sombreado; pasa `copyFormatFrom` con una fila de datos. Lo mismo si las filas vacías de la plantilla tienen texto de relleno en gris o cursiva: copia una fila ya completada.
+- **`deleteTableRows(table, from, count)`** elimina filas; la tabla no puede quedar sin filas (para quitarla entera usa `replaceParagraphs` con su rango `first`–`last`).
+- Cada llamada es un solo paso de deshacer, dispara `change`, vuelve a dibujar el documento y funciona también en solo lectura.
+- Lanzan un `Error` claro, sin modificar nada, si un índice no existe, si la celda continúa una combinación vertical (el mensaje dice en qué fila escribir), si la fila que se copia o la posición tienen celdas combinadas verticalmente, o si la celda tiene una tabla anidada.
 
 ### PDF
 

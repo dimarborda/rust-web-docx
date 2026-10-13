@@ -53,6 +53,10 @@ jobs:
       - name: Build (wasm-pack + Vite)
         run: npm run build
 
+      # Engine bindings and argument checks of the JS layer (needs the wasm built above)
+      - name: JS tests
+        run: npm test -w packages/docx-editor
+
       - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:

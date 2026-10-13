@@ -3,6 +3,7 @@
 // canvases, wires the caret/selection editor and exposes a small API plus DOM events.
 import { DocxSession, engineReady, initEngine } from './engine.js';
 import { createCanvasEditor } from './canvas_editor.js';
+import { checkIndex, engineCall, tableRowsPayload } from './table_api.js';
 import { onFontsChanged } from './fonts_registry.js';
 import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
 
@@ -467,10 +468,11 @@ export class DocxEditor extends EventTarget {
   /**
    * Blocks of the body in order: paragraphs with their heading level (1 = Heading 1, null when
    * not in the outline) and tables with the range of their cells' paragraphs
-   * @returns {Array<{kind: 'paragraph', paragraph: number, text: string, headingLevel: number|null} | {kind: 'table', first: number, last: number, rows: number, cols: number}>}
+   * @returns {Array<{kind: 'paragraph', paragraph: number, text: string, headingLevel: number|null} | {kind: 'table', index: number|null, first: number, last: number, rows: number, cols: number}>}
    */
   structure() {
     if (!this.#session) return [];
+    const tableIndex = new Map(this.tables().map(t => [t.first, t.index]));
     return (this.#elements || []).flatMap(el => {
       if (el.type === 'paragraph') {
         const level = el.outline_level;
@@ -481,10 +483,69 @@ export class DocxEditor extends EventTarget {
         if (!indices.length) return [];
         const rows = (el.rich_rows || []).length;
         const cols = Math.max(0, ...(el.rich_rows || []).map(row => row.cells.length));
-        return [{ kind: 'table', first: Math.min(...indices), last: Math.max(...indices), rows, cols }];
+        const first = Math.min(...indices);
+        const index = tableIndex.get(first) ?? null;
+        return [{ kind: 'table', index, first, last: Math.max(...indices), rows, cols }];
       }
       return [];
     });
+  }
+
+  // ---------- Existing tables ----------
+
+  /**
+   * Tables of the body in order (tables nested in cells or text boxes are not listed). `index`
+   * is what `setTableCell`, `insertTableRows` and `deleteTableRows` take; `cols` counts grid
+   * columns; `header` is the text of the first row by column; `first` / `last` are the range
+   * of the cells' paragraphs (the same numbering as `structure()` and `selection`).
+   * @returns {Array<{index: number, rows: number, cols: number, header: string[], first: number, last: number}>}
+   */
+  tables() {
+    if (!this.#session) return [];
+    return JSON.parse(this.#session.tables_json());
+  }
+
+  /**
+   * Replaces the text of a cell as one undo step, keeping the cell's paragraph properties and
+   * the formatting of its first run ("\n" = line break inside the cell). A cell merged across
+   * columns is written through its first column; a cell continuing a vertical merge is refused.
+   */
+  setTableCell(table, row, col, text) {
+    this.#require();
+    checkIndex('setTableCell', { table, row, col });
+    const value = text == null ? '' : String(text).replace(/\r\n?/g, '\n');
+    engineCall(() => this.#session.set_table_cell(table, row, col, value, this.#selectionJSON()));
+    this.#changed();
+  }
+
+  /**
+   * Inserts rows before row `at` as one undo step (`at` = 0: at the top; `at` = row count: at
+   * the end). Each new row copies the formatting of row `copyFormatFrom` (borders, shading,
+   * cell widths, paragraph properties and first run); by default the row before `at`, or the
+   * next one at the top. Short rows are completed with empty cells.
+   * @param {number} table
+   * @param {number} at
+   * @param {Array<Array<string>>} rows cell texts ("\n" = line break)
+   * @param {{copyFormatFrom?: number}} [options]
+   * @returns {{first: number, count: number}} the first new row and how many were inserted
+   */
+  insertTableRows(table, at, rows, { copyFormatFrom } = {}) {
+    this.#require();
+    checkIndex('insertTableRows', { table, at, ...(copyFormatFrom == null ? {} : { copyFormatFrom }) });
+    const payload = tableRowsPayload(rows);
+    const result = JSON.parse(engineCall(() => this.#session.insert_table_rows(
+      table, at, JSON.stringify(payload), copyFormatFrom ?? undefined, this.#selectionJSON(),
+    )));
+    this.#changed();
+    return { first: result.first, count: result.count };
+  }
+
+  /** Deletes `count` rows from row `from` as one undo step; a table cannot be left without rows */
+  deleteTableRows(table, from, count) {
+    this.#require();
+    checkIndex('deleteTableRows', { table, from, count });
+    engineCall(() => this.#session.delete_table_rows(table, from, count, this.#selectionJSON()));
+    this.#changed();
   }
 
   /**

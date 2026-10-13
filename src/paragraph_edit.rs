@@ -153,14 +153,14 @@ pub(crate) fn element_end(tokens: &[Token], i: usize) -> usize {
 }
 
 /// Qualified name of an element token, if it is one
-fn element_name<'t>(tok: &'t Token) -> Option<&'t str> {
+pub(crate) fn element_name<'t>(tok: &'t Token) -> Option<&'t str> {
     match &tok.ev {
         Event::Start(e) | Event::Empty(e) => Some(e.name().into_inner()),
         _ => None,
     }
 }
 
-fn is_element(tok: &Token, local: &str) -> bool {
+pub(crate) fn is_element(tok: &Token, local: &str) -> bool {
     element_name(tok).is_some_and(|n| tag_is(n, local))
 }
 
@@ -170,7 +170,7 @@ fn local_name_of(name: &str) -> &str {
 }
 
 /// Namespace prefix of an element name ("w" for "w:r"), used to name generated elements
-fn prefix_of(name: &str) -> String {
+pub(crate) fn prefix_of(name: &str) -> String {
     let s = name;
     s.split_once(':').map(|(p, _)| p.to_string()).unwrap_or_default()
 }

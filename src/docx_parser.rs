@@ -937,6 +937,9 @@ pub use shapes::{ShapeStyle, TextBox};
 mod insert_objects;
 #[path = "structure_edit.rs"]
 mod structure_edit;
+#[path = "table_edit.rs"]
+mod table_edit;
+pub use table_edit::TableSummary;
 pub use image_edit::ImageUpdate;
 pub use insert_objects::{CellImage, NewCell, NewImage, NewTable};
 
@@ -1701,6 +1704,15 @@ impl DocxModifier {
     ) -> Result<bool, String> {
         let mut xml = self.get_file_string("word/document.xml")?;
         let ranges = table_cell_paragraph_ranges(&xml, table_index, row, col)?;
+        self.replace_cell_text(&mut xml, &ranges, new_text)?;
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        Ok(true)
+    }
+
+    /// Replaces the text of a cell whose paragraphs are `ranges` (byte ranges of `xml`), keeping
+    /// paragraph properties and run formatting. Paragraph boundaries outside the edited region
+    /// survive; new line breaks become `<w:br/>`.
+    fn replace_cell_text(&self, xml: &mut String, ranges: &[std::ops::Range<usize>], new_text: &str) -> Result<(), String> {
         let old_lens: Vec<usize> = ranges
             .iter()
             .map(|r| parse_paragraph_fragment(&xml[r.clone()], &self.styles).text.chars().count())
@@ -1756,8 +1768,7 @@ impl DocxModifier {
         for (range, replacement) in edits {
             xml.replace_range(range, &replacement);
         }
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
-        Ok(true)
+        Ok(())
     }
 
     /// Appends an empty table (header row from `headers`) at the end of the document

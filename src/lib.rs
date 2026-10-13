@@ -692,6 +692,68 @@ impl DocxSession {
             .map_err(|e| JsValue::from_str(&e))
     }
 
+    /// Body tables: `[{ "index", "rows", "cols", "header": [..], "first", "last" }]`
+    /// (see `DocxModifier::table_summaries`)
+    #[wasm_bindgen]
+    pub fn tables_json(&self) -> Result<String, JsValue> {
+        let tables = self.modifier.table_summaries().map_err(|e| JsValue::from_str(&e))?;
+        to_json(&tables)
+    }
+
+    /// Writes a cell of an existing table as one undo step (see `DocxModifier::set_table_cell`)
+    #[wasm_bindgen]
+    pub fn set_table_cell(
+        &mut self,
+        table: usize,
+        row: usize,
+        col: usize,
+        text: &str,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
+        self.modifier.checkpoint(selection_before.clone());
+        self.modifier.set_table_cell(table, row, col, text).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        Ok(())
+    }
+
+    /// Inserts rows into an existing table as one undo step (see
+    /// `DocxModifier::insert_table_rows`). `rows_json`: `[["A", "1"], ["B", "2"]]`.
+    /// Returns `{ "first": row, "count": n }`.
+    #[wasm_bindgen]
+    pub fn insert_table_rows(
+        &mut self,
+        table: usize,
+        at: usize,
+        rows_json: &str,
+        copy_format_from: Option<usize>,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let rows: Vec<Vec<String>> = serde_json::from_str(rows_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before.clone());
+        let first = self
+            .modifier
+            .insert_table_rows(table, at, &rows, copy_format_from)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        to_json(&serde_json::json!({ "first": first, "count": rows.len() }))
+    }
+
+    /// Deletes rows of an existing table as one undo step (see `DocxModifier::delete_table_rows`)
+    #[wasm_bindgen]
+    pub fn delete_table_rows(
+        &mut self,
+        table: usize,
+        from: usize,
+        count: usize,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
+        self.modifier.checkpoint(selection_before.clone());
+        self.modifier.delete_table_rows(table, from, count).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        Ok(())
+    }
+
     /// Inserts a new table into document
     #[wasm_bindgen]
     pub fn add_table(&mut self, rows: usize, cols: usize, headers_json: &str) -> Result<bool, JsValue> {

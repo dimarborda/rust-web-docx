@@ -82,7 +82,29 @@ export interface NewParagraph {
 /** A block of the body, from `structure()` */
 export type DocumentBlock =
   | { kind: 'paragraph'; paragraph: number; text: string; headingLevel: number | null }
-  | { kind: 'table'; first: number; last: number; rows: number; cols: number };
+  | {
+      kind: 'table';
+      /** Index for `setTableCell` / `insertTableRows` / `deleteTableRows` (see `tables()`) */
+      index: number | null;
+      first: number;
+      last: number;
+      rows: number;
+      cols: number;
+    };
+
+/** A table of the body, from `tables()` */
+export interface TableInfo {
+  /** What `setTableCell`, `insertTableRows` and `deleteTableRows` take */
+  index: number;
+  rows: number;
+  /** Grid columns (a cell merged across columns counts every column it covers) */
+  cols: number;
+  /** Text of the first row by column ("" under the continuation of a merged cell) */
+  header: string[];
+  /** First and last paragraph of the cells: same numbering as `structure()` and `TextPosition` */
+  first: number;
+  last: number;
+}
 
 /** A table cell with a picture (PNG, JPEG or GIF) and optional text below it */
 export interface NewTableImageCell {
@@ -310,6 +332,41 @@ export class DocxEditor extends EventTarget {
    * as one undo step. Throws when the range cuts a table or holds a section break.
    */
   replaceParagraphs(range: { from: number; to: number }, paragraphs: string | Array<string | NewParagraph>): { first: number; count: number };
+  /**
+   * Tables of the body in order, with their size, first row text and paragraph range. Tables
+   * nested in cells or text boxes are not listed.
+   */
+  tables(): TableInfo[];
+  /**
+   * Replaces the text of a cell of an existing table as one undo step, keeping the cell's
+   * paragraph properties and the formatting of its first run (font, size, color, bold).
+   * "\n" is a line break inside the cell. `col` is a grid column: a cell merged across columns
+   * is written through its first column. Throws, without changing anything, on indices out of
+   * range, a cell continuing a vertical merge or a cell holding a nested table.
+   * Works in read-only mode; fires `change`.
+   */
+  setTableCell(table: number, row: number, col: number, text: string): void;
+  /**
+   * Inserts rows into an existing table as one undo step: `at` = 0 before the first row,
+   * `at` = row count at the end. Each new row copies the borders, shading, cell widths,
+   * paragraph properties and first run formatting of row `copyFormatFrom` (default: the row
+   * before `at`, or the next one at the top). Short rows are completed with empty cells; rows
+   * with more values than cells throw. A repeated header row is copied as a header only at
+   * the top. Throws, without changing anything, on indices out of range or when the template
+   * row or the position involves vertically merged cells.
+   * @returns the index of the first new row and how many were inserted
+   */
+  insertTableRows(
+    table: number,
+    at: number,
+    rows: Array<Array<string>>,
+    options?: { copyFormatFrom?: number },
+  ): { first: number; count: number };
+  /**
+   * Deletes `count` rows from row `from` as one undo step. Throws when the table would be left
+   * without rows, on indices out of range or when the range cuts a vertical merge.
+   */
+  deleteTableRows(table: number, from: number, count: number): void;
   /** Every picture, text box and shape of the body (table cells included) in document order */
   images(): ImageInfo[];
   /** The picture selected with the mouse or `selectImage()`, or null */
