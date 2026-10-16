@@ -92,6 +92,35 @@ export type DocumentBlock =
       cols: number;
     };
 
+/**
+ * A logical section (Introducción, Caracterización, Conclusiones…), from `sections()`. In the
+ * .docx it is a block-level content control (`w:sdt`) whose `w:tag` is `section:<key>` and
+ * whose `w:alias` is the title, so other tools reading the file find the same boundaries.
+ */
+export interface SectionInfo {
+  /** What `sectionContent`, `replaceSection` and `unwrapSection` take */
+  key: string;
+  /** Human-readable name (the key when the document gives none) */
+  title: string;
+  /** First and last paragraph inside, table cells included: same numbering as `structure()`; null when empty */
+  first: number | null;
+  last: number | null;
+  /** 0 for a top-level section, 1 inside another one… */
+  depth: number;
+  /** Key of the enclosing section */
+  parent: string | null;
+  /** Word users cannot delete the section (its content stays editable) */
+  locked: boolean;
+}
+
+/** A section with its content, from `sectionContent()` */
+export interface SectionContent extends SectionInfo {
+  /** Blocks inside, as in `structure()` */
+  blocks: DocumentBlock[];
+  /** Plain text: one line per paragraph, table rows as lines with cells separated by tabs */
+  text: string;
+}
+
 /** A table of the body, from `tables()` */
 export interface TableInfo {
   /** What `setTableCell`, `insertTableRows` and `deleteTableRows` take */
@@ -332,6 +361,30 @@ export class DocxEditor extends EventTarget {
    * as one undo step. Throws when the range cuts a table or holds a section break.
    */
   replaceParagraphs(range: { from: number; to: number }, paragraphs: string | Array<string | NewParagraph>): { first: number; count: number };
+  /**
+   * Logical sections in document order (outer before inner). Documents edited in Word keep
+   * them: they are content controls tagged `section:<key>`.
+   */
+  sections(): SectionInfo[];
+  /** A section with its blocks and plain text, or null when no section has that key */
+  sectionContent(key: string): SectionContent | null;
+  /**
+   * Wraps the blocks from paragraph `from` to `to` (included, with the tables between them)
+   * in a new section, as one undo step. A table is taken whole when `from` is its first
+   * paragraph or `to` its last one. Keys: letters, digits, `-`, `_`, `.` (up to 64).
+   * Throws, without changing anything, on a key in use, or a range that cuts a table or
+   * another section, lies inside a table or holds a section break. Sections can be nested.
+   */
+  defineSection(key: string, range: { from: number; to: number }, options?: { title?: string; locked?: boolean }): SectionInfo;
+  /**
+   * Replaces the content of a section as one undo step, keeping the section (key, title,
+   * lock). `keepHeading`: a heading paragraph opening the section stays and the paragraphs go
+   * after it. Sections nested in the replaced content go with it. Throws when the key is
+   * missing or used by more than one section.
+   */
+  replaceSection(key: string, paragraphs: string | Array<string | NewParagraph>, options?: { keepHeading?: boolean }): { first: number; count: number };
+  /** Removes a section's marker as one undo step; its content and inner sections stay */
+  unwrapSection(key: string): void;
   /**
    * Tables of the body in order, with their size, first row text and paragraph range. Tables
    * nested in cells or text boxes are not listed.

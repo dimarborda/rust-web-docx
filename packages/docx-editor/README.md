@@ -73,6 +73,7 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `structure()` | Bloques del cuerpo en orden: `{ kind: 'paragraph', paragraph, text, headingLevel }` (1 = Título 1; `null` fuera del esquema) y `{ kind: 'table', index, first, last, rows, cols }` (párrafos de sus celdas; `index` es el de `tables()`). Base para trabajar por secciones |
 | `replaceParagraphs({ from, to }, paragraphs)` | Reemplaza los bloques del párrafo `from` al `to` (incluidas las tablas entre ellos) como un solo paso de deshacer. Falla si el rango corta una tabla o incluye un salto de sección |
 | `insertTable({ rows, header, widths, align }, { at })` | Insertar una tabla con contenido en el cursor, al inicio o al final, como un solo paso de deshacer. Cada celda es un texto (`\n` = salto de línea en la celda) o `{ text, image, width, height, alt }` con una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer` o URL `data:`) que ocupa el ancho de la columna salvo que indiques `width`/`height`, con el texto debajo; `header` (predeterminado `true`) pone la primera fila en negrita, sombreada y repetida en cada página; `widths` son anchos relativos. No se permiten tablas dentro de tablas |
+| `sections()` / `sectionContent(key)` / `defineSection(key, { from, to }, { title, locked })` / `replaceSection(key, paragraphs, { keepHeading })` / `unwrapSection(key)` | Secciones lógicas (Introducción, Conclusiones…) marcadas en el `.docx` para leer o llenar el documento sección por sección (ver [Secciones lógicas](#secciones-lógicas)) |
 | `tables()` / `setTableCell(table, row, col, text)` / `insertTableRows(table, at, rows, { copyFormatFrom })` / `deleteTableRows(table, from, count)` | Completar tablas que ya están en el documento: escribir celdas y agregar o quitar filas copiando el formato de una fila existente, cada llamada como un paso de deshacer (ver [Tablas existentes](#tablas-existentes)) |
 | `insertImage(image, { at, width, height, align, alt, wrap, wrapSide, horizontal, vertical, distance })` | Insertar una imagen PNG, JPEG o GIF (`Uint8Array`, `ArrayBuffer`, `Blob`/`File` o URL `data:`) como un solo paso de deshacer. Sin tamaño conserva sus píxeles; nunca supera el ancho del texto. En línea (predeterminado) va en su propio párrafo; con otro `wrap` queda flotante, anclada al párrafo del cursor (ver [Imágenes](#imágenes)). Devuelve una promesa con `{ paragraph, index }` |
 | `images()` / `selectedImage` / `selectImage(ref)` | Imágenes del documento y la seleccionada (ver [Imágenes](#imágenes)) |
@@ -96,6 +97,24 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
 
 Incluye tipos de TypeScript.
+
+### Secciones lógicas
+
+Las secciones lógicas marcan dónde empieza y dónde termina cada parte de un documento (por ejemplo «Introducción», «Caracterización» y «Conclusiones» de un informe técnico), para leerlo, llenarlo o revisarlo sección por sección. No cambian el aspecto del documento ni tienen que ver con los saltos de sección de Word.
+
+```js
+// Marcar como «introduccion» los párrafos 2 a 6 (las tablas entre ellos van completas)
+editor.defineSection('introduccion', { from: 2, to: 6 }, { title: 'Introducción', locked: true });
+
+editor.sections();
+// [{ key: 'introduccion', title: 'Introducción', first: 2, last: 6, depth: 0, parent: null, locked: true }]
+
+editor.sectionContent('introduccion').text;   // texto plano de la sección
+editor.replaceSection('introduccion', ['Nuevo párrafo.', 'Otro más.'], { keepHeading: true });
+editor.unwrapSection('introduccion');         // quita la marca, deja el contenido
+```
+
+En el `.docx` cada sección es un control de contenido de bloque (`w:sdt`) con `w:tag="section:<clave>"` y el título en `w:alias`, así que Word la conserva al guardar y cualquier otra herramienta (python-docx, Open XML SDK, docx4j) la encuentra buscando esa etiqueta. Las secciones pueden anidarse (`depth`, `parent`). Con `locked: true`, en Word no se puede borrar la sección, pero su contenido sigue siendo editable. Cada llamada que modifica es un paso de deshacer y lanza un `Error` sin tocar el documento si la clave ya existe, falta o está repetida, o si el rango corta una tabla u otra sección, queda dentro de una tabla o contiene un salto de sección.
 
 ### Tablas existentes
 

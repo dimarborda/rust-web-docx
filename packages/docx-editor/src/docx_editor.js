@@ -4,6 +4,7 @@
 import { DocxSession, engineReady, initEngine } from './engine.js';
 import { createCanvasEditor } from './canvas_editor.js';
 import { checkIndex, engineCall, tableRowsPayload } from './table_api.js';
+import { checkSectionKey, sectionContent } from './section_api.js';
 import { onFontsChanged } from './fonts_registry.js';
 import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
 
@@ -564,6 +565,71 @@ export class DocxEditor extends EventTarget {
     this.#changed();
     this.#canvasEditor.select(result.caret);
     return { first: result.first, count: result.count };
+  }
+
+  // ---------- Logical sections ----------
+
+  /**
+   * Logical sections (Introducción, Conclusiones…) in document order, outer before inner.
+   * They are content controls tagged `section:<key>` in the .docx, so other tools find the
+   * same boundaries. `first` / `last` use the numbering of `structure()` (null when empty).
+   * @returns {Array<{key: string, title: string, first: number|null, last: number|null, depth: number, parent: string|null, locked: boolean}>}
+   */
+  sections() {
+    if (!this.#session) return [];
+    return JSON.parse(this.#session.sections_json());
+  }
+
+  /** A section with its blocks (as in `structure()`) and plain text, or null when missing */
+  sectionContent(key) {
+    checkSectionKey('sectionContent', key);
+    const section = this.sections().find(s => s.key === key);
+    return section ? sectionContent(section, this.structure(), this.#elements || []) : null;
+  }
+
+  /**
+   * Wraps the blocks from paragraph `from` to `to` (both included, tables between them too)
+   * in a new section, as one undo step. A table is taken whole when `from` is its first
+   * paragraph or `to` its last one. `locked`: Word users cannot delete the section.
+   */
+  defineSection(key, { from, to }, { title, locked = false } = {}) {
+    this.#require();
+    checkSectionKey('defineSection', key);
+    checkIndex('defineSection', { from, to });
+    const info = JSON.parse(engineCall(() => this.#session.define_section(
+      key, from, to, title == null ? undefined : String(title), Boolean(locked), this.#selectionJSON(),
+    )));
+    this.#changed();
+    return info;
+  }
+
+  /**
+   * Replaces the content of a section with new paragraphs as one undo step, keeping the
+   * section itself. `keepHeading`: a heading opening the section stays, the paragraphs go
+   * after it. The caret goes after the last new paragraph.
+   * @returns {{first: number, count: number}}
+   */
+  replaceSection(key, paragraphs, { keepHeading = false } = {}) {
+    this.#require();
+    checkSectionKey('replaceSection', key);
+    const items = (Array.isArray(paragraphs) ? paragraphs : [paragraphs])
+      .map(p => (typeof p === 'string' ? { text: p } : p))
+      .map(toNewParagraph);
+    if (!items.length) throw new Error('docx-editor: replaceSection needs at least one paragraph');
+    const result = JSON.parse(engineCall(() => this.#session.replace_section(
+      key, JSON.stringify(items), Boolean(keepHeading), this.#selectionJSON(),
+    )));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { first: result.first, count: result.count };
+  }
+
+  /** Removes a section's marker as one undo step; its content (and inner sections) stay */
+  unwrapSection(key) {
+    this.#require();
+    checkSectionKey('unwrapSection', key);
+    engineCall(() => this.#session.unwrap_section(key, this.#selectionJSON()));
+    this.#changed();
   }
 
   images() {

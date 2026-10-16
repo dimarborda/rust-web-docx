@@ -935,6 +935,9 @@ mod shapes;
 pub use shapes::{ShapeStyle, TextBox};
 #[path = "insert_objects.rs"]
 mod insert_objects;
+#[path = "section_edit.rs"]
+mod section_edit;
+pub use section_edit::{SectionInfo, SECTION_TAG_PREFIX};
 #[path = "structure_edit.rs"]
 mod structure_edit;
 #[path = "table_edit.rs"]
