@@ -84,7 +84,8 @@ if (branch !== BRANCH) fail(`Estás en la rama ${branch}; publica desde ${BRANCH
 const pending = read('git', ['status', '--porcelain'])
   .split('\n')
   .filter(Boolean)
-  .filter(line => !line.slice(3).startsWith('.claude/'));
+  // The status code is one or two columns (read() trims the first line's leading space)
+  .filter(line => !line.replace(/^\S+\s+/, '').startsWith('.claude/'));
 if (pending.length && dryRun) console.log(`  ⚠ Hay cambios sin confirmar (en el ensayo se permiten):\n${pending.join('\n')}`);
 else if (pending.length) fail(`Hay cambios sin confirmar:\n${pending.join('\n')}`);
 read('git', ['fetch', '--quiet', 'origin', BRANCH]);
