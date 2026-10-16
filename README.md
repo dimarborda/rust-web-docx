@@ -119,6 +119,16 @@ El sitio es estático y se publica en Cloudflare Workers. Cada push a `master` e
 npm run deploy
 ```
 
+## Publicar en npm
+
+```bash
+npm login
+npm run release:check
+npm run release -- minor
+```
+
+`release:check` ejecuta todo sin publicar: pruebas de Rust y JS, compilación del motor, auditoría de dependencias y revisión del contenido del paquete. `release` acepta `patch`, `minor`, `major` o una versión exacta; publica [`@dimarborda/docx-editor`](https://www.npmjs.com/package/@dimarborda/docx-editor), confirma `chore(release): x.y.z`, crea la etiqueta `vx.y.z` y sube ambos a GitHub. Solo publica desde `master`, sin cambios pendientes y al día con `origin`. Si npm pide un código de verificación, añade `--otp=123456`.
+
 ## Atajos de teclado
 
 | Atajo | Acción |

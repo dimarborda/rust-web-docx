@@ -37,7 +37,8 @@
     "*.css"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "node -e \"require('fs').accessSync('wasm/docx_engine_bg.wasm')\" || (echo 'Falta el motor WebAssembly: publica con npm run release desde la raíz del repositorio' && exit 1)"
   },
   "files": [
     "src",

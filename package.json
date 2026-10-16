@@ -11,6 +11,8 @@
     "dev": "npm run dev -w apps/demo",
     "build": "npm run build:wasm && npm run build -w apps/demo",
     "preview": "npm run preview -w apps/demo",
-    "deploy": "npm run build && npx -y wrangler deploy"
+    "deploy": "npm run build && npx -y wrangler deploy",
+    "release": "node scripts/release.mjs",
+    "release:check": "node scripts/release.mjs patch --dry-run"
   }
 }
