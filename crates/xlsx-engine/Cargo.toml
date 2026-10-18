@@ -1,0 +1,18 @@
+[package]
+name = "xlsx-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Excel (.xlsx) engine in Rust + WebAssembly: lossless workbook reading and writing on top of ooxml-core"
+repository = "https://github.com/dimarborda/rust-web-docx"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+ooxml-core = { path = "../ooxml-core" }

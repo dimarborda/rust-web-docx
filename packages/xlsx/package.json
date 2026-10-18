@@ -1,0 +1,44 @@
+{
+  "name": "@dimarborda/xlsx",
+  "version": "0.0.1",
+  "description": "Excel (.xlsx) library for Node.js and the browser: Rust + WebAssembly engine that edits workbooks without losing what it does not touch",
+  "type": "module",
+  "license": "MIT",
+  "author": "Dimar Borda",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dimarborda/rust-web-docx.git",
+    "directory": "packages/xlsx"
+  },
+  "keywords": [
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "webassembly",
+    "wasm",
+    "rust",
+    "openxml",
+    "template"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "types": "./src/index.d.ts",
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "node -e \"require('fs').accessSync('wasm/xlsx_engine_bg.wasm')\" || (echo 'Falta el motor WebAssembly: publica con npm run release -- --pkg=xlsx desde la raíz del repositorio' && exit 1)"
+  },
+  "files": [
+    "src",
+    "wasm",
+    "README.md",
+    "LICENSE"
+  ]
+}

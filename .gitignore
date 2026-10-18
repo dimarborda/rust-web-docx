@@ -5,6 +5,7 @@ target/
 # WebAssembly build (generated into the npm package)
 pkg/
 packages/docx-editor/wasm/
+packages/xlsx/wasm/
 
 # Node & frontend build
 node_modules/

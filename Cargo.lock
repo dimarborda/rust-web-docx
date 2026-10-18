@@ -434,6 +434,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "xlsx-engine"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "ooxml-core",
+ "quick-xml",
+ "wasm-bindgen",
+ "zip",
+]
+
+[[package]]
 name = "zip"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

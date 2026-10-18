@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-// Publishes a new version of @dimarborda/docx-editor to npm.
+// Publishes a new version of one of the monorepo's npm packages.
 //
-//   npm run release -- <patch|minor|major|x.y.z> [--dry-run] [--otp=123456]
+//   npm run release -- <patch|minor|major|x.y.z> [--pkg=docx|xlsx] [--dry-run] [--otp=123456]
+//
+// --pkg picks the package: docx (default, @dimarborda/docx-editor, tags vx.y.z) or xlsx
+// (@dimarborda/xlsx, tags xlsx-vx.y.z). Each package is versioned and published on its own.
 //
 // 1. Checks: on master, no pending changes (except .claude/), up to date with origin, logged
 //    in to npm and the version not published yet.
@@ -9,7 +12,7 @@
 // 3. Checks the package contents (engine .wasm, sources, types).
 // 4. Bumps the version (package.json + package-lock.json) and publishes. If publishing fails
 //    the version bump is undone.
-// 5. Commits "chore(release): x.y.z", tags vx.y.z and pushes both.
+// 5. Commits "chore(release): x.y.z", tags it (vx.y.z, or xlsx-vx.y.z for xlsx) and pushes both.
 //
 // --dry-run runs steps 1–3 and `npm publish --dry-run`, changing nothing (pending changes are
 // only a warning there, to check a release before committing).
@@ -19,13 +22,35 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const pkgDir = 'packages/docx-editor';
-const pkgPath = path.join(root, pkgDir, 'package.json');
 const BRANCH = 'master';
-/** Files the published package cannot work without */
-const REQUIRED_FILES = ['wasm/docx_engine_bg.wasm', 'wasm/docx_engine.js', 'src/index.js', 'src/index.d.ts', 'src/style.css', 'README.md', 'LICENSE'];
+/** The publishable packages: directory, wasm build script, tag prefix and the files the
+ * published package cannot work without */
+const PACKAGES = {
+  docx: {
+    dir: 'packages/docx-editor',
+    buildScript: 'build:wasm',
+    tagPrefix: 'v',
+    required: ['wasm/docx_engine_bg.wasm', 'wasm/docx_engine.js', 'src/index.js', 'src/index.d.ts', 'src/style.css', 'README.md', 'LICENSE'],
+  },
+  xlsx: {
+    dir: 'packages/xlsx',
+    buildScript: 'build:wasm:xlsx',
+    tagPrefix: 'xlsx-v',
+    required: ['wasm/xlsx_engine_bg.wasm', 'wasm/xlsx_engine.js', 'src/index.js', 'src/index.d.ts', 'README.md', 'LICENSE'],
+  },
+};
 
 const args = process.argv.slice(2);
+const pkgKey = args.find(a => a.startsWith('--pkg='))?.slice('--pkg='.length) ?? 'docx';
+const target = PACKAGES[pkgKey];
+if (!target) {
+  console.error(`\n✖ Paquete desconocido: ${pkgKey}. Usa --pkg=${Object.keys(PACKAGES).join(' o --pkg=')}.`);
+  process.exit(1);
+}
+const pkgDir = target.dir;
+const pkgPath = path.join(root, pkgDir, 'package.json');
+const REQUIRED_FILES = target.required;
+const tag = v => `${target.tagPrefix}${v}`;
 const dryRun = args.includes('--dry-run');
 const otp = args.find(a => a.startsWith('--otp='))?.slice('--otp='.length);
 const bump = args.find(a => !a.startsWith('--'));
@@ -61,7 +86,7 @@ function nextVersion(current, kind) {
     case 'major': return `${major + 1}.0.0`;
     case 'minor': return `${major}.${minor + 1}.0`;
     case 'patch': return `${major}.${minor}.${patch + 1}`;
-    default: fail(`Indica patch, minor, major o una versión x.y.z (recibido: ${kind ?? 'nada'}).\n  Uso: npm run release -- minor [--dry-run] [--otp=123456]`);
+    default: fail(`Indica patch, minor, major o una versión x.y.z (recibido: ${kind ?? 'nada'}).\n  Uso: npm run release -- minor [--pkg=docx|xlsx] [--dry-run] [--otp=123456]`);
   }
 }
 
@@ -92,7 +117,7 @@ read('git', ['fetch', '--quiet', 'origin', BRANCH]);
 const [behind, ahead] = read('git', ['rev-list', '--left-right', '--count', `origin/${BRANCH}...HEAD`]).split(/\s+/).map(Number);
 if (behind) fail(`Tu ${BRANCH} está ${behind} commit(s) por detrás de origin; haz git pull primero.`);
 if (ahead) console.log(`  (hay ${ahead} commit(s) sin subir; se subirán con la versión)`);
-if (read('git', ['tag', '--list', `v${version}`])) fail(`La etiqueta v${version} ya existe.`);
+if (read('git', ['tag', '--list', tag(version)])) fail(`La etiqueta ${tag(version)} ya existe.`);
 
 step('Comprobando npm');
 const user = read('npm', ['whoami'], { allowFail: true });
@@ -105,9 +130,9 @@ if (read('npm', ['view', `${pkg.name}@${version}`, 'version'], { allowFail: true
 
 // ---------- 2. Tests and build ----------
 step('Pruebas de Rust');
-run('cargo', ['test', '--quiet']);
+run('cargo', ['test', '--workspace', '--quiet']);
 step('Compilando el motor WebAssembly');
-run('npm', ['run', 'build:wasm']);
+run('npm', ['run', target.buildScript]);
 step('Pruebas de JavaScript');
 run('npm', ['test', '-w', pkgDir]);
 step('Auditoría de dependencias npm');
@@ -158,8 +183,8 @@ if (!run('npm', publishArgs, { allowFail: true })) {
 // ---------- 5. Commit, tag and push ----------
 step('Confirmando y etiquetando la versión');
 run('git', ['add', pkgPath, lockPath]);
-run('git', ['commit', '--quiet', '-m', `chore(release): ${version}`]);
-run('git', ['tag', '-a', `v${version}`, '-m', `${pkg.name} ${version}`]);
+run('git', ['commit', '--quiet', '-m', pkgKey === 'docx' ? `chore(release): ${version}` : `chore(release): ${pkg.name} ${version}`]);
+run('git', ['tag', '-a', tag(version), '-m', `${pkg.name} ${version}`]);
 if (!run('git', ['push', '--follow-tags', 'origin', BRANCH], { allowFail: true })) {
   console.error(`\n⚠ Publicado en npm, pero no se pudo subir a GitHub. Repite: git push --follow-tags origin ${BRANCH}`);
   process.exit(1);

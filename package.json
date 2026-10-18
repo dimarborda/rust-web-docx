@@ -8,11 +8,14 @@
   ],
   "scripts": {
     "build:wasm": "npx -y wasm-pack build --target web --out-dir packages/docx-editor/wasm --out-name docx_engine && rm -f packages/docx-editor/wasm/package.json packages/docx-editor/wasm/.gitignore packages/docx-editor/wasm/README.md packages/docx-editor/wasm/LICENSE",
+    "build:wasm:xlsx": "npx -y wasm-pack build crates/xlsx-engine --target web --out-dir ../../packages/xlsx/wasm --out-name xlsx_engine && rm -f packages/xlsx/wasm/package.json packages/xlsx/wasm/.gitignore packages/xlsx/wasm/README.md packages/xlsx/wasm/LICENSE",
     "dev": "npm run dev -w apps/demo",
     "build": "npm run build:wasm && npm run build -w apps/demo",
     "preview": "npm run preview -w apps/demo",
     "deploy": "npm run build && npx -y wrangler deploy",
     "release": "node scripts/release.mjs",
-    "release:check": "node scripts/release.mjs patch --dry-run"
+    "release:check": "node scripts/release.mjs patch --dry-run",
+    "release:xlsx": "node scripts/release.mjs --pkg=xlsx",
+    "release:xlsx:check": "node scripts/release.mjs patch --pkg=xlsx --dry-run"
   }
 }

@@ -29,7 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --workspace
 
       # Known vulnerabilities in the Rust dependencies (RustSec advisory database) stop the deploy
       - uses: taiki-e/install-action@v2
@@ -56,6 +56,12 @@ jobs:
       # Engine bindings and argument checks of the JS layer (needs the wasm built above)
       - name: JS tests
         run: npm test -w packages/docx-editor
+
+      # The xlsx library is not part of the site, but its engine and Node API are checked too
+      - name: xlsx build and tests
+        run: |
+          npm run build:wasm:xlsx
+          npm test -w packages/xlsx
 
       - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3

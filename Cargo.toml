@@ -22,7 +22,9 @@ js-sys = "0.3"
 ooxml-core = { path = "crates/ooxml-core" }
 
 [workspace]
-members = [".", "crates/ooxml-core"]
+members = [".", "crates/ooxml-core", "crates/xlsx-engine"]
+# Only the docx crate builds by default: `wasm-pack build` at the root must find one cdylib.
+# Tests cover every crate with `cargo test --workspace`.
 default-members = [".", "crates/ooxml-core"]
 
 [profile.release]
