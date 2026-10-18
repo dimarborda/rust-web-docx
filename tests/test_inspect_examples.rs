@@ -25,7 +25,7 @@ fn inspect_single_file(filename: &str) {
 
     for i in 0..archive.len() {
         let f = archive.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let size = f.size();
         if name.starts_with("word/media/") {
             media_files.push((name, size));

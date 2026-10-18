@@ -90,7 +90,10 @@ impl Package {
             let mut file = archive
                 .by_index(i)
                 .map_err(|e| format!("Error al leer entrada ZIP {}: {}", i, e))?;
-            let name = file.name().to_string();
+            let name = file
+                .name()
+                .map_err(|e| format!("Nombre no válido en la entrada ZIP {}: {}", i, e))?
+                .to_string();
             let cap = limits.max_part_bytes.min(limits.max_total_bytes.saturating_sub(total));
             let mut content = Vec::with_capacity(file.size().min(cap).min(16 * 1024 * 1024) as usize);
             (&mut file)
@@ -315,7 +318,7 @@ mod tests {
 
     fn names(bytes: &[u8]) -> Vec<String> {
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect()
+        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().unwrap().to_string()).collect()
     }
 
     #[test]

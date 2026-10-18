@@ -8,5 +8,5 @@ license = "MIT"
 publish = false
 
 [dependencies]
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
