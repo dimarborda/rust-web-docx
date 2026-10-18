@@ -189,6 +189,38 @@ export class Workbook {
     return call(() => this._engine.fill_template_json(JSON.stringify(strings)));
   }
 
+  /**
+   * Starts an undo step: the edits made until the next checkpoint undo together.
+   * `selection` (any string, e.g. JSON) comes back from `undo()` to restore the selection.
+   * @param {string} [selection]
+   */
+  checkpoint(selection) {
+    this._engine.checkpoint(selection ?? undefined);
+  }
+
+  /** Where the selection ended up after the current step; `redo()` returns it */
+  setSelectionAfter(selection) {
+    this._engine.set_selection_after(selection ?? undefined);
+  }
+
+  /** Undoes the last step: `{selection, parts}`, or `null` when there is nothing to undo */
+  undo() {
+    return JSON.parse(this._engine.undo_json());
+  }
+
+  /** Redoes the last undone step: `{selection, parts}` or `null` */
+  redo() {
+    return JSON.parse(this._engine.redo_json());
+  }
+
+  get canUndo() {
+    return this._engine.can_undo();
+  }
+
+  get canRedo() {
+    return this._engine.can_redo();
+  }
+
   /** The workbook as .xlsx bytes */
   toBytes() {
     return call(() => this._engine.export_bytes());

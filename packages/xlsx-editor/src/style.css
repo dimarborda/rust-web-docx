@@ -41,10 +41,60 @@ xlsx-editor {
 
 .xlsx-editor-value {
   flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
   padding: 4px 8px;
-  white-space: nowrap;
-  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
   text-overflow: ellipsis;
+}
+
+.xlsx-editor-value:focus {
+  box-shadow: inset 0 -2px 0 var(--xlsx-accent, #217346);
+}
+
+.is-readonly .xlsx-editor-value {
+  cursor: default;
+}
+
+.is-readonly .xlsx-editor-value:focus {
+  box-shadow: none;
+}
+
+/* In-cell editor: a textarea over the active cell, with the cell's font */
+.xlsx-editor-input {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 1px 3px;
+  border: 2px solid var(--xlsx-accent, #217346);
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.xlsx-editor-input[hidden] {
+  display: none;
+}
+
+/* Receives the clipboard shortcuts; out of sight but focusable */
+.xlsx-editor-clipboard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  resize: none;
 }
 
 .xlsx-editor-body {

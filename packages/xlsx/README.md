@@ -42,6 +42,8 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `hoja.setValue('B3', valor)` | Escribe texto, número, booleano o `Date`; `null` borra el valor y deja el formato. |
 | `hoja.setValues('A2', filas)` | Escribe una matriz desde la celda indicada, creando filas y celdas en orden. `undefined` deja la celda como está. |
 | `wb.fillTemplate(valores)` | Sustituye `{{CAMPO}}` (se admiten espacios: `{{ CAMPO }}`) en las cadenas compartidas y en las cadenas en línea; devuelve cuántas sustituyó. Las variables sin valor se quedan como están. |
+| `wb.checkpoint(selección?)` | Abre un paso de deshacer: los cambios hasta el siguiente `checkpoint` se deshacen juntos. `selección` es un texto libre que `undo()` devuelve. `wb.setSelectionAfter(selección)` guarda la de después, que devuelve `redo()`. |
+| `wb.undo()` / `wb.redo()` | Deshace o rehace un paso: `{ selection, parts }`, o `null` si no hay nada. `wb.canUndo` / `wb.canRedo` dicen si se puede. |
 | `wb.toBytes()` | El libro como `.xlsx`. |
 | `wb.close()` | Libera la memoria del motor. |
 

@@ -63,3 +63,29 @@ test('invalid input is refused with a reason', async () => {
   assert.throws(() => wb.sheet('Otra'), /Otra/);
   assert.throws(() => wb.sheet(3), RangeError);
 });
+
+test('checkpoint(), undo() and redo() step through the edits', async () => {
+  const wb = await createWorkbook();
+  const sheet = wb.sheet(0);
+  assert.equal(wb.canUndo, false);
+  assert.equal(wb.undo(), null);
+  wb.checkpoint('A1');
+  sheet.setValues('A1', [['uno', 1]]);
+  wb.setSelectionAfter('A2');
+  wb.checkpoint('B5');
+  sheet.setValue('B5', true);
+  assert.equal(wb.canUndo, true);
+  assert.equal(wb.undo().selection, 'B5');
+  assert.equal(sheet.getValue('B5'), null);
+  assert.equal(sheet.getValue('A1'), 'uno');
+  const first = wb.undo();
+  assert.equal(first.selection, 'A1');
+  assert.ok(first.parts.length > 0);
+  assert.deepEqual(sheet.getValues('A1:B1'), [[null, null]]);
+  assert.equal(wb.canRedo, true);
+  assert.equal(wb.redo().selection, 'A2');
+  assert.deepEqual(sheet.getValues('A1:B1'), [['uno', 1]]);
+  wb.checkpoint();
+  sheet.setValue('C1', 3);
+  assert.equal(wb.canRedo, false);
+});

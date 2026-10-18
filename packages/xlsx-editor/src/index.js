@@ -4,6 +4,7 @@ import { defineXlsxElements } from './elements.js';
 
 export { XlsxEditor } from './xlsx_editor.js';
 export { XlsxEditorElement, defineXlsxElements } from './elements.js';
+export { parseInput } from './input.js';
 export { initEngine } from '@dimarborda/xlsx';
 
 if (typeof customElements !== 'undefined') defineXlsxElements();

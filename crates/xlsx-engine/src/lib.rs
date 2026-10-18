@@ -63,6 +63,13 @@ fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
     }))
 }
 
+fn undone_json(done: Option<ooxml_core::Undone>) -> String {
+    match done {
+        Some(d) => json!({ "selection": d.selection, "parts": d.parts }).to_string(),
+        None => "null".to_string(),
+    }
+}
+
 /// An open workbook
 #[wasm_bindgen]
 pub struct XlsxWorkbook {
@@ -154,6 +161,34 @@ impl XlsxWorkbook {
         Ok(view::cells_json(&cells).to_string())
     }
 
+    /// Starts an undo step; `selection` comes back from `undo` (any text, e.g. JSON)
+    pub fn checkpoint(&mut self, selection: Option<String>) {
+        self.workbook.checkpoint(selection);
+    }
+
+    /// Where the selection ended up after the current step (comes back from `redo`)
+    pub fn set_selection_after(&mut self, selection: Option<String>) {
+        self.workbook.set_selection_after(selection);
+    }
+
+    /// Undoes the last step: JSON `{selection, parts}`, or `null` when there is nothing to undo
+    pub fn undo_json(&mut self) -> String {
+        undone_json(self.workbook.undo())
+    }
+
+    /// Redoes the last undone step (see `undo_json`)
+    pub fn redo_json(&mut self) -> String {
+        undone_json(self.workbook.redo())
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.workbook.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.workbook.can_redo()
+    }
+
     /// The workbook as .xlsx bytes
     pub fn export_bytes(&self) -> Result<Vec<u8>, JsValue> {
         self.workbook.to_bytes().map_err(js_err)
@@ -178,5 +213,13 @@ mod tests {
         assert!(cell_input(&json!([1])).is_err());
         let sheets: Value = serde_json::from_str(&wb.sheets_json().unwrap()).unwrap();
         assert_eq!(sheets, json!([{"name": "Hoja1", "kind": "worksheet", "state": "visible"}]));
+
+        wb.checkpoint(Some("A1".into()));
+        wb.set_values_json(0, "A1", r#"[["b"]]"#).unwrap();
+        let undone: Value = serde_json::from_str(&wb.undo_json()).unwrap();
+        assert_eq!(undone["selection"], "A1");
+        assert!(wb.can_redo());
+        wb.redo_json();
+        assert_eq!(wb.redo_json(), "null");
     }
 }
