@@ -3,6 +3,8 @@
 //! Child module of `docx_parser` so it can work on the package parts directly.
 
 use super::*;
+use ooxml_core::content_types;
+use ooxml_core::xml::append_child;
 
 const MAX_TABLE_ROWS: usize = 500;
 const MAX_TABLE_COLS: usize = 20;
@@ -313,17 +315,16 @@ impl DocxModifier {
         let mut n = 1;
         let media = loop {
             let name = format!("word/media/image{}.{}", n, ext);
-            if !self.files.contains_key(&name) {
+            if !self.package.contains(&name) {
                 break name;
             }
             n += 1;
         };
         self.put_file(media.clone(), bytes.to_vec());
 
-        let types = self.get_file_string("[Content_Types].xml")?;
-        if !has_content_type(&types, ext) {
-            let entry = format!(r#"<Default Extension="{}" ContentType="{}"/>"#, ext, format.mime());
-            self.put_file("[Content_Types].xml".to_string(), append_child(&types, "Types", &entry)?.into_bytes());
+        let types = self.get_file_string(content_types::PART)?;
+        if let Some(types) = content_types::with_default(&types, ext, format.mime())? {
+            self.put_file(content_types::PART.to_string(), types.into_bytes());
         }
 
         let rels_path = "word/_rels/document.xml.rels";
@@ -647,23 +648,6 @@ pub(super) fn ensure_namespace(xml: &str, prefix: &str, uri: &str) -> String {
     let mut out = xml.to_string();
     out.insert_str(start + "<w:document".len(), &format!(r#" xmlns:{}="{}""#, prefix, uri));
     out
-}
-
-fn has_content_type(types: &str, ext: &str) -> bool {
-    types.to_lowercase().contains(&format!("extension=\"{}\"", ext))
-}
-
-/// Appends `child` as the last child of the root element `root` (which may be self-closing)
-fn append_child(xml: &str, root: &str, child: &str) -> Result<String, String> {
-    let close = format!("</{}>", root);
-    if let Some(pos) = xml.rfind(&close) {
-        let mut out = xml.to_string();
-        out.insert_str(pos, child);
-        return Ok(out);
-    }
-    let start = xml.find(&format!("<{}", root)).ok_or_else(|| format!("No se encontró <{}>.", root))?;
-    let end = xml[start..].find("/>").map(|i| start + i).ok_or_else(|| format!("<{}> mal formado.", root))?;
-    Ok(format!("{}>{}{}{}", &xml[..end], child, close, &xml[end + 2..]))
 }
 
 #[cfg(test)]

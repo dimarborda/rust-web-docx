@@ -9,9 +9,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::io::{Cursor, Read, Write};
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use std::io::Cursor;
+
+pub use ooxml_core::rels::parse_relationships_map;
+pub use ooxml_core::ZipLimits;
+use ooxml_core::xml::escape_xml;
+pub(crate) use ooxml_core::xml::{get_attr_value, tag_is, utf8};
+use ooxml_core::Package;
 
 use crate::styles::{
     apply_border_element, apply_ppr_element, apply_rpr_element, is_symbol_font, NumberingCounters, ParaProps,
@@ -719,24 +723,6 @@ fn header_footer_elements(
     elements
 }
 
-/// What a .docx (a ZIP archive) may expand to when it is opened. The defaults are far above
-/// any real document and keep a malicious file from exhausting the browser's memory.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ZipLimits {
-    /// Entries in the archive
-    pub max_entries: usize,
-    /// Uncompressed size of one part (e.g. one picture or video), in bytes
-    pub max_part_bytes: u64,
-    /// Uncompressed size of all parts together, in bytes
-    pub max_total_bytes: u64,
-}
-
-impl Default for ZipLimits {
-    fn default() -> Self {
-        ZipLimits { max_entries: 10_000, max_part_bytes: 256 * 1024 * 1024, max_total_bytes: 512 * 1024 * 1024 }
-    }
-}
-
 /// Text box paragraphs are numbered from here on, apart from body and table paragraphs, so
 /// adding text to a box never renumbers the body
 pub const TEXT_BOX_BASE: usize = 1 << 24;
@@ -982,14 +968,12 @@ struct ParagraphEdit<'a> {
 }
 
 pub struct DocxModifier {
-    files: HashMap<String, Vec<u8>>,
-    original_order: Vec<String>,
-    original_size: usize,
+    /// Parts of the package, with the undo/redo history of their contents
+    package: Package,
     background_color: String,
     background_image: Option<Vec<u8>>,
     background_image_ext: String,
     styles: StyleSheet,
-    history: History,
     /// Bumped on every change of any part; `parts_revision` only for parts other than
     /// document.xml (headers, media, relationships), which typing never touches
     revision: u64,
@@ -1035,25 +1019,6 @@ fn layout_inputs_signature(doc: &str) -> u64 {
     hasher.finish()
 }
 
-/// One undoable step: previous contents of every part it changed, plus the editor selection
-/// before and after (opaque JSON owned by the frontend)
-#[derive(Default)]
-struct UndoStep {
-    parts: Vec<(String, Option<Vec<u8>>)>,
-    selection_before: Option<String>,
-    selection_after: Option<String>,
-}
-
-#[derive(Default)]
-struct History {
-    undo: Vec<UndoStep>,
-    redo: Vec<UndoStep>,
-    /// Step being recorded since the last checkpoint
-    recording: Option<UndoStep>,
-}
-
-const MAX_UNDO_STEPS: usize = 200;
-
 impl DocxModifier {
     /// Loads a docx from byte buffer
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
@@ -1062,58 +1027,8 @@ impl DocxModifier {
 
     /// Like `from_bytes`, with explicit limits on what the ZIP may expand to
     pub fn from_bytes_with_limits(bytes: &[u8], limits: &ZipLimits) -> Result<Self, String> {
-        if bytes.len() < 4 {
-            return Err("El archivo proporcionado está vacío o es demasiado pequeño.".to_string());
-        }
-
-        let original_size = bytes.len();
-        let reader = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(reader)
-            .map_err(|e| format!("No se pudo leer el archivo como formato DOCX (ZIP): {}", e))?;
-
-        let mut files = HashMap::new();
-        let mut original_order = Vec::new();
-
-        // A .docx is a ZIP: a tiny malicious file could expand to gigabytes (a "zip bomb").
-        // Sizes declared in the archive are not trusted: reading stops once a limit is passed.
-        if archive.len() > limits.max_entries {
-            return Err(format!(
-                "El archivo tiene demasiadas partes ({}; el máximo es {}).",
-                archive.len(),
-                limits.max_entries
-            ));
-        }
-        let mut total: u64 = 0;
-        for i in 0..archive.len() {
-            let mut file = archive
-                .by_index(i)
-                .map_err(|e| format!("Error al leer entrada ZIP {}: {}", i, e))?;
-            let name = file.name().to_string();
-            let cap = limits.max_part_bytes.min(limits.max_total_bytes.saturating_sub(total));
-            let mut content = Vec::with_capacity(file.size().min(cap).min(16 * 1024 * 1024) as usize);
-            (&mut file)
-                .take(cap + 1)
-                .read_to_end(&mut content)
-                .map_err(|e| format!("Error al extraer '{}': {}", name, e))?;
-            if content.len() as u64 > cap {
-                return Err(if cap < limits.max_part_bytes {
-                    format!(
-                        "El documento ocupa más de {} MB al descomprimirse; no se abre por seguridad.",
-                        limits.max_total_bytes / (1024 * 1024)
-                    )
-                } else {
-                    format!(
-                        "La parte '{}' ocupa más de {} MB al descomprimirse; no se abre por seguridad.",
-                        name,
-                        limits.max_part_bytes / (1024 * 1024)
-                    )
-                });
-            }
-            total += content.len() as u64;
-
-            files.insert(name.clone(), content);
-            original_order.push(name);
-        }
+        let package = Package::from_bytes(bytes, limits, "DOCX")?;
+        let files = package.parts();
 
         // Verify that this is indeed a docx
         if !files.contains_key("word/document.xml") {
@@ -1141,14 +1056,11 @@ impl DocxModifier {
         );
 
         Ok(DocxModifier {
-            history: History::default(),
             revision: 0,
             parts_revision: 0,
             cache: RefCell::new(ModelCache::default()),
             styles,
-            files,
-            original_order,
-            original_size,
+            package,
             background_color: bg_color,
             background_image: bg_image,
             background_image_ext: bg_image_ext,
@@ -1161,91 +1073,53 @@ impl DocxModifier {
         if name != "word/document.xml" {
             self.parts_revision += 1;
         }
-        if let Some(step) = self.history.recording.as_mut() {
-            if !step.parts.iter().any(|(n, _)| *n == name) {
-                step.parts.push((name.clone(), self.files.get(&name).cloned()));
-                self.history.redo.clear();
-            }
-        }
-        self.files.insert(name, bytes);
+        self.package.put(name, bytes);
     }
 
     /// Starts a new undo step; changes made until the next checkpoint undo together
     pub fn checkpoint(&mut self, selection_before: Option<String>) {
-        self.finish_step();
-        self.history.recording = Some(UndoStep { selection_before, ..Default::default() });
+        self.package.checkpoint(selection_before);
     }
 
     /// Records where the selection ended up after the current step's changes
     pub fn set_selection_after(&mut self, selection: Option<String>) {
-        if let Some(step) = self.history.recording.as_mut() {
-            step.selection_after = selection;
-        }
+        self.package.set_selection_after(selection);
     }
 
     /// True while a step is being recorded (edits can be merged into it, e.g. while typing)
     pub fn is_recording(&self) -> bool {
-        self.history.recording.is_some()
+        self.package.is_recording()
     }
 
-    fn finish_step(&mut self) {
-        if let Some(step) = self.history.recording.take() {
-            if !step.parts.is_empty() {
-                self.history.undo.push(step);
-                if self.history.undo.len() > MAX_UNDO_STEPS {
-                    self.history.undo.remove(0);
-                }
-            }
-        }
-    }
-
-    /// Swaps the stored part contents with the current ones and returns the inverse step
-    fn apply_step(&mut self, step: UndoStep) -> UndoStep {
+    /// Refreshes what is derived from the parts an undo or redo swapped back
+    fn after_step(&mut self, parts: &[String]) {
         self.revision += 1;
         self.parts_revision += 1;
-        let parts = step
-            .parts
-            .into_iter()
-            .map(|(name, content)| {
-                let current = match content {
-                    Some(bytes) => self.files.insert(name.clone(), bytes),
-                    None => self.files.remove(&name),
-                };
-                (name, current)
-            })
-            .collect::<Vec<_>>();
-        if parts.iter().any(|(name, _)| name == "word/styles.xml") {
+        if parts.iter().any(|name| name == "word/styles.xml") {
             self.reload_styles();
         }
-        UndoStep { parts, selection_before: step.selection_before, selection_after: step.selection_after }
     }
 
     /// Undoes the last step; returns the selection to restore (`Some(None)` when unknown)
     pub fn undo(&mut self) -> Option<Option<String>> {
-        self.finish_step();
-        let step = self.history.undo.pop()?;
-        let inverse = self.apply_step(step);
-        let selection = inverse.selection_before.clone();
-        self.history.redo.push(inverse);
-        Some(selection)
+        let done = self.package.undo()?;
+        self.after_step(&done.parts);
+        Some(done.selection)
     }
 
     /// Redoes the last undone step; returns the selection to restore
     pub fn redo(&mut self) -> Option<Option<String>> {
-        self.finish_step();
-        let step = self.history.redo.pop()?;
-        let inverse = self.apply_step(step);
-        let selection = inverse.selection_after.clone();
-        self.history.undo.push(inverse);
-        Some(selection)
+        let done = self.package.redo()?;
+        self.after_step(&done.parts);
+        Some(done.selection)
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.history.undo.is_empty() || self.history.recording.as_ref().is_some_and(|s| !s.parts.is_empty())
+        self.package.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.history.redo.is_empty()
+        self.package.can_redo()
     }
 
     /// Byte range of paragraph `index` of document.xml: a body or table paragraph, or a text
@@ -1268,7 +1142,7 @@ impl DocxModifier {
             return Ok(("word/document.xml".to_string(), index));
         }
         let slot = (index - HEADER_FOOTER_BASE) / PART_SLOT;
-        let part = header_footer_parts(&self.files)
+        let part = header_footer_parts(self.package.parts())
             .get(slot)
             .cloned()
             .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
@@ -1462,7 +1336,8 @@ impl DocxModifier {
     /// Page setup, headers/footers and background, recomputed only when they can change
     pub fn layout_inputs(&self) -> Result<Rc<LayoutInputs>, String> {
         let doc = self
-            .files
+            .package
+            .parts()
             .get("word/document.xml")
             .and_then(|b| std::str::from_utf8(b).ok())
             .ok_or("No se encontró 'word/document.xml' en el archivo DOCX.")?;
@@ -1580,7 +1455,8 @@ impl DocxModifier {
     /// Applies replace rules to every XML part under word/, returning (count, affected files)
     fn apply_replace_rules(&mut self, rules: &[ReplaceRule]) -> Result<(usize, Vec<String>), String> {
         let mut target_files: Vec<String> = self
-            .files
+            .package
+            .parts()
             .keys()
             .filter(|name| name.starts_with("word/") && name.ends_with(".xml"))
             .cloned()
@@ -1801,9 +1677,7 @@ impl DocxModifier {
         let image_filename = format!("word/media/background.{}", clean_ext);
         
         self.put_file(image_filename.clone(), image_bytes);
-        if !self.original_order.contains(&image_filename) {
-            self.original_order.push(image_filename.clone());
-        }
+        self.package.keep_in_order(&image_filename);
 
         self.background_image_ext = clean_ext.to_string();
 
@@ -1835,9 +1709,7 @@ impl DocxModifier {
             if let Some(pos) = rels_xml.find("</Relationships>") {
                 rels_xml.insert_str(pos, &rel_entry);
                 self.put_file(rels_path.to_string(), rels_xml.into_bytes());
-                if !self.original_order.contains(&rels_path.to_string()) {
-                    self.original_order.push(rels_path.to_string());
-                }
+                self.package.keep_in_order(rels_path);
             }
         }
 
@@ -1877,8 +1749,8 @@ impl DocxModifier {
             table_count,
             word_count,
             char_count,
-            files_in_zip: self.original_order.clone(),
-            original_size_bytes: self.original_size,
+            files_in_zip: self.package.order().to_vec(),
+            original_size_bytes: self.package.original_size(),
             background_color: inputs.background_color.clone(),
             has_background_image: self.background_image.is_some() || inputs.bg_image_data_url.is_some(),
             page_setup: inputs.page_setup.clone(),
@@ -1889,7 +1761,7 @@ impl DocxModifier {
 
     /// Gets parsed page setup (dimensions, margins, orientation) from word/document.xml
     pub fn get_page_setup(&self) -> PageSetup {
-        if let Some(bytes) = self.files.get("word/document.xml") {
+        if let Some(bytes) = self.package.parts().get("word/document.xml") {
             if let Ok(xml) = String::from_utf8(bytes.clone()) {
                 return extract_page_setup_quick_xml(&xml);
             }
@@ -1899,8 +1771,8 @@ impl DocxModifier {
 
     /// Gets header and footer info (text, images) from header/footer XML files
     pub fn get_header_footer(&self) -> HeaderFooterInfo {
-        let mut info = extract_header_footer_quick_xml(&self.files);
-        let files = &self.files;
+        let mut info = extract_header_footer_quick_xml(self.package.parts());
+        let files = &self.package.parts();
         let mut images = HashMap::new();
         let mut content = |kind: &str, ref_type: &str| {
             header_footer_part(files, kind, ref_type).map(|part| header_footer_elements(files, &part, &self.styles, &mut images))
@@ -1918,7 +1790,8 @@ impl DocxModifier {
     /// Pixels of every picture referenced by document.xml, by relationship id
     fn body_image_data_urls(&self, doc: &str) -> HashMap<String, String> {
         let rels = self
-            .files
+            .package
+            .parts()
             .get("word/_rels/document.xml.rels")
             .and_then(|b| std::str::from_utf8(b).ok())
             .map(parse_relationships_map)
@@ -1926,7 +1799,7 @@ impl DocxModifier {
         extract_drawing_embed_ids(doc)
             .into_iter()
             .filter_map(|id| {
-                let url = image_data_url(&self.files, rels.get(&id)?)?;
+                let url = image_data_url(&self.package.parts(), rels.get(&id)?)?;
                 Some((id, url))
             })
             .collect()
@@ -1949,75 +1822,15 @@ impl DocxModifier {
 
     /// Exports modified DOCX as bytes
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
-        let mut buffer = Cursor::new(Vec::new());
-        let mut zip = ZipWriter::new(&mut buffer);
-
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
-
-        for name in &self.original_order {
-            if let Some(content) = self.files.get(name) {
-                zip.start_file(name, options)
-                    .map_err(|e| format!("Error al escribir entrada ZIP '{}': {}", name, e))?;
-                zip.write_all(content)
-                    .map_err(|e| format!("Error al escribir contenido de '{}': {}", name, e))?;
-            }
-        }
-
-        // Include any new files added
-        for (name, content) in &self.files {
-            if !self.original_order.contains(name) {
-                zip.start_file(name, options)
-                    .map_err(|e| format!("Error al escribir nueva entrada ZIP '{}': {}", name, e))?;
-                zip.write_all(content)
-                    .map_err(|e| format!("Error al escribir contenido de '{}': {}", name, e))?;
-            }
-        }
-
-        zip.finish()
-            .map_err(|e| format!("Error al generar archivo final DOCX: {}", e))?;
-
-        Ok(buffer.into_inner())
+        self.package.to_bytes()
     }
 
     pub fn get_file_string(&self, path: &str) -> Result<String, String> {
-        match self.files.get(path) {
-            Some(bytes) => String::from_utf8(bytes.clone())
-                .map_err(|e| format!("El archivo '{}' no contiene UTF-8 válido: {}", path, e)),
-            None => Err(format!("No se encontró '{}' en el archivo DOCX.", path)),
-        }
+        self.package.get_string(path)
     }
 }
 
 // ---------------- Helper XML Functions using quick-xml ----------------
-
-pub fn parse_relationships_map(xml: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                let name = e.name();
-                if tag_is(name.as_ref(), "Relationship") {
-                    let id_opt = get_attr_value(e, "Id");
-                    let target_opt = get_attr_value(e, "Target");
-                    if let (Some(id), Some(target)) = (id_opt, target_opt) {
-                        map.insert(id, target);
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    map
-}
 
 pub fn extract_drawing_embed_ids(xml: &str) -> Vec<String> {
     let mut ids = Vec::new();
@@ -2226,22 +2039,8 @@ fn extract_text_runs_quick_xml(xml: &str) -> String {
     text_parts.join(" ")
 }
 
-/// Whether an element name (with or without a namespace prefix) is `name`
-pub(crate) fn tag_is(tag: impl AsRef<[u8]>, name: &str) -> bool {
-    if let Ok(s) = std::str::from_utf8(tag.as_ref()) {
-        s == name || s.ends_with(&format!(":{}", name))
-    } else {
-        false
-    }
-}
-
 /// Text of a text event with XML line endings normalized. Since quick-xml 0.38 entities
 /// (`&amp;`, `&#233;`) arrive as separate `Event::GeneralRef` events: see `general_ref_text`.
-/// An element or attribute name as text, whether given as text or bytes
-pub(crate) fn utf8<T: AsRef<[u8]> + ?Sized>(name: &T) -> &str {
-    std::str::from_utf8(name.as_ref()).unwrap_or("")
-}
-
 pub(crate) fn unescaped<'a>(t: &BytesText<'a>) -> Result<std::borrow::Cow<'a, str>, String> {
     Ok(t.xml10_content())
 }
@@ -2253,17 +2052,6 @@ pub(crate) fn general_ref_text(r: &quick_xml::events::BytesRef) -> String {
     } else {
         quick_xml::escape::resolve_predefined_entity(r).map(str::to_string).unwrap_or_default()
     }
-}
-
-pub(crate) fn get_attr_value(e: &BytesStart, local_name: &str) -> Option<String> {
-    for attr in e.attributes().flatten() {
-        let key = attr.key.as_ref();
-        let key_str = utf8(key);
-        if key_str == local_name || key_str.ends_with(&format!(":{}", local_name)) {
-            return attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok().map(|s| s.to_string());
-        }
-    }
-    None
 }
 
 fn get_attr_i64(e: &BytesStart, local_name: &str) -> Option<i64> {
@@ -3421,16 +3209,6 @@ fn set_bg_color_in_xml(xml: &str, hex: &str) -> String {
 
     let bytes = writer.into_inner().into_inner();
     String::from_utf8(bytes).unwrap_or_else(|_| xml.to_string())
-}
-
-/// Inserts a new table into document XML
-fn escape_xml(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]

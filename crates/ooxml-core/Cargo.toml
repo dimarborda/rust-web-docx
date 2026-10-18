@@ -1,0 +1,12 @@
+[package]
+name = "ooxml-core"
+version = "0.1.0"
+edition = "2021"
+description = "Lossless Office Open XML package layer: ZIP reading with limits, part store with undo/redo, relationships and content types"
+repository = "https://github.com/dimarborda/rust-web-docx"
+license = "MIT"
+publish = false
+
+[dependencies]
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"

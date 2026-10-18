@@ -19,6 +19,11 @@ regex = "1.10"
 quick-xml = { version = "0.42", features = ["serialize"] }
 base64 = "0.22"
 js-sys = "0.3"
+ooxml-core = { path = "crates/ooxml-core" }
+
+[workspace]
+members = [".", "crates/ooxml-core"]
+default-members = [".", "crates/ooxml-core"]
 
 [profile.release]
 opt-level = "s"

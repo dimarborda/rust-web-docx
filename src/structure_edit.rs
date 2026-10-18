@@ -34,7 +34,7 @@ const HEADING_STYLES: &[(&str, &str, &str)] = &[
 impl DocxModifier {
     /// Re-reads styles, theme and numbering (after a style is added, or undo/redo touched them)
     pub(super) fn reload_styles(&mut self) {
-        let files = &self.files;
+        let files = self.package.parts();
         let part = |path: &str| files.get(path).and_then(|b| std::str::from_utf8(b).ok());
         let theme_path = files.keys().filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml")).min().cloned();
         self.styles = StyleSheet::load(part("word/styles.xml"), theme_path.as_deref().and_then(part), part("word/numbering.xml"));
