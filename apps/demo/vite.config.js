@@ -49,6 +49,7 @@ export default defineConfig({
       input: {
         main: path.resolve(__dirname, 'index.html'),
         embed: path.resolve(__dirname, 'embed.html'),
+        xlsx: path.resolve(__dirname, 'xlsx.html'),
       },
     },
   },

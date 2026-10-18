@@ -50,18 +50,18 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --omit=dev --audit-level=high -w packages/docx-editor
 
-      - name: Build (wasm-pack + Vite)
+      - name: Build (wasm-pack for docx and xlsx + Vite)
         run: npm run build
 
       # Engine bindings and argument checks of the JS layer (needs the wasm built above)
       - name: JS tests
         run: npm test -w packages/docx-editor
 
-      # The xlsx library is not part of the site, but its engine and Node API are checked too
-      - name: xlsx build and tests
+      # The xlsx engine (built above for the xlsx viewer page) and its packages
+      - name: xlsx tests
         run: |
-          npm run build:wasm:xlsx
           npm test -w packages/xlsx
+          npm test -w packages/xlsx-editor
 
       - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3

@@ -1,0 +1,111 @@
+/* @dimarborda/xlsx-editor — import once: import '@dimarborda/xlsx-editor/style.css';
+   Customize with the --xlsx-* variables on the editor's container or any ancestor. */
+
+xlsx-editor {
+  display: block;
+  min-height: 12rem;
+}
+
+.xlsx-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: inherit;
+  background: #ffffff;
+  border: 1px solid var(--xlsx-border, #d1d5db);
+  border-radius: var(--xlsx-radius, 6px);
+  overflow: hidden;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1f2937;
+}
+
+.xlsx-editor-bar {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--xlsx-border, #d1d5db);
+  min-height: 28px;
+}
+
+.xlsx-editor-bar[hidden],
+.xlsx-editor-tabs[hidden] {
+  display: none;
+}
+
+.xlsx-editor-name {
+  flex: 0 0 auto;
+  min-width: 6.5rem;
+  padding: 4px 8px;
+  border-right: 1px solid var(--xlsx-border, #d1d5db);
+  font-variant-numeric: tabular-nums;
+}
+
+.xlsx-editor-value {
+  flex: 1 1 auto;
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xlsx-editor-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.xlsx-editor-canvas {
+  position: absolute;
+  inset: 0 auto auto 0;
+  display: block;
+}
+
+/* Transparent layer above the canvas that owns the scrollbars, the wheel and the clicks */
+.xlsx-editor-scroller {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+  cursor: cell;
+}
+
+.xlsx-editor-spacer {
+  pointer-events: none;
+}
+
+.xlsx-editor-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-top: 1px solid var(--xlsx-border, #d1d5db);
+  background: var(--xlsx-tabs-bg, #f3f4f6);
+  scrollbar-width: thin;
+}
+
+.xlsx-editor-tab {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font: inherit;
+  color: #4b5563;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.xlsx-editor-tab:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.xlsx-editor-tab.is-active {
+  background: #ffffff;
+  color: var(--xlsx-accent, #217346);
+  border-bottom-color: var(--xlsx-accent, #217346);
+  font-weight: 600;
+}
+
+.xlsx-editor-tab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

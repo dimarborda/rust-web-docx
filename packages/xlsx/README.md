@@ -71,3 +71,8 @@ Desde la raíz del repositorio:
 npm run build:wasm:xlsx
 npm test -w packages/xlsx
 ```
+
+## Dibujar hojas
+
+Para mostrar un libro en el navegador está [`@dimarborda/xlsx-editor`](../xlsx-editor), que usa la API de dibujo de este paquete: `workbook.styleView()`, `sheet.layout()` y `sheet.cellViews(locale)` (celdas con el texto ya formateado como en Excel).
+

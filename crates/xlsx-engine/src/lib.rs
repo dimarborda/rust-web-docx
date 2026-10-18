@@ -8,7 +8,10 @@ pub mod dates;
 pub mod shared_strings;
 pub mod sheet;
 pub mod styles;
+pub mod numfmt;
 pub mod text;
+pub mod theme;
+pub mod view;
 pub mod workbook;
 
 use std::collections::HashMap;
@@ -132,6 +135,23 @@ impl XlsxWorkbook {
         let values: HashMap<String, String> =
             serde_json::from_str(values).map_err(|e| js_err(format!("Los valores deben ser un objeto de textos: {}", e)))?;
         self.workbook.fill_template(&values).map_err(js_err)
+    }
+
+    /// Cell formats for drawing, as JSON: `{defaultFont, xfs: [{font, fill, border, h, v, …}]}`
+    pub fn styles_view_json(&self) -> Result<String, JsValue> {
+        Ok(self.workbook.style_view().map_err(js_err)?.to_json().to_string())
+    }
+
+    /// Grid of the sheet at `sheet` as JSON: column widths, row heights, merged cells, frozen panes
+    pub fn sheet_layout_json(&self, sheet: usize) -> Result<String, JsValue> {
+        Ok(self.workbook.sheet_layout(sheet).map_err(js_err)?.to_json().to_string())
+    }
+
+    /// Cells of the sheet at `sheet` that show something, formatted in the language `locale`
+    /// (`es`, `en-US`…), as JSON rows `[row, col, style, text, kind, color?]`
+    pub fn sheet_cells_json(&self, sheet: usize, locale: &str) -> Result<String, JsValue> {
+        let cells = self.workbook.cell_views(sheet, &numfmt::Locale::from_tag(locale)).map_err(js_err)?;
+        Ok(view::cells_json(&cells).to_string())
     }
 
     /// The workbook as .xlsx bytes

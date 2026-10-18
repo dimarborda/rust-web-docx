@@ -16,7 +16,9 @@ export function initEngine(wasm) {
     if (wasm && (ArrayBuffer.isView(wasm) || wasm instanceof ArrayBuffer)) {
       initSync({ module: wasm });
     } else if (!wasm && isNode) {
-      const { readFile } = await import('node:fs/promises');
+      // Hidden from bundlers: this branch only runs in Node
+      const fs = 'node:fs/promises';
+      const { readFile } = await import(/* @vite-ignore */ /* webpackIgnore: true */ fs);
       initSync({ module: await readFile(new URL('../wasm/xlsx_engine_bg.wasm', import.meta.url)) });
     } else {
       await init(wasm ? { module_or_path: wasm } : undefined);
@@ -104,6 +106,24 @@ export class Sheet {
     const json = rows.map((row, r) => Array.from(row, (v, c) => toInput(v, `${start} +${r},${c}`)));
     call(() => this.workbook._engine.set_values_json(this.index, start, JSON.stringify(json)));
   }
+
+  /**
+   * Drawing API: the grid of the sheet (column widths in characters, row heights in points,
+   * merged ranges, frozen panes, gridlines)
+   */
+  layout() {
+    return JSON.parse(call(() => this.workbook._engine.sheet_layout_json(this.index)));
+  }
+
+  /**
+   * Drawing API: every cell that shows something, with the text Excel shows for it in the
+   * language `locale`, as `[row, col, style, text, kind, color?]` (`kind`: `n`, `s`, `b`, `e`
+   * or `''` for an empty cell with a format; `style` indexes `workbook.styleView().xfs`)
+   * @param {string} [locale]
+   */
+  cellViews(locale = 'en') {
+    return JSON.parse(call(() => this.workbook._engine.sheet_cells_json(this.index, locale)));
+  }
 }
 
 /** An open workbook */
@@ -123,6 +143,16 @@ export class Workbook {
     return JSON.parse(this._engine.sheets_json())
       .map((s, index) => (s.kind === 'worksheet' ? new Sheet(this, index, s.name) : null))
       .filter(Boolean);
+  }
+
+  /** Every tab in order: `{name, kind: 'worksheet' | 'chartsheet' | 'other', state}` */
+  get tabs() {
+    return JSON.parse(call(() => this._engine.sheets_json()));
+  }
+
+  /** Drawing API: the cell formats resolved to fonts, fills, borders and alignment */
+  styleView() {
+    return JSON.parse(call(() => this._engine.styles_view_json()));
   }
 
   /**

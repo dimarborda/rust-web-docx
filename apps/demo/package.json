@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@dimarborda/docx-editor": "*",
+    "@dimarborda/xlsx-editor": "*",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/outfit": "^5.3.0"

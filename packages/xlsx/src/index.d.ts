@@ -40,6 +40,71 @@ export class Sheet {
    * `undefined` leaves a cell as it is; `null` clears it. Writing a value replaces a formula.
    */
   setValues(start: string, rows: ReadonlyArray<ReadonlyArray<CellValue | undefined>>): void;
+  /** Drawing API: the grid of the sheet */
+  layout(): SheetLayout;
+  /**
+   * Drawing API: every cell that shows something, with the text Excel shows for it in the
+   * language `locale` (`es`, `en-US`…; default `en`)
+   */
+  cellViews(locale?: string): CellViewRow[];
+}
+
+/** Grid of a sheet, as Excel stores it */
+export interface SheetLayout {
+  /** Points */
+  defaultRowHeight: number | null;
+  /** Characters of the default font's digit width, padding included */
+  defaultColWidth: number | null;
+  baseColWidth: number | null;
+  /** `[firstColumn, lastColumn, width | null, hidden]`, columns counted from 1 */
+  cols: [number, number, number | null, boolean][];
+  /** `[row, heightInPoints | null, hidden]`, rows counted from 1 */
+  rows: [number, number | null, boolean][];
+  /** Merged ranges such as `A1:D1` */
+  merges: string[];
+  gridlines: boolean;
+  headings: boolean;
+  rightToLeft: boolean;
+  frozen: { rows: number; cols: number } | null;
+}
+
+/**
+ * `[row, col, style, text, kind, color?]`: `kind` is `n` (number or date), `s` (text), `b`,
+ * `e` (error) or `''` (empty cell with a format); `color` comes from the number format
+ */
+export type CellViewRow = [number, number, number, string, 'n' | 's' | 'b' | 'e' | '', string?];
+
+export interface FontView {
+  name: string;
+  /** Points */
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  /** `#RRGGBB`; `null` is automatic (black) */
+  color: string | null;
+}
+
+/** A cell format resolved for drawing */
+export interface XfView {
+  font: FontView;
+  /** Background `#RRGGBB` */
+  fill: string | null;
+  /** Left, right, top, bottom: `[style, color]` or `null` */
+  border: ([string, string | null] | null)[];
+  h: string | null;
+  v: string | null;
+  wrap: boolean;
+  shrink: boolean;
+  indent: number;
+  rotation: number;
+}
+
+export interface StyleView {
+  defaultFont: { name: string; size: number };
+  /** By style index (a cell's `style`) */
+  xfs: XfView[];
 }
 
 /** An open workbook */
@@ -49,6 +114,10 @@ export class Workbook {
   readonly sheetNames: string[];
   /** The worksheets, in tab order (chart sheets left out) */
   readonly sheets: Sheet[];
+  /** Every tab in order, chart sheets included */
+  readonly tabs: { name: string; kind: 'worksheet' | 'chartsheet' | 'other'; state: 'visible' | 'hidden' | 'veryHidden' }[];
+  /** Drawing API: the cell formats resolved to fonts, fills, borders and alignment */
+  styleView(): StyleView;
   /** A worksheet by name (ignoring case) or tab position from 0 */
   sheet(nameOrIndex: string | number): Sheet;
   /**

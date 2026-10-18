@@ -17,6 +17,9 @@ use crate::shared_strings::{SharedStrings, EMPTY_SST};
 use crate::sheet::{CellNode, SheetXml};
 use crate::styles::{date_style, Styles};
 use crate::text::fill_xml;
+use crate::numfmt::Locale;
+use crate::theme::Theme;
+use crate::view::{self, CellView, SheetLayout, StyleSheetView};
 
 /// Main part of the workbook when the package does not say otherwise
 pub const WORKBOOK_PART: &str = "xl/workbook.xml";
@@ -222,6 +225,34 @@ impl Workbook {
             Some(part) => Styles::parse(&self.package.get_string(&part)?),
             None => Ok(Styles::default()),
         }
+    }
+
+    /// The workbook theme (Office's default when it has none)
+    fn theme(&self) -> Theme {
+        self.related_part("theme")
+            .and_then(|part| self.package.get_string(&part).ok())
+            .map(|xml| Theme::parse(&xml))
+            .unwrap_or_default()
+    }
+
+    /// The cell formats resolved for drawing
+    pub fn style_view(&self) -> Result<StyleSheetView, String> {
+        match self.related_part("styles") {
+            Some(part) => StyleSheetView::parse(&self.package.get_string(&part)?, &self.theme()),
+            None => StyleSheetView::parse("<styleSheet/>", &self.theme()),
+        }
+    }
+
+    /// Column widths, row heights, merged cells and frozen panes of the sheet at `sheet`
+    pub fn sheet_layout(&self, sheet: usize) -> Result<SheetLayout, String> {
+        SheetLayout::parse(&self.package.get_string(&self.worksheet_part(sheet)?)?)
+    }
+
+    /// The cells of the sheet at `sheet` that show something, with the text Excel shows for
+    /// them in the language `locale`
+    pub fn cell_views(&self, sheet: usize, locale: &Locale) -> Result<Vec<CellView>, String> {
+        let xml = self.package.get_string(&self.worksheet_part(sheet)?)?;
+        view::cell_views(&xml, &self.shared_strings()?, &self.style_view()?, locale, self.date1904())
     }
 
     /// The cell at `reference` of the sheet at `sheet`

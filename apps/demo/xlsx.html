@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rust XLSX · Visor de hojas de cálculo</title>
+  <meta name="description" content="Visor de libros de Excel (.xlsx) en el navegador: Rust y WebAssembly dibujados en canvas." />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; height: 100dvh; display: flex; flex-direction: column; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f1f5f9; color: #0f172a; }
+    header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e2e8f0; }
+    header h1 { font-size: 1rem; margin: 0 auto 0 0; }
+    header a { color: #475569; font-size: 0.9rem; }
+    main { flex: 1; min-height: 0; padding: 12px 16px 16px; }
+    xlsx-editor { height: 100%; }
+    button, label.file { font: inherit; font-size: 0.9rem; padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+    label.file input { display: none; }
+    select { font: inherit; font-size: 0.9rem; padding: 5px 8px; border-radius: 6px; border: 1px solid #cbd5e1; }
+    #status { font-size: 0.85rem; color: #64748b; min-width: 10rem; }
+    .drop xlsx-editor { outline: 3px dashed #217346; outline-offset: -3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>&lt;xlsx-editor&gt; · visor</h1>
+    <span id="status"></span>
+    <label class="file">Abrir .xlsx…<input id="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
+    <select id="zoom" aria-label="Zoom">
+      <option value="0.75">75 %</option>
+      <option value="1" selected>100 %</option>
+      <option value="1.25">125 %</option>
+      <option value="1.5">150 %</option>
+    </select>
+    <button id="save" type="button">Descargar</button>
+    <a href="/">Editor de Word</a>
+  </header>
+  <main>
+    <xlsx-editor id="sheet" src="/ejemplo-ventas.xlsx" locale="es"></xlsx-editor>
+  </main>
+  <script type="module" src="/src/xlsx.js"></script>
+</body>
+</html>
