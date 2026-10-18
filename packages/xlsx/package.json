@@ -1,6 +1,6 @@
 {
   "name": "@dimarborda/xlsx",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Excel (.xlsx) library for Node.js and the browser: Rust + WebAssembly engine that edits workbooks without losing what it does not touch",
   "type": "module",
   "license": "MIT",
