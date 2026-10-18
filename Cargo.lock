@@ -440,6 +440,7 @@ dependencies = [
  "console_error_panic_hook",
  "ooxml-core",
  "quick-xml",
+ "serde_json",
  "wasm-bindgen",
  "zip",
 ]

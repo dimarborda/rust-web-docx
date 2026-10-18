@@ -153,6 +153,20 @@ impl Package {
         self.parts.insert(name, bytes);
     }
 
+    /// Deletes a part, remembering its content for undo when a step is open
+    pub fn remove(&mut self, name: &str) -> Option<Vec<u8>> {
+        if !self.parts.contains_key(name) {
+            return None;
+        }
+        if let Some(step) = self.history.recording.as_mut() {
+            if !step.parts.iter().any(|(n, _)| n == name) {
+                step.parts.push((name.to_string(), self.parts.get(name).cloned()));
+                self.history.redo.clear();
+            }
+        }
+        self.parts.remove(name)
+    }
+
     /// Names of the parts in the order they are written, starting with the original archive's
     pub fn order(&self) -> &[String] {
         &self.original_order
@@ -351,5 +365,18 @@ mod tests {
         assert_eq!(redone.selection.as_deref(), Some("after"));
         assert_eq!(pkg.get("b").unwrap(), b"new");
         assert!(pkg.redo().is_none());
+    }
+
+    #[test]
+    fn removes_parts_undoably() {
+        let bytes = zip_of(&[("a", "1"), ("b", "2")]);
+        let mut pkg = Package::from_bytes(&bytes, &ZipLimits::default(), "TEST").unwrap();
+        pkg.checkpoint(None);
+        assert_eq!(pkg.remove("a").unwrap(), b"1");
+        assert!(pkg.remove("a").is_none());
+        assert_eq!(names(&pkg.to_bytes().unwrap()), ["b"]);
+        pkg.undo().unwrap();
+        assert_eq!(pkg.get("a").unwrap(), b"1");
+        assert_eq!(names(&pkg.to_bytes().unwrap()), ["a", "b"]);
     }
 }
