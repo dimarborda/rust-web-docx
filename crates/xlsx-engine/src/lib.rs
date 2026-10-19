@@ -137,6 +137,34 @@ impl XlsxWorkbook {
         self.workbook.fill_template(&values).map_err(js_err)
     }
 
+    /// Markers of the shared lexicon (`{{KEY}}`, `{key}`, `[ … ]`, see `ooxml_core::markers`)
+    /// in the text cells of every worksheet, as JSON:
+    /// `[{sheet, sheetName, ref, row, col, kind, syntax, raw, key, hint, offset, length}]`
+    pub fn markers_json(&self) -> Result<String, JsValue> {
+        let sheets = self.workbook.sheets().map_err(js_err)?;
+        let locale = numfmt::Locale::from_tag("en");
+        let mut out = Vec::new();
+        for (index, info) in sheets.iter().enumerate() {
+            if info.kind != SheetKind::Worksheet {
+                continue;
+            }
+            for cell in self.workbook.cell_views(index, &locale).map_err(js_err)? {
+                if cell.kind != "s" {
+                    continue;
+                }
+                for m in ooxml_core::markers::scan(&cell.text) {
+                    let reference = format!("{}{}", cell_ref::column_name(cell.col), cell.row);
+                    out.push(json!({
+                        "sheet": index, "sheetName": info.name, "ref": reference, "row": cell.row, "col": cell.col,
+                        "kind": m.kind.as_str(), "syntax": m.syntax.as_str(), "raw": m.raw,
+                        "key": m.key, "hint": m.hint, "offset": m.start, "length": m.len,
+                    }));
+                }
+            }
+        }
+        Ok(Value::Array(out).to_string())
+    }
+
     /// Cell formats for drawing, as JSON: `{defaultFont, xfs: [{font, fill, border, h, v, …}]}`
     pub fn styles_view_json(&self) -> Result<String, JsValue> {
         Ok(self.workbook.style_view().map_err(js_err)?.to_json().to_string())

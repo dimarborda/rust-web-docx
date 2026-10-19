@@ -59,6 +59,62 @@ export interface DocxEditorLabels {
   /** Labels shown on the header and footer while editing them */
   header: string;
   footer: string;
+  /** Default label of `markActivity()` marks */
+  agent: string;
+  /** Tooltip of the activity chips */
+  goToActivity: string;
+}
+
+/** A marker of the standard lexicon, as `markers()` lists it */
+export interface Marker {
+  /** `<paragraph>:<offset>` when listed; `fillMarker()` also takes it */
+  id: string;
+  /** `field`: `{{KEY}}`, `{{KEY: hint}}` or `{key}`; `pending`: `[ … ]` content still to be written */
+  kind: 'field' | 'pending';
+  syntax: 'double' | 'single' | 'bracket';
+  /** The marker as written */
+  raw: string;
+  /** Field name; null for pending content */
+  key: string | null;
+  /** Text after the field's colon, or the text inside `[ … ]`; null when there is none */
+  hint: string | null;
+  paragraph: number;
+  /** Code points, as `selection` */
+  offset: number;
+  length: number;
+  place: 'body' | 'table' | 'textbox' | 'headerFooter';
+  /** Key of the deepest logical section holding it */
+  section: string | null;
+}
+
+/** What an activity mark points at */
+export type ActivityTarget =
+  | string
+  | { section: string }
+  | { from: number; to?: number }
+  | { first: number; count: number }
+  | { paragraph: number; offset?: number; length?: number };
+
+export interface ActivityHandle {
+  id: string;
+  /** Moves the mark (e.g. to the next paragraph being written) or changes its label */
+  update(target?: ActivityTarget, options?: { label?: string }): void;
+  /** Removes the mark */
+  done(): void;
+  /** Scrolls the mark into view; the caret stays where it is */
+  reveal(): boolean;
+}
+
+export interface ActivityInfo {
+  id: string;
+  /** `work`: from `markActivity()`; `flash`: a change made from code a moment ago */
+  kind: 'work' | 'flash';
+  label: string;
+  from: number | null;
+  to: number | null;
+  section: string | null;
+  /** Page where the mark starts, once painted */
+  page: number | null;
 }
 
 export type PageSize = 'a4' | 'letter' | 'legal';
@@ -264,6 +320,8 @@ export interface DocxEditorOptions {
   wasmUrl?: string | URL;
   /** Start in read-only mode (default false: editable); see `setReadOnly` */
   readOnly?: boolean;
+  /** Milliseconds a change made from code stays highlighted (default 1800); false: none */
+  flash?: number | false;
 }
 
 export interface DocxEditorEventMap {
@@ -275,6 +333,8 @@ export interface DocxEditorEventMap {
   /** `setReadOnly()` changed the mode */
   readonlychange: CustomEvent<{ readOnly: boolean }>;
   message: CustomEvent<{ message: string; error: boolean }>;
+  /** Activity marks appeared, moved or went away */
+  activity: CustomEvent<{ activities: ActivityInfo[] }>;
 }
 
 export class DocxEditor extends EventTarget {
@@ -316,10 +376,34 @@ export class DocxEditor extends EventTarget {
   downloadPdf(fileName?: string, options?: { watermark?: boolean }): Promise<void>;
 
   text(): string;
-  /** Placeholders such as "{{CLIENTE}}" or "{fecha}" */
+  /** Fields as written, such as "{{CLIENTE}}" or "{fecha}" (see `markers()`) */
   variables(): string[];
-  /** Keys with or without braces: { CLIENTE: 'Acme' } fills {{CLIENTE}} */
+  /**
+   * A key with braces is replaced as written; a bare key fills every spelling of the field:
+   * { CLIENTE: 'Acme' } fills {{CLIENTE}}, {{ CLIENTE }}, {CLIENTE} and {{CLIENTE: hint}}
+   */
   replaceVariables(values: Record<string, string> | { key: string; value: string }[]): ReplaceResult;
+  /**
+   * Markers of the standard lexicon in document order: `{{KEY}}` / `{key}` fields and `[ … ]`
+   * pending content (citations such as [1], checkboxes and [sic] are not markers)
+   */
+  markers(filter?: { kind?: 'field' | 'pending'; section?: string }): Marker[];
+  /**
+   * Replaces one marker with text as one undo step, keeping its formatting, and highlights the
+   * change for a moment. Throws when the marker is no longer there.
+   */
+  fillMarker(marker: Marker | string, text: string): { paragraph: number; offset: number; end: TextPosition };
+  /**
+   * Shows where an agent or any code is working (tinted area, margin bar, label and a chip at
+   * the top that scrolls there). View only: not saved, the caret and scroll stay put.
+   */
+  markActivity(target: ActivityTarget, options?: { label?: string; color?: string; ttl?: number }): ActivityHandle;
+  /** Activity marks shown now, in document order */
+  activities(): ActivityInfo[];
+  /** Scrolls an activity mark (the latest `work` one by default) into view */
+  revealActivity(id?: string): boolean;
+  /** Removes one activity mark, or all of them */
+  clearActivity(id?: string): void;
   findReplace(search: string, replacement: string, options?: { matchCase?: boolean; regex?: boolean }): ReplaceResult;
   stats(): DocumentStats | null;
   fonts(): DocumentFont[];
@@ -493,6 +577,8 @@ export class DocxToolbarElement extends HTMLElement {}
 export function defineDocxElements(): void;
 
 export function initEngine(wasmUrl?: string | URL): Promise<void>;
+/** Markers of the standard lexicon in any text, without a document (needs `initEngine()`) */
+export function findMarkers(text: string): Array<Omit<Marker, 'id' | 'paragraph' | 'place' | 'section'>>;
 /** Bytes of the built-in demo contract */
 export function sampleDocx(): Promise<Uint8Array>;
 

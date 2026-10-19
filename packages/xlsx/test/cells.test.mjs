@@ -50,6 +50,19 @@ test('fillTemplate() replaces placeholders and counts them', async () => {
   assert.throws(() => template.fillTemplate({ X: {} }), TypeError);
 });
 
+test('markers() finds fields and pending content in text cells', async () => {
+  const wb = await createWorkbook();
+  wb.sheet(0).setValues('A1', [['Cliente: {{ CLIENTE: razón social }}', 42], [null, 'Plazo [Completar] ver [1]']]);
+  const template = await reopen(wb);
+  assert.deepEqual(template.markers().map(m => [m.ref, m.row, m.col, m.kind, m.key, m.hint, m.offset]), [
+    ['A1', 1, 1, 'field', 'CLIENTE', 'razón social', 9],
+    ['B2', 2, 2, 'pending', null, 'Completar', 6],
+  ]);
+  assert.equal(template.markers({ kind: 'field' }).length, 1);
+  assert.equal(template.fillTemplate({ CLIENTE: 'Acme' }), 1);
+  assert.equal((await reopen(template)).sheet(0).getValue('A1'), 'Cliente: Acme');
+});
+
 test('invalid input is refused with a reason', async () => {
   const wb = await createWorkbook();
   const sheet = wb.sheet(0);

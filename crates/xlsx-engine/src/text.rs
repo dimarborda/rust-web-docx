@@ -125,15 +125,17 @@ fn needs_preserve(text: &str) -> bool {
     text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) || text.contains('\n')
 }
 
-/// `text` with every `{{FIELD}}` (spaces around the name allowed) that `values` knows replaced,
-/// and how many were replaced; unknown placeholders are left as they are
+/// `text` with every `{{FIELD}}` (spaces around the name and a `: hint` after it allowed, as in
+/// `ooxml_core::markers`) that `values` knows replaced, and how many were replaced; unknown
+/// placeholders are left as they are
 pub fn fill_placeholders(text: &str, values: &HashMap<String, String>) -> (String, usize) {
     let mut out = String::with_capacity(text.len());
     let mut count = 0;
     let mut rest = text;
     while let Some(open) = rest.find("{{") {
         let Some(close) = rest[open + 2..].find("}}") else { break };
-        let key = rest[open + 2..open + 2 + close].trim();
+        let inner = &rest[open + 2..open + 2 + close];
+        let key = inner.split_once(':').map_or(inner, |(key, _)| key).trim();
         out.push_str(&rest[..open]);
         match values.get(key) {
             Some(value) => {
@@ -208,6 +210,7 @@ mod tests {
     fn fills_known_placeholders() {
         let v = values(&[("NOMBRE", "Ana & Luis"), ("X", " ")]);
         assert_eq!(fill_placeholders("Hola {{NOMBRE}}, {{ NOMBRE }} y {{OTRO}} {{", &v), ("Hola Ana & Luis, Ana & Luis y {{OTRO}} {{".to_string(), 2));
+        assert_eq!(fill_placeholders("{{NOMBRE: completo}}", &v), ("Ana & Luis".to_string(), 1));
 
         let xml = r#"<sst><si><t>Para {{NOMBRE}}</t></si><si><t>{{X}}</t></si><si><t>{{OTRO}}</t></si></sst>"#;
         let (out, count) = fill_xml(xml, "si", &v).unwrap().unwrap();

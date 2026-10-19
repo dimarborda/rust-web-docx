@@ -121,10 +121,16 @@ export class Workbook {
   /** A worksheet by name (ignoring case) or tab position from 0 */
   sheet(nameOrIndex: string | number): Sheet;
   /**
-   * Replaces `{{FIELD}}` placeholders in the shared and inline strings of the workbook and
+   * Replaces `{{FIELD}}` placeholders (also `{{ FIELD }}` and `{{FIELD: hint}}`) in the shared and inline strings of the workbook and
    * returns how many were replaced. Unknown placeholders are left as they are.
    */
   fillTemplate(values: Record<string, string | number | boolean | null | undefined>): number;
+  /**
+   * Markers of the standard lexicon (shared with @dimarborda/docx-editor) in the text cells of
+   * every worksheet: `field` for `{{KEY}}`, `{{KEY: hint}}` or `{key}`, `pending` for `[ … ]`
+   * content still to be written. `offset` / `length` are in code points within the cell text.
+   */
+  markers(filter?: { kind?: 'field' | 'pending' }): WorkbookMarker[];
   /** The workbook as .xlsx bytes */
   toBytes(): Uint8Array;
   /** Frees the engine memory of this workbook; it cannot be used afterwards */
@@ -136,3 +142,24 @@ export function openWorkbook(bytes: Uint8Array | ArrayBuffer): Promise<Workbook>
 
 /** A new workbook with one empty sheet */
 export function createWorkbook(): Promise<Workbook>;
+
+/** A marker found in a text cell by `Workbook.markers()` */
+export interface WorkbookMarker {
+  sheet: number;
+  sheetName: string;
+  /** A1 reference of the cell */
+  ref: string;
+  /** Row and column, counted from 1 */
+  row: number;
+  col: number;
+  kind: 'field' | 'pending';
+  syntax: 'double' | 'single' | 'bracket';
+  /** The marker as written */
+  raw: string;
+  /** Field name; null for pending content */
+  key: string | null;
+  /** Text after the field's colon, or the text inside `[ … ]`; null when there is none */
+  hint: string | null;
+  offset: number;
+  length: number;
+}

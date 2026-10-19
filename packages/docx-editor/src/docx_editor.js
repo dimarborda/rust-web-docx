@@ -1,10 +1,12 @@
 // DocxEditor: a Word document editor mounted in any element. Rust (WebAssembly) parses the
 // .docx, lays out the pages and applies lossless edits; this class renders the pages to
 // canvases, wires the caret/selection editor and exposes a small API plus DOM events.
-import { DocxSession, engineReady, initEngine } from './engine.js';
+import { DocxSession, engineReady, initEngine, scanMarkers } from './engine.js';
 import { createCanvasEditor } from './canvas_editor.js';
 import { checkIndex, engineCall, tableRowsPayload } from './table_api.js';
 import { checkSectionKey, sectionContent } from './section_api.js';
+import { collectMarkers, innermostSection, relocateMarker, variablePairs } from './marker_api.js';
+import { createActivityLayer, textDiff } from './activity.js';
 import { onFontsChanged } from './fonts_registry.js';
 import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
 
@@ -21,6 +23,8 @@ const LABELS = {
     untitled: 'documento.docx',
     header: 'Encabezado',
     footer: 'Pie de página',
+    agent: 'Agente',
+    goToActivity: 'Ir a donde se está trabajando',
   },
   en: {
     editor: 'Document editor',
@@ -31,11 +35,11 @@ const LABELS = {
     untitled: 'document.docx',
     header: 'Header',
     footer: 'Footer',
+    agent: 'Agent',
+    goToActivity: 'Go to where the work is happening',
   },
 };
 
-// {{VARIABLE}} placeholders, plus VEAD-style {variable}
-const VARIABLE_PATTERN = /\{\{[^{}]+\}\}|\{[^{}\s]+\}/g;
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /**
@@ -48,6 +52,8 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * @property {string|URL} [wasmUrl]       where docx_engine_bg.wasm is served from
  * @property {boolean} [readOnly=false]   the user can navigate, select and copy but not edit
  *                                        (see `setReadOnly()`)
+ * @property {number|false} [flash=1800]  ms a change made from code stays highlighted (see
+ *                                        `markActivity()`); false: no highlight
  *
  * Events (dispatched on the editor; `<docx-editor>` re-dispatches them on the element):
  * - `load`             a document was opened
@@ -56,6 +62,7 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * - `imageselect`      detail: { image } the picture selected with the mouse or `selectImage()` (null when none)
  * - `readonlychange`   detail: { readOnly } after `setReadOnly()` changed the mode
  * - `message`          detail: { message, error } hints and errors meant for the user
+ * - `activity`         detail: { activities } the activity marks changed (see `activities()`)
  */
 export class DocxEditor extends EventTarget {
   /** Loads the engine if needed and mounts an editor in `container` */
@@ -85,12 +92,14 @@ export class DocxEditor extends EventTarget {
   #fontWidths = '';
   #fontChecks = [];
   #onKeyDown;
+  #activity;
+  #activityJSON = '[]';
 
   /** Use `DocxEditor.create()` unless the engine is already initialized (`initEngine()`) */
   constructor(container, options = {}) {
     super();
     if (!engineReady()) throw new Error('docx-editor: await initEngine() or use DocxEditor.create()');
-    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, ...options };
+    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, flash: 1800, ...options };
     this.#readOnly = !!this.options.readOnly;
     this.labels = { ...(LABELS[this.options.locale] || LABELS.en), ...options.labels };
     this.#zoom = this.options.zoom;
@@ -123,6 +132,25 @@ export class DocxEditor extends EventTarget {
     });
     this.root.classList.toggle('read-only', this.#readOnly);
     this.#canvasEditor.readOnlyChanged();
+
+    this.#activity = createActivityLayer({
+      root: this.root,
+      labels: this.labels,
+      cards: () => this.#rendered.cards,
+      zoom: () => this.#zoom,
+      sections: () => this.sections(),
+      sectionAt: index => innermostSection(this.sections(), index),
+      lengthOf: index => paragraphChars(this.#paragraphs().byIndex.get(index) || {}).length,
+      rects: (a, b) => JSON.parse(this.#session?.selection_rects_range(
+        a.paragraph, a.offset, b.paragraph, b.offset, measureText, undefined,
+      ) || '[]'),
+      changed: activities => {
+        const json = JSON.stringify(activities);
+        if (json === this.#activityJSON) return;
+        this.#activityJSON = json;
+        this.#emit('activity', { activities });
+      },
+    });
 
     // Formatting shortcuts while the caret is in this editor
     this.#onKeyDown = e => {
@@ -175,6 +203,7 @@ export class DocxEditor extends EventTarget {
 
   /** Closes the current document */
   close() {
+    this.#activity?.clear();
     this.#session?.free();
     this.#session = null;
     this.#layout = null;
@@ -260,26 +289,117 @@ export class DocxEditor extends EventTarget {
     return this.#session.get_raw_text();
   }
 
-  /** Placeholders found in the document, e.g. ["{{CLIENTE}}", "{fecha}"] */
+  /** Fields found in the document as written, e.g. ["{{CLIENTE}}", "{fecha}"] (see `markers()`) */
   variables() {
-    if (!this.#session) return [];
-    return [...new Set(this.#session.get_raw_text().match(VARIABLE_PATTERN) || [])];
+    return [...new Set(this.markers({ kind: 'field' }).map(m => m.raw))];
   }
 
   /**
    * Fills placeholders, keeping each one's formatting even when Word split it across runs.
-   * Keys may be written with or without braces: `{ CLIENTE: 'Acme' }` fills `{{CLIENTE}}`.
+   * A key with braces is replaced as written; a bare key fills every spelling of that field:
+   * `{ CLIENTE: 'Acme' }` fills `{{CLIENTE}}`, `{{ CLIENTE }}`, `{CLIENTE}` and `{{CLIENTE: hint}}`.
    * @param {Record<string, string> | {key: string, value: string}[]} values
    * @returns {{occurrences_replaced: number, message: string}}
    */
   replaceVariables(values) {
     this.#require();
-    const pairs = (Array.isArray(values) ? values : Object.entries(values).map(([key, value]) => ({ key, value })))
-      .filter(p => p.key)
-      .map(({ key, value }) => ({ key: key.includes('{') ? key : `{{${key}}}`, value: String(value ?? '') }));
+    const fields = this.markers({ kind: 'field' });
+    const pairs = variablePairs(values, fields);
     const result = JSON.parse(this.#session.batch_replace(JSON.stringify(pairs)));
     this.#changed();
+    const filled = new Set(pairs.map(p => p.key));
+    new Set(fields.filter(m => filled.has(m.raw)).map(m => m.paragraph)).forEach(p => this.#flash({ from: p, to: p }));
     return result;
+  }
+
+  // ---------- Markers ----------
+
+  /**
+   * Markers of the standard lexicon in document order (body, table cells, text boxes, headers
+   * and footers):
+   * - `field`: `{{KEY}}`, `{{KEY: hint}}` or `{key}`, a value an automation fills
+   * - `pending`: `[ … ]`, content still to be written (`[…]`, `[Completar: alcance]`);
+   *   citations (`[1]`, `[2-4]`), checkboxes (`[ ]`, `[x]`) and `[sic]` are not markers
+   * `offset` / `length` are in code points, as `selection`; `place` is `body`, `table`,
+   * `textbox` or `headerFooter`; `section` the key of the deepest logical section holding it.
+   * @param {{kind?: 'field'|'pending', section?: string}} [filter]
+   * @returns {Array<{id: string, kind: 'field'|'pending', syntax: 'double'|'single'|'bracket', raw: string, key: string|null, hint: string|null, paragraph: number, offset: number, length: number, place: string, section: string|null}>}
+   */
+  markers({ kind, section } = {}) {
+    if (!this.#session) return [];
+    const all = collectMarkers(this.#paragraphs().list, this.sections(), scanMarkers, { kind });
+    return section == null ? all : all.filter(m => m.section === section);
+  }
+
+  /**
+   * Replaces one marker (from `markers()`, or its `id`) with `text` as one undo step, keeping
+   * the formatting of the marker's text ("\n" starts a new paragraph). Text typed before the
+   * marker since it was listed is taken into account; throws when the marker is gone.
+   * The change is highlighted for a moment (see the `flash` option).
+   * @returns {{paragraph: number, offset: number, end: {paragraph: number, offset: number}}}
+   */
+  fillMarker(marker, text) {
+    this.#require();
+    const ref = typeof marker === 'string' ? this.markers().find(m => m.id === marker) : marker;
+    if (!ref || !Number.isInteger(ref.paragraph) || typeof ref.raw !== 'string') {
+      throw new Error(`docx-editor: fillMarker: unknown marker ${typeof marker === 'string' ? marker : JSON.stringify(marker)}`);
+    }
+    const p = this.#paragraphs().byIndex.get(ref.paragraph);
+    const at = p && relocateMarker(ref, p.text);
+    if (!at) throw new Error(`docx-editor: fillMarker: ${ref.raw} is no longer in paragraph ${ref.paragraph}`);
+    const value = text == null ? '' : String(text).replace(/\r\n?/g, '\n');
+    const end = JSON.parse(engineCall(() => this.#session.edit(
+      ref.paragraph, at.offset, ref.paragraph, at.offset + at.length, value, this.#selectionJSON(), false,
+    )));
+    this.#changed();
+    this.#flash(end.paragraph === ref.paragraph
+      ? { paragraph: ref.paragraph, offset: at.offset, length: end.offset - at.offset }
+      : { from: ref.paragraph, to: end.paragraph });
+    return { paragraph: ref.paragraph, offset: at.offset, end };
+  }
+
+  // ---------- Activity ----------
+
+  /**
+   * Shows where an agent (or any code) is working, so the person reading can find it: a tinted
+   * area with a bar and a label in the margin, plus a chip at the top of the editor that
+   * scrolls there on click. View only: nothing is saved into the .docx, the caret and the
+   * scroll position are left alone. The mark follows its target through later edits.
+   * @param {string | {from: number, to?: number} | {first: number, count: number} | {paragraph: number, offset?: number, length?: number}} target
+   *        a section key, a paragraph range, what `insertParagraphs` / `replaceSection`…
+   *        return, or a span such as a marker
+   * @param {{label?: string, color?: string, ttl?: number}} [options] `ttl`: ms until it goes
+   *        away by itself (by default it stays until `done()`)
+   * @returns {{id: string, update: (target?: object|string, options?: {label?: string}) => void, done: () => void, reveal: () => boolean}}
+   */
+  markActivity(target, { label, color, ttl } = {}) {
+    const id = this.#activity.add('work', target, { label, color, ttl });
+    return {
+      id,
+      update: (next, opts) => this.#activity.update(id, next, opts),
+      done: () => this.#activity.remove(id),
+      reveal: () => this.#activity.reveal(id),
+    };
+  }
+
+  /**
+   * Activity marks shown now, in document order (`kind`: `work` from `markActivity()`, `flash`
+   * for a change made from code a moment ago); `page` is where the mark starts
+   * @returns {Array<{id: string, kind: 'work'|'flash', label: string, from: number|null, to: number|null, section: string|null, page: number|null}>}
+   */
+  activities() {
+    return this.#activity.list();
+  }
+
+  /** Scrolls an activity mark (the latest `work` one by default) into view; false when none */
+  revealActivity(id) {
+    return this.#activity.reveal(id);
+  }
+
+  /** Removes one activity mark, or every one when `id` is omitted */
+  clearActivity(id) {
+    if (id == null) this.#activity.clear();
+    else this.#activity.remove(id);
   }
 
   /**
@@ -380,6 +500,7 @@ export class DocxEditor extends EventTarget {
     ));
     this.#changed();
     this.#canvasEditor.select(result.caret);
+    this.#flash(result);
     return { first: result.first, count: result.count };
   }
 
@@ -517,6 +638,7 @@ export class DocxEditor extends EventTarget {
     const value = text == null ? '' : String(text).replace(/\r\n?/g, '\n');
     engineCall(() => this.#session.set_table_cell(table, row, col, value, this.#selectionJSON()));
     this.#changed();
+    this.#flashTable(table, row, row, col);
   }
 
   /**
@@ -538,6 +660,7 @@ export class DocxEditor extends EventTarget {
       table, at, JSON.stringify(payload), copyFormatFrom ?? undefined, this.#selectionJSON(),
     )));
     this.#changed();
+    if (result.count > 0) this.#flashTable(table, result.first, result.first + result.count - 1);
     return { first: result.first, count: result.count };
   }
 
@@ -564,6 +687,7 @@ export class DocxEditor extends EventTarget {
     const result = JSON.parse(this.#session.replace_paragraphs(from, to, JSON.stringify(items), this.#selectionJSON()));
     this.#changed();
     this.#canvasEditor.select(result.caret);
+    this.#flash(result);
     return { first: result.first, count: result.count };
   }
 
@@ -621,6 +745,7 @@ export class DocxEditor extends EventTarget {
     )));
     this.#changed();
     this.#canvasEditor.select(result.caret);
+    this.#flash(result);
     return { first: result.first, count: result.count };
   }
 
@@ -854,6 +979,7 @@ export class DocxEditor extends EventTarget {
   /** Removes the editor's element from the container; the container itself is left as it was */
   destroy() {
     this.close();
+    this.#activity.destroy();
     this.#canvasEditor.destroy();
     this.#unsubscribeFonts();
     document.fonts?.removeEventListener?.('loadingdone', this.#onFontsLoaded);
@@ -892,6 +1018,34 @@ export class DocxEditor extends EventTarget {
     this.#emit('change', {});
   }
 
+  /** Highlights for a moment what a call from code just changed (option `flash`) */
+  #flash(target) {
+    const ms = this.options.flash;
+    if (!(ms > 0)) return;
+    try {
+      this.#activity.add('flash', target, { label: '', ttl: ms });
+    } catch {
+      // nothing to highlight (e.g. an empty result)
+    }
+  }
+
+  /** Highlights rows `fromRow`–`toRow` of a table (one column when `col` is given) */
+  #flashTable(table, fromRow, toRow, col) {
+    const first = this.tables().find(t => t.index === table)?.first;
+    const el = this.#elements.find(e => e.type === 'table'
+      && Math.min(...(e.rich_rows || []).flatMap(r => r.cells.flatMap(c => (c.paragraphs || []).map(p => p.index)))) === first);
+    const indices = (el?.rich_rows || []).slice(fromRow, toRow + 1)
+      .flatMap(r => r.cells.filter((_, c) => col == null || c === col).flatMap(c => (c.paragraphs || []).map(p => p.index)));
+    if (indices.length) this.#flash({ from: Math.min(...indices), to: Math.max(...indices) });
+  }
+
+  /** Texts of the body and table cell paragraphs by index, to follow edits */
+  #bodyTexts() {
+    const texts = [];
+    for (const p of this.#paragraphs().list) if (p.index < TEXT_BOX_BASE) texts[p.index] = p.text || '';
+    return texts;
+  }
+
   /** Every paragraph (body and table cells) in document order, tagged with its container */
   #paragraphs() {
     if (this.#paragraphCache.source !== this.#elements) {
@@ -926,8 +1080,11 @@ export class DocxEditor extends EventTarget {
     const session = this.#session;
     if (!session) return;
     try {
-      // Edits made through the caret editor change the elements too
+      // Edits made through the caret editor change the elements too; activity marks on
+      // paragraph ranges follow the paragraphs that moved
+      const before = this.#activity.size ? this.#bodyTexts() : null;
       this.#refreshElements();
+      if (before) this.#activity.remap(textDiff(before, this.#bodyTexts()));
       const redrawAll = full || this.#rendered.session !== session || this.#rendered.zoom !== this.#zoom;
       const previous = this.#layout;
       this.#fontWidths = fontWidthsSignature(this.#requestedFaces);
@@ -963,6 +1120,7 @@ export class DocxEditor extends EventTarget {
       });
       this.#loadFonts(layout);
       this.#canvasEditor.endRender();
+      this.#activity.paint();
     } catch (err) {
       console.error('docx-editor: render failed', err);
       this.#emit('message', { message: String(err), error: true });

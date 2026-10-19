@@ -280,3 +280,117 @@ docx-toolbar {
   opacity: 0.45;
   cursor: default;
 }
+
+/* Activity marks (markActivity, and the highlight of changes made from code): a tinted area,
+   a bar in the margin and a label; view only, never saved into the .docx */
+.docx-editor .docx-activity-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.docx-editor .docx-activity {
+  --docx-activity-color: var(--docx-activity, #7c3aed);
+}
+
+.docx-editor .docx-activity-area {
+  position: absolute;
+  background: color-mix(in srgb, var(--docx-activity-color) 12%, transparent);
+}
+
+.docx-editor .docx-activity-bar {
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--docx-activity-color);
+}
+
+.docx-editor .docx-activity-work .docx-activity-bar {
+  animation: docx-activity-pulse 1.6s ease-in-out infinite;
+}
+
+/* The label sits above the first line, starting at the bar */
+.docx-editor .docx-activity-label {
+  position: absolute;
+  transform: translate(0, -100%);
+  margin-top: -2px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--docx-activity-color);
+  color: #ffffff;
+  font: 500 10px/1.4 system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+.docx-editor .docx-activity-flash {
+  --docx-activity-color: var(--docx-activity, #f59e0b);
+  animation: docx-activity-fade var(--docx-activity-flash, 1.8s) ease-out forwards;
+}
+
+.docx-editor .docx-activity-flash .docx-activity-area {
+  background: color-mix(in srgb, var(--docx-activity-color) 28%, transparent);
+}
+
+@keyframes docx-activity-pulse {
+  50% { opacity: 0.35; }
+}
+
+@keyframes docx-activity-fade {
+  0%, 40% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Chips pinned to the top of the editor: where the work is, and a click scrolls there */
+/* Pinned to the top of whatever scrolls the editor; move it below a fixed app bar with
+   --docx-activity-dock-top */
+.docx-editor .docx-activity-dock {
+  position: sticky;
+  top: var(--docx-activity-dock-top, 0);
+  z-index: 5;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 8px;
+  pointer-events: none;
+}
+
+.docx-editor .docx-activity-chip {
+  --docx-activity-color: var(--docx-activity, #7c3aed);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  margin-top: 8px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--docx-activity-color) 40%, transparent);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f2937;
+  font: 500 12px/1 system-ui, sans-serif;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.docx-editor .docx-activity-chip:hover {
+  background: color-mix(in srgb, var(--docx-activity-color) 8%, #ffffff);
+}
+
+.docx-editor .docx-activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--docx-activity-color);
+  animation: docx-activity-pulse 1.6s ease-in-out infinite;
+}
+
+.docx-editor .docx-activity-arrow:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docx-editor .docx-activity-work .docx-activity-bar,
+  .docx-editor .docx-activity-dot {
+    animation: none;
+  }
+}

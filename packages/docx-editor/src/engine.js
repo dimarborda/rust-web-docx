@@ -1,6 +1,6 @@
 // Loads the Rust/WebAssembly engine once per page. Bundlers (Vite, webpack 5, Rollup) emit
 // the .wasm file next to the JS automatically; pass `wasmUrl` to serve it from elsewhere.
-import init, { DocxSession, generate_sample_docx_wasm } from '../wasm/docx_engine.js';
+import init, { DocxSession, generate_sample_docx_wasm, scan_markers_json } from '../wasm/docx_engine.js';
 
 let loading = null;
 let ready = false;
@@ -48,6 +48,21 @@ export const engineReady = () => ready;
 export async function sampleDocx() {
   await initEngine();
   return generate_sample_docx_wasm();
+}
+
+/** The engine's marker scan over a JSON array of texts (see marker_api.js) */
+export const scanMarkers = textsJson => scan_markers_json(textsJson);
+
+/**
+ * Markers of the standard lexicon in any text, without a document: `{{KEY}}` / `{key}` fields
+ * and `[ … ]` pending content, with `offset` / `length` in code points. Needs the engine
+ * (`await initEngine()` first).
+ * @param {string} text
+ * @returns {Array<{kind: 'field'|'pending', syntax: 'double'|'single'|'bracket', raw: string, key: string|null, hint: string|null, offset: number, length: number}>}
+ */
+export function findMarkers(text) {
+  if (!ready) throw new Error('docx-editor: findMarkers needs the engine: await initEngine() first');
+  return JSON.parse(scan_markers_json(JSON.stringify([String(text ?? '')]))).map(({ item, ...marker }) => marker);
 }
 
 export { DocxSession };

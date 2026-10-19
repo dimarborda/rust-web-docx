@@ -27,6 +27,28 @@ pub fn generate_sample_docx_wasm() -> Result<js_sys::Uint8Array, JsValue> {
     Ok(js_sys::Uint8Array::from(&bytes[..]))
 }
 
+/// Markers of the shared lexicon (`{{KEY}}`, `{key}`, `[ … ]`, see `ooxml_core::markers`) in
+/// a JSON array of texts, in one call: `[{item, kind, syntax, raw, key, hint, offset, length}]`
+/// with `item` the position of the text in the array and offsets in code points
+#[wasm_bindgen]
+pub fn scan_markers_json(texts_json: &str) -> Result<String, JsValue> {
+    let texts: Vec<String> =
+        serde_json::from_str(texts_json).map_err(|e| JsValue::from_str(&format!("Se esperaba una lista de textos: {}", e)))?;
+    let found: Vec<serde_json::Value> = texts
+        .iter()
+        .enumerate()
+        .flat_map(|(item, text)| {
+            ooxml_core::markers::scan(text).into_iter().map(move |m| {
+                serde_json::json!({
+                    "item": item, "kind": m.kind.as_str(), "syntax": m.syntax.as_str(), "raw": m.raw,
+                    "key": m.key, "hint": m.hint, "offset": m.start, "length": m.len,
+                })
+            })
+        })
+        .collect();
+    to_json(&found)
+}
+
 /// Measures text through a JS callback `(text, family, sizePx, bold, italic) => width`
 struct JsMeasurer {
     func: js_sys::Function,

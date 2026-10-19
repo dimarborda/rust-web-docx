@@ -41,7 +41,8 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `hoja.getValue('B3')` / `hoja.getValues('A1:C3')` | Solo los valores; las celdas vacías dan `null`. |
 | `hoja.setValue('B3', valor)` | Escribe texto, número, booleano o `Date`; `null` borra el valor y deja el formato. |
 | `hoja.setValues('A2', filas)` | Escribe una matriz desde la celda indicada, creando filas y celdas en orden. `undefined` deja la celda como está. |
-| `wb.fillTemplate(valores)` | Sustituye `{{CAMPO}}` (se admiten espacios: `{{ CAMPO }}`) en las cadenas compartidas y en las cadenas en línea; devuelve cuántas sustituyó. Las variables sin valor se quedan como están. |
+| `wb.fillTemplate(valores)` | Sustituye `{{CAMPO}}` (se admiten espacios y una pista: `{{ CAMPO }}`, `{{CAMPO: pista}}`) en las cadenas compartidas y en las cadenas en línea; devuelve cuántas sustituyó. Las variables sin valor se quedan como están. |
+| `wb.markers({ kind })` | Marcadores del léxico estándar (el mismo de `@dimarborda/docx-editor`) en las celdas de texto de todas las hojas: `field` para `{{CLAVE}}` / `{clave}`, `pending` para `[…]` (contenido por completar). Cada uno con `sheet`, `sheetName`, `ref` (`B3`), `row`, `col`, `raw`, `key`, `hint`, `offset` y `length`. |
 | `wb.toBytes()` | El libro como `.xlsx`. |
 | `wb.close()` | Libera la memoria del motor. |
 

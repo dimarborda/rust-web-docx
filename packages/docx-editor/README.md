@@ -67,8 +67,10 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `open(source, { fileName })` / `openBlank({ fileName, pageSize, focus })` / `openSample()` / `close()` | Abrir, crear y cerrar documentos. `pageSize`: `a4` (predeterminado), `letter` o `legal` |
 | `save()` / `saveBlob()` / `download(name)` | Exportar el `.docx` editado |
 | `exportPdf({ watermark })` / `exportPdfBlob()` / `downloadPdf(name)` | Exportar a PDF vectorial (ver [PDF](#pdf)). Devuelven promesas |
-| `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido |
-| `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto |
+| `text()` / `variables()` / `stats()` / `fonts()` | Leer el contenido. `variables()` lista los campos tal como están escritos |
+| `replaceVariables(values)` / `findReplace(search, replacement, options)` | Rellenar plantillas y reemplazar texto. Una clave sin llaves rellena todas las formas del campo (`{{CLAVE}}`, `{{ CLAVE }}`, `{CLAVE}`, `{{CLAVE: pista}}`) |
+| `markers({ kind, section })` / `fillMarker(marker, text)` | Campos `{{…}}` / `{…}` y contenido pendiente `[…]` del léxico estándar, con su posición; rellenar uno conservando su formato (ver [Marcadores](#marcadores-campos-y-pendientes)) |
+| `markActivity(target, { label, color, ttl })` / `activities()` / `revealActivity(id)` / `clearActivity(id)` | Mostrar dónde está trabajando un agente o tu código (ver [Actividad](#actividad-dónde-está-trabajando-el-agente)) |
 | `insertParagraphs(paragraphs, { at })` / `insertText(text, { at })` | Insertar contenido en el cursor (`at: 'cursor'`, predeterminado), al inicio, al final o en una posición exacta (`at: { paragraph, offset }`), como un solo paso de deshacer. Cada párrafo es texto o `{ text, bold, italic, underline, fontSize, align, style }`; `style` (`'Title'`, `'Heading1'`, `'Heading2'`, `'Heading3'`) aplica el estilo de Word y lo crea si el documento no lo tiene. Los párrafos sin `style` insertados antes de un título no heredan su estilo |
 | `structure()` | Bloques del cuerpo en orden: `{ kind: 'paragraph', paragraph, text, headingLevel }` (1 = Título 1; `null` fuera del esquema) y `{ kind: 'table', index, first, last, rows, cols }` (párrafos de sus celdas; `index` es el de `tables()`). Base para trabajar por secciones |
 | `replaceParagraphs({ from, to }, paragraphs)` | Reemplaza los bloques del párrafo `from` al `to` (incluidas las tablas entre ellos) como un solo paso de deshacer. Falla si el rango corta una tabla o incluye un salto de sección |
@@ -95,6 +97,7 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | `imageselect` | `{ image }`: la imagen seleccionada con el ratón o `selectImage()`, o cambiada mientras está seleccionada (`null` al deseleccionar) |
 | `readonlychange` | `{ readOnly }`: `setReadOnly()` cambió el modo |
 | `message` | `{ message, error }`: avisos para mostrar al usuario |
+| `activity` | `{ activities }`: aparecieron, se movieron o terminaron marcas de actividad (ver `activities()`) |
 
 Incluye tipos de TypeScript.
 
@@ -115,6 +118,48 @@ editor.unwrapSection('introduccion');         // quita la marca, deja el conteni
 ```
 
 En el `.docx` cada sección es un control de contenido de bloque (`w:sdt`) con `w:tag="section:<clave>"` y el título en `w:alias`, así que Word la conserva al guardar y cualquier otra herramienta (python-docx, Open XML SDK, docx4j) la encuentra buscando esa etiqueta. Las secciones pueden anidarse (`depth`, `parent`). Con `locked: true`, en Word no se puede borrar la sección, pero su contenido sigue siendo editable. Cada llamada que modifica es un paso de deshacer y lanza un `Error` sin tocar el documento si la clave ya existe, falta o está repetida, o si el rango corta una tabla u otra sección, queda dentro de una tabla o contiene un salto de sección.
+
+### Marcadores: campos y pendientes
+
+Un léxico estándar, compartido con [`@dimarborda/xlsx`](../xlsx), para que un agente o una automatización sepa qué falta en un documento sin adivinar:
+
+| Escritura | Tipo | Significado |
+| :--- | :--- | :--- |
+| `{{CLAVE}}`, `{{ CLAVE }}`, `{{CLAVE: pista}}` | `field` | Valor que rellena una automatización (forma canónica). La pista tras los dos puntos dice qué se espera (`{{FECHA: dd/mm/aaaa}}`) |
+| `{clave}`, `{clave:pista}` | `field` | Forma corta, sin espacios dentro |
+| `[…]`, `[...]`, `[____]`, `[Completar: alcance del proyecto]` | `pending` | Contenido que alguien (persona o agente) todavía tiene que escribir. El texto de dentro es la pista |
+
+No son marcadores las citas (`[1]`, `[2, 3]`, `[4-6]`), las casillas (`[ ]`, `[x]`) ni `[sic]`, y ningún marcador cruza un salto de línea.
+
+```js
+editor.markers({ kind: 'pending' });
+// [{ id: '12:9', kind: 'pending', syntax: 'bracket', raw: '[Completar: alcance]', key: null,
+//    hint: 'Completar: alcance', paragraph: 12, offset: 9, length: 20, place: 'body', section: 'objeto' }]
+
+const [first] = editor.markers({ kind: 'pending', section: 'objeto' });
+editor.fillMarker(first, 'Diseño e implementación del módulo de pagos.'); // un paso de deshacer
+```
+
+`place` es `body`, `table`, `textbox` o `headerFooter`; `section` es la [sección lógica](#secciones-lógicas) más interna que lo contiene. `fillMarker` vuelve a encontrar el marcador aunque se haya escrito texto antes de él desde que se listó, y lanza un `Error` si ya no está. Para analizar un texto suelto (por ejemplo, lo que va a insertar un agente) sin documento: `import { findMarkers } from '@dimarborda/docx-editor'`.
+
+### Actividad: dónde está trabajando el agente
+
+Cuando un agente modifica el documento por API, la persona que lo está leyendo debe poder ubicarse. Hay dos niveles, ambos solo de vista (no se guarda nada en el `.docx`, no mueven el cursor ni el scroll del usuario, y no cuestan nada si no se usan):
+
+- **Destello automático**: toda edición hecha desde código (`insertParagraphs`, `replaceParagraphs`, `replaceSection`, `setTableCell`, `insertTableRows`, `replaceVariables`, `fillMarker`) resalta lo que cambió durante un momento. Duración con la opción `flash` (ms, predeterminado `1800`; `false` lo desactiva).
+- **Marca de trabajo**: `markActivity()` deja un área tintada con una barra y una etiqueta en el margen, más un chip fijo arriba del editor que indica dónde está (↑ / ↓ cuando queda fuera de la vista) y lleva hasta allí con un clic.
+
+```js
+const work = editor.markActivity('conclusiones', { label: 'Agente · redactando' }); // una sección: la sigue aunque crezca
+const added = editor.replaceSection('conclusiones', ['Primer borrador…']);
+work.update(added, { label: 'Agente · revisando' }); // también { from, to } o { paragraph, offset, length }
+work.done();
+
+editor.addEventListener('activity', e => console.log(e.detail.activities));
+// [{ id: 'a1', kind: 'work', label: 'Agente · redactando', from: 14, to: 18, section: 'conclusiones', page: 2 }]
+```
+
+El objetivo puede ser la clave de una sección (recomendado: sigue a la sección), un rango `{ from, to }`, lo que devuelven `insertParagraphs` / `replaceSection` (`{ first, count }`) o un tramo `{ paragraph, offset, length }` como un marcador. Los rangos de párrafos se mantienen en su sitio cuando el usuario o el código insertan o borran párrafos antes de ellos. `ttl` (ms) la quita sola; `color` cambia su color (útil con varios agentes). Si tu aplicación tiene una barra fija arriba, baja el chip con `--docx-activity-dock-top`.
 
 ### Tablas existentes
 

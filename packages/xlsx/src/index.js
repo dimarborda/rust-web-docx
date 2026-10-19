@@ -174,7 +174,8 @@ export class Workbook {
   }
 
   /**
-   * Replaces `{{FIELD}}` placeholders in every text of the workbook; returns how many
+   * Replaces `{{FIELD}}` placeholders (also `{{ FIELD }}` and `{{FIELD: hint}}`) in every text
+   * of the workbook; returns how many
    * @param {Record<string, string | number | boolean>} values
    */
   fillTemplate(values) {
@@ -187,6 +188,19 @@ export class Workbook {
       strings[key] = String(value);
     }
     return call(() => this._engine.fill_template_json(JSON.stringify(strings)));
+  }
+
+  /**
+   * Markers of the standard lexicon (shared with @dimarborda/docx-editor) in the text cells of
+   * every worksheet, sheet by sheet and row by row: `field` for `{{KEY}}`, `{{KEY: hint}}` or
+   * `{key}`, `pending` for `[ … ]` content still to be written. `offset` / `length` are in
+   * code points within the cell's text.
+   * @param {{kind?: 'field' | 'pending'}} [filter]
+   * @returns {Array<{sheet: number, sheetName: string, ref: string, row: number, col: number, kind: 'field'|'pending', syntax: 'double'|'single'|'bracket', raw: string, key: string|null, hint: string|null, offset: number, length: number}>}
+   */
+  markers({ kind } = {}) {
+    const all = JSON.parse(call(() => this._engine.markers_json()));
+    return kind ? all.filter(m => m.kind === kind) : all;
   }
 
   /** The workbook as .xlsx bytes */
