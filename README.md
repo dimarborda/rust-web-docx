@@ -75,7 +75,7 @@ npm install @dimarborda/docx-editor
 </script>
 ```
 
-La API completa, los ejemplos con React, Next.js y Tauri y las opciones de fuentes están en el [README del paquete](packages/docx-editor/README.md). Si tu sitio usa una cabecera `Content-Security-Policy`, añade `'wasm-unsafe-eval'` al `script-src` de producción; los detalles están en la sección [Content Security Policy](packages/docx-editor/README.md#content-security-policy). Un ejemplo mínimo de integración está en [`apps/demo/embed.html`](apps/demo/embed.html).
+La API completa, los ejemplos con React, Next.js y Tauri y las opciones de fuentes están en la [documentación del paquete](docs/docx-editor/README.md). Si tu sitio usa una cabecera `Content-Security-Policy`, añade `'wasm-unsafe-eval'` al `script-src` de producción; los detalles están en la sección [Content Security Policy](docs/docx-editor/integraciones.md#content-security-policy). Un ejemplo mínimo de integración está en [`apps/demo/embed.html`](apps/demo/embed.html).
 
 ## Hojas de cálculo (en desarrollo)
 
@@ -88,7 +88,7 @@ Con `npm run dev`, la demo del visor está en `http://localhost:5173/xlsx.html`.
 
 ## Seguridad y privacidad
 
-Todo ocurre en el navegador: los documentos no se envían a ningún servidor, no hay telemetría y el contenido se dibuja en un canvas, sin insertar HTML. El editor no resuelve entidades XML externas, pone límites a lo que un `.docx` puede ocupar al descomprimirse, y cada despliegue audita las dependencias de Rust y npm. Los detalles están en la sección [Seguridad y privacidad](packages/docx-editor/README.md#seguridad-y-privacidad) del paquete. Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
+Todo ocurre en el navegador: los documentos no se envían a ningún servidor, no hay telemetría y el contenido se dibuja en un canvas, sin insertar HTML. El editor no resuelve entidades XML externas, pone límites a lo que un `.docx` puede ocupar al descomprimirse, y cada despliegue audita las dependencias de Rust y npm. Los detalles están en la sección [Seguridad y privacidad](docs/docx-editor/seguridad.md#seguridad-y-privacidad) del paquete. Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
 
 ## Limitaciones conocidas
 
