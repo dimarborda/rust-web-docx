@@ -308,7 +308,7 @@ docx-toolbar {
   animation: docx-activity-pulse 1.6s ease-in-out infinite;
 }
 
-/* The label sits above the first line, starting at the bar */
+/* The label sits above the first line, starting at the bar (narrow margins) */
 .docx-editor .docx-activity-label {
   position: absolute;
   transform: translate(0, -100%);
@@ -319,6 +319,17 @@ docx-toolbar {
   color: #ffffff;
   font: 500 10px/1.4 system-ui, sans-serif;
   white-space: nowrap;
+}
+
+/* With room in the left margin: beside the first line, ending at the bar; it wraps rather
+   than cover the text when the margin is narrow */
+.docx-editor .docx-activity-label.in-margin {
+  transform: translate(-100%, 0);
+  margin-top: 0;
+  width: max-content;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .docx-editor .docx-activity-flash {

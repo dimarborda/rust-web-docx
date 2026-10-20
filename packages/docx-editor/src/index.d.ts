@@ -531,7 +531,7 @@ export class DocxEditor extends EventTarget {
   /** View-only diagonal watermark; pass null to remove it */
   setWatermark(text: string | null, options?: { opacity?: number }): void;
 
-  /** Places a caret (or a selection from `anchor` to `focus`) and scrolls it into view */
+  /** Places a caret (or a selection from `anchor` to `focus`) and scrolls its focus end into view, also while the editor is not focused */
   select(anchor: TextPosition, focus?: TextPosition): void;
 
   setZoom(zoom: number): void;

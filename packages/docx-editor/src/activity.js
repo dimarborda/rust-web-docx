@@ -14,6 +14,9 @@
 /** Paragraphs from this index on are text boxes, headers and footers (as in the engine) */
 const TEXT_BOX_BASE = 1 << 24;
 
+/** Narrowest left margin (px) where the label goes beside the text instead of above it */
+const MIN_LABEL_ROOM = 48;
+
 /**
  * Normalizes a target to `{section}`, `{from, to}` or `{paragraph, offset, length}`.
  * @param {string | {from: number, to?: number} | {paragraph: number, offset?: number, length?: number} | {first: number, count: number}} target
@@ -230,7 +233,18 @@ export function createActivityLayer(env) {
             const tag = document.createElement('span');
             tag.className = 'docx-activity-label';
             tag.textContent = mark.label;
-            tag.style.left = `${Math.max(2, left * zoom - 10)}px`;
+            tag.title = mark.label;
+            // In the left margin, ending at the bar, so it never covers the text; above the first
+            // line only when the margin is too narrow for it
+            const barLeft = Math.max(2, left * zoom - 10);
+            const room = barLeft - 6;
+            if (room >= MIN_LABEL_ROOM) {
+              tag.classList.add('in-margin');
+              tag.style.left = `${barLeft - 4}px`;
+              tag.style.maxWidth = `${room}px`;
+            } else {
+              tag.style.left = `${barLeft}px`;
+            }
             tag.style.top = `${top * zoom}px`;
             group.appendChild(tag);
           }

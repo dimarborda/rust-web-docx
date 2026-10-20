@@ -340,8 +340,18 @@ export function createCanvasEditor(env) {
       const rootRect = env.root.getBoundingClientRect();
       input.style.left = `${canvasRect.left - rootRect.left - env.root.clientLeft + env.root.scrollLeft + box.x * zoom}px`;
       input.style.top = `${canvasRect.top - rootRect.top - env.root.clientTop + env.root.scrollTop + box.y * zoom}px`;
-      // Only a visible caret can be scrolled to (with a selection it is hidden)
-      if (reveal && collapsed()) caret.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      // The caret is hidden with a selection or while the editor is not focused, and a hidden
+      // element cannot be scrolled to: an invisible probe at the focus end is used instead
+      if (reveal) {
+        const probe = document.createElement('div');
+        Object.assign(probe.style, {
+          position: 'absolute', left: caret.style.left, top: caret.style.top, height: caret.style.height,
+          width: '1px', visibility: 'hidden', pointerEvents: 'none',
+        });
+        page.overlay.appendChild(probe);
+        probe.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        probe.remove();
+      }
     }
     env.selectionChanged(selection());
   }
