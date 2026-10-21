@@ -10,17 +10,94 @@ Las secciones lógicas marcan dónde empieza y dónde termina cada parte de un d
 
 ```js
 // Marcar como «introduccion» los párrafos 2 a 6 (las tablas entre ellos van completas)
-editor.defineSection('introduccion', { from: 2, to: 6 }, { title: 'Introducción', locked: true });
+editor.defineSection('introduccion', { from: 2, to: 6 }, { title: 'Introducción' });
 
 editor.sections();
-// [{ key: 'introduccion', title: 'Introducción', first: 2, last: 6, depth: 0, parent: null, locked: true }]
+// [{ key: 'introduccion', title: 'Introducción', first: 2, last: 6, depth: 0, parent: null,
+//    locked: false, contentLocked: false }]
 
 editor.sectionContent('introduccion').text;   // texto plano de la sección
 editor.replaceSection('introduccion', ['Nuevo párrafo.', 'Otro más.'], { keepHeading: true });
 editor.unwrapSection('introduccion');         // quita la marca, deja el contenido
 ```
 
-En el `.docx` cada sección es un control de contenido de bloque (`w:sdt`) con `w:tag="section:<clave>"` y el título en `w:alias`, así que Word la conserva al guardar y cualquier otra herramienta (python-docx, Open XML SDK, docx4j) la encuentra buscando esa etiqueta. Las secciones pueden anidarse (`depth`, `parent`). Con `locked: true`, en Word no se puede borrar la sección, pero su contenido sigue siendo editable. Cada llamada que modifica es un paso de deshacer y lanza un `Error` sin tocar el documento si la clave ya existe, falta o está repetida, o si el rango corta una tabla u otra sección, queda dentro de una tabla o contiene un salto de sección.
+En el `.docx` cada sección es un control de contenido de bloque (`w:sdt`) con `w:tag="section:<clave>"` y el título en `w:alias`, así que Word la conserva al guardar y cualquier otra herramienta (python-docx, Open XML SDK, docx4j) la encuentra buscando esa etiqueta. Las secciones pueden anidarse (`depth`, `parent`). Cada llamada que modifica es un paso de deshacer y lanza un `Error` sin tocar el documento si la clave ya existe, falta o está repetida, o si el rango corta una tabla u otra sección, queda dentro de una tabla o contiene un salto de sección.
+
+### Crear secciones a partir de los títulos
+
+Si el documento ya usa los estilos de título de Word, no hace falta marcar cada sección a mano:
+
+```js
+const { created, skipped } = editor.sectionsFromHeadings({ fromLevel: 1, toLevel: 2 });
+// created: «1. Introducción» → 'introduccion', con «1.1 Alcance» → 'alcance' anidada dentro
+```
+
+Cada título del nivel pedido abarca hasta el siguiente título de su nivel o de uno superior; los niveles inferiores quedan anidados. La clave sale del texto del título, sin la numeración y sin tildes («2. Caracterización del sitio» → `caracterizacion-del-sitio`); si se repite, se añade `-2`, `-3`… Los títulos que ya son una sección o cuyo tramo cortaría una tabla, otro control de contenido o un salto de sección se devuelven en `skipped` con el motivo. Volver a llamarla no duplica nada.
+
+### Insertar secciones nuevas
+
+```js
+editor.insertSection('anexos', { title: 'Anexos' });                         // al final del documento
+editor.insertSection('resumen', { title: 'Resumen', before: 'introduccion' });
+editor.insertSection('metodo', { title: 'Método', inside: 'caracterizacion', paragraphs: ['Se tomaron 12 muestras.'] });
+```
+
+Por defecto la sección nueva lleva un título con el estilo de Word que le corresponde por su profundidad (Título 1, 2 o 3) y un párrafo vacío. Con `heading: false` no se añade título; con `heading: 'Heading2'` se elige el estilo.
+
+### Bloqueos
+
+```js
+editor.setSectionLock('introduccion', { locked: true });         // no se puede borrar
+editor.setSectionLock('marco-legal', { contentLocked: true });   // su contenido no se puede editar a mano
+```
+
+- `locked`: la sección no se puede borrar (`w:lock="sdtLocked"`). En el editor se rechaza la selección que la eliminaría entera.
+- `contentLocked`: su contenido no se puede editar a mano (`w:lock="contentLocked"`; con los dos bloqueos, `sdtContentLocked`). En el editor se rechazan la escritura, el borrado, el formato y los cambios a imágenes dentro de ella, con un evento `message` que lo explica. Word aplica los mismos bloqueos.
+
+Los bloqueos limitan lo que hace la persona, no el código: `replaceSection`, `insertParagraphs` y el resto de llamadas siguen funcionando, así que una herramienta puede llenar una sección que el usuario solo lee. También se pueden fijar al crearla: `defineSection(key, range, { locked, contentLocked })`.
+
+### Esquema por tipo de documento
+
+Un esquema dice qué secciones debe tener un tipo de documento y en qué orden. Se guarda dentro del `.docx`, así que viaja con el archivo:
+
+```js
+editor.setSectionSchema({
+  type: 'informe-tecnico',
+  title: 'Informe técnico',
+  sections: [
+    { key: 'introduccion', title: 'Introducción' },
+    { key: 'alcance', title: 'Alcance', parent: 'introduccion', required: false },
+    { key: 'caracterizacion', title: 'Caracterización' },
+    { key: 'conclusiones', title: 'Conclusiones' },
+  ],
+});
+
+editor.validateSections();
+// { valid: false, type: 'informe-tecnico', issues: [
+//   { kind: 'missing', key: 'conclusiones', title: 'Conclusiones', message: 'Falta la sección «Conclusiones».' } ] }
+
+editor.addMissingSections();   // inserta las obligatorias que falten, cada una en su sitio
+```
+
+`required` vale `true` por defecto, y `parent` anida una sección dentro de otra que aparezca antes en la lista. `validateSections()` informa de secciones que faltan (`missing`), repetidas (`duplicated`), vacías (`empty`: sin texto ni tablas aparte del título), fuera de orden (`order`), dentro de otra sección que no corresponde (`parent`) y que el esquema no menciona (`unexpected`). Esta última no hace que `valid` sea `false`. Sin esquema, todo es válido. `addMissingSections({ optional: true })` añade también las opcionales. `sectionSchema()` devuelve el esquema guardado y `setSectionSchema(null)` lo quita.
+
+En el archivo, el esquema es una parte XML personalizada (`customXml/itemN.xml`, espacio de nombres `urn:rust-web-docx:sections:1`) relacionada desde `word/document.xml`, igual que las que crea Word:
+
+```xml
+<sections xmlns="urn:rust-web-docx:sections:1" type="informe-tecnico" title="Informe técnico">
+  <section key="introduccion" title="Introducción" required="true"/>
+  <section key="alcance" title="Alcance" required="false" parent="introduccion"/>
+</sections>
+```
+
+### Ver las secciones en el editor
+
+```js
+const editor = await DocxEditor.create(contenedor, { showSections: true });
+editor.setShowSections(false);   // o true; editor.sectionsVisible dice si están a la vista
+```
+
+Cada sección se dibuja con un corchete en el margen izquierdo, desde su primera línea hasta la última, con el título arriba; las anidadas quedan más hacia fuera. 🛡 marca las secciones que no se pueden borrar y 🔒 las de contenido bloqueado, que además llevan el corchete punteado. Un clic en el título selecciona la sección. Es solo una vista: no se guarda en el `.docx` ni se imprime. Si el margen es muy estrecho, solo se ve el corchete y el título aparece al pasar el ratón.
 
 ## Marcadores: campos y pendientes
 

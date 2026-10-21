@@ -427,12 +427,13 @@ impl DocxSession {
         to: usize,
         title: Option<String>,
         locked: bool,
+        content_locked: bool,
         selection_before: Option<String>,
     ) -> Result<String, JsValue> {
         self.modifier.checkpoint(selection_before.clone());
         let info = self
             .modifier
-            .define_section(key, from, to, title.as_deref(), locked)
+            .define_section(key, from, to, title.as_deref(), locked, content_locked)
             .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         to_json(&info)
@@ -465,6 +466,112 @@ impl DocxSession {
     pub fn unwrap_section(&mut self, key: &str, selection_before: Option<String>) -> Result<(), JsValue> {
         self.modifier.checkpoint(selection_before.clone());
         self.modifier.unwrap_section(key).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        Ok(())
+    }
+
+    /// Sets a logical section's locks as one undo step (see `DocxModifier::set_section_lock`).
+    /// Returns the section like `sections_json`.
+    #[wasm_bindgen]
+    pub fn set_section_lock(
+        &mut self,
+        key: &str,
+        locked: bool,
+        content_locked: bool,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        self.modifier.checkpoint(selection_before.clone());
+        let info = self
+            .modifier
+            .set_section_lock(key, locked, content_locked)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        to_json(&info)
+    }
+
+    /// Inserts new logical sections, in order, as one undo step (see
+    /// `DocxModifier::insert_section`). `sections_json`: `[{ "key", "title", "place":
+    /// "after" | "before" | "inside" | "end", "relativeTo", "paragraphs": [...], "locked",
+    /// "contentLocked" }]`. Returns `[{ "section": {…}, "first": n, "count": n }]`.
+    #[wasm_bindgen]
+    pub fn insert_sections(&mut self, sections_json: &str, selection_before: Option<String>) -> Result<String, JsValue> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct NewSection {
+            key: String,
+            #[serde(default)]
+            title: Option<String>,
+            place: String,
+            #[serde(default)]
+            relative_to: Option<String>,
+            paragraphs: Vec<docx_parser::NewParagraph>,
+            #[serde(default)]
+            locked: bool,
+            #[serde(default)]
+            content_locked: bool,
+        }
+        let sections: Vec<NewSection> = serde_json::from_str(sections_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        let mut places = Vec::with_capacity(sections.len());
+        for s in &sections {
+            let other = || s.relative_to.clone().ok_or_else(|| JsValue::from_str(&format!("Falta la sección de referencia de «{}».", s.key)));
+            places.push(match s.place.as_str() {
+                "after" => docx_parser::SectionPlace::After(other()?),
+                "before" => docx_parser::SectionPlace::Before(other()?),
+                "inside" => docx_parser::SectionPlace::Inside(other()?),
+                "end" => docx_parser::SectionPlace::End,
+                p => return Err(JsValue::from_str(&format!("Posición no válida: {}. Usa after, before, inside o end.", p))),
+            });
+        }
+        self.modifier.checkpoint(selection_before.clone());
+        let mut out = Vec::with_capacity(sections.len());
+        for (s, place) in sections.iter().zip(&places) {
+            let inserted = self
+                .modifier
+                .insert_section(&s.key, s.title.as_deref(), place, &s.paragraphs, s.locked, s.content_locked);
+            match inserted {
+                Ok((section, first)) => out.push(serde_json::json!({ "section": section, "first": first, "count": s.paragraphs.len() })),
+                Err(e) => {
+                    // All or nothing: drop the sections already inserted by this call
+                    if !out.is_empty() {
+                        self.modifier.undo();
+                    }
+                    return Err(JsValue::from_str(&e));
+                }
+            }
+        }
+        self.modifier.set_selection_after(selection_before);
+        to_json(&out)
+    }
+
+    /// Creates logical sections from the headings of levels `from_level`–`to_level` as one
+    /// undo step (see `DocxModifier::sections_from_headings`). Returns `{ "created", "skipped" }`.
+    #[wasm_bindgen]
+    pub fn sections_from_headings(&mut self, from_level: u32, to_level: u32, selection_before: Option<String>) -> Result<String, JsValue> {
+        self.modifier.checkpoint(selection_before.clone());
+        let result = self
+            .modifier
+            .sections_from_headings(from_level, to_level)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        to_json(&result)
+    }
+
+    /// The document's section schema (`{ "type", "title", "sections": [...] }`) or `null`
+    #[wasm_bindgen]
+    pub fn section_schema_json(&self) -> Result<String, JsValue> {
+        let schema = self.modifier.section_schema().map_err(|e| JsValue::from_str(&e))?;
+        to_json(&schema)
+    }
+
+    /// Stores the section schema (JSON like `section_schema_json`; "null" removes it) as one
+    /// undo step
+    #[wasm_bindgen]
+    pub fn set_section_schema(&mut self, schema_json: &str, selection_before: Option<String>) -> Result<(), JsValue> {
+        let schema: Option<docx_parser::SectionSchema> = serde_json::from_str(schema_json)
+            .map_err(|e| JsValue::from_str(&format!("Esquema no válido: {}", e)))?;
+        self.modifier.checkpoint(selection_before.clone());
+        self.modifier.set_section_schema(schema.as_ref()).map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }

@@ -4,7 +4,8 @@
 import { DocxSession, engineReady, initEngine, scanMarkers } from './engine.js';
 import { createCanvasEditor } from './canvas_editor.js';
 import { checkIndex, engineCall, tableRowsPayload } from './table_api.js';
-import { checkSectionKey, sectionContent } from './section_api.js';
+import { checkSectionKey, planMissingSections, schemaPayload, sectionContent, sectionIsEmpty, validateSections } from './section_api.js';
+import { createSectionLayer } from './section_layer.js';
 import { collectMarkers, innermostSection, relocateMarker, variablePairs } from './marker_api.js';
 import { createActivityLayer, textDiff } from './activity.js';
 import { onFontsChanged } from './fonts_registry.js';
@@ -25,6 +26,18 @@ const LABELS = {
     footer: 'Pie de página',
     agent: 'Agente',
     goToActivity: 'Ir a donde se está trabajando',
+    sectionContentLocked: title => `La sección «${title}» está bloqueada: su contenido no se puede editar.`,
+    sectionLocked: title => `La sección «${title}» está protegida: no se puede borrar.`,
+    sectionLockedMark: '🛡',
+    sectionContentLockedMark: '🔒',
+    sectionIssues: {
+      missing: title => `Falta la sección «${title}».`,
+      duplicated: (title, { count }) => `La sección «${title}» aparece ${count} veces.`,
+      parent: (title, { expected }) => (expected ? `La sección «${title}» debe ir dentro de «${expected}».` : `La sección «${title}» no debe ir dentro de otra.`),
+      empty: title => `La sección «${title}» está vacía.`,
+      order: title => `La sección «${title}» está fuera de orden.`,
+      unexpected: title => `La sección «${title}» no está en el esquema.`,
+    },
   },
   en: {
     editor: 'Document editor',
@@ -37,6 +50,18 @@ const LABELS = {
     footer: 'Footer',
     agent: 'Agent',
     goToActivity: 'Go to where the work is happening',
+    sectionContentLocked: title => `The section “${title}” is locked: its content cannot be edited.`,
+    sectionLocked: title => `The section “${title}” is protected: it cannot be deleted.`,
+    sectionLockedMark: '🛡',
+    sectionContentLockedMark: '🔒',
+    sectionIssues: {
+      missing: title => `The section “${title}” is missing.`,
+      duplicated: (title, { count }) => `The section “${title}” appears ${count} times.`,
+      parent: (title, { expected }) => (expected ? `The section “${title}” must be inside “${expected}”.` : `The section “${title}” must not be inside another one.`),
+      empty: title => `The section “${title}” is empty.`,
+      order: title => `The section “${title}” is out of order.`,
+      unexpected: title => `The section “${title}” is not in the schema.`,
+    },
   },
 };
 
@@ -54,6 +79,8 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  *                                        (see `setReadOnly()`)
  * @property {number|false} [flash=1800]  ms a change made from code stays highlighted (see
  *                                        `markActivity()`); false: no highlight
+ * @property {boolean} [showSections=false] outline the logical sections in the margin (see
+ *                                        `setShowSections()`)
  *
  * Events (dispatched on the editor; `<docx-editor>` re-dispatches them on the element):
  * - `load`             a document was opened
@@ -94,14 +121,18 @@ export class DocxEditor extends EventTarget {
   #onKeyDown;
   #activity;
   #activityJSON = '[]';
+  #sectionLayer;
+  /** `sections()` until the document changes */
+  #sectionCache = null;
 
   /** Use `DocxEditor.create()` unless the engine is already initialized (`initEngine()`) */
   constructor(container, options = {}) {
     super();
     if (!engineReady()) throw new Error('docx-editor: await initEngine() or use DocxEditor.create()');
-    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, flash: 1800, ...options };
+    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, flash: 1800, showSections: false, ...options };
     this.#readOnly = !!this.options.readOnly;
-    this.labels = { ...(LABELS[this.options.locale] || LABELS.en), ...options.labels };
+    const base = LABELS[this.options.locale] || LABELS.en;
+    this.labels = { ...base, ...options.labels, sectionIssues: { ...base.sectionIssues, ...options.labels?.sectionIssues } };
     this.#zoom = this.options.zoom;
 
     // The editor lives in its own element inside `container` and only ever touches that
@@ -129,6 +160,7 @@ export class DocxEditor extends EventTarget {
       imageEdited: (ref, change) => this.#userImageEdit(ref, change),
       imageDeleted: ref => this.#userImageEdit(ref, null),
       readOnly: () => this.#readOnly,
+      editBlocked: (start, end) => this.#lockedMessage(start.paragraph, end.paragraph),
     });
     this.root.classList.toggle('read-only', this.#readOnly);
     this.#canvasEditor.readOnlyChanged();
@@ -151,6 +183,22 @@ export class DocxEditor extends EventTarget {
         this.#emit('activity', { activities });
       },
     });
+
+    this.#sectionLayer = createSectionLayer({
+      labels: this.labels,
+      cards: () => this.#rendered.cards,
+      zoom: () => this.#zoom,
+      sections: () => this.sections(),
+      lengthOf: index => paragraphChars(this.#paragraphs().byIndex.get(index) || {}).length,
+      rects: (a, b) => JSON.parse(this.#session?.selection_rects_range(
+        a.paragraph, a.offset, b.paragraph, b.offset, measureText, undefined,
+      ) || '[]'),
+      select: section => this.#canvasEditor.select(
+        { paragraph: section.first, offset: 0 },
+        { paragraph: section.last, offset: paragraphChars(this.#paragraphs().byIndex.get(section.last) || {}).length },
+      ),
+    });
+    if (this.options.showSections) this.#sectionLayer.setVisible(true);
 
     // Formatting shortcuts while the caret is in this editor
     this.#onKeyDown = e => {
@@ -697,11 +745,13 @@ export class DocxEditor extends EventTarget {
    * Logical sections (Introducción, Conclusiones…) in document order, outer before inner.
    * They are content controls tagged `section:<key>` in the .docx, so other tools find the
    * same boundaries. `first` / `last` use the numbering of `structure()` (null when empty).
-   * @returns {Array<{key: string, title: string, first: number|null, last: number|null, depth: number, parent: string|null, locked: boolean}>}
+   * `locked`: it cannot be deleted; `contentLocked`: its content cannot be edited by hand.
+   * @returns {Array<{key: string, title: string, first: number|null, last: number|null, depth: number, parent: string|null, locked: boolean, contentLocked: boolean}>}
    */
   sections() {
     if (!this.#session) return [];
-    return JSON.parse(this.#session.sections_json());
+    this.#sectionCache ??= JSON.parse(this.#session.sections_json());
+    return this.#sectionCache.map(s => ({ ...s }));
   }
 
   /** A section with its blocks (as in `structure()`) and plain text, or null when missing */
@@ -714,14 +764,15 @@ export class DocxEditor extends EventTarget {
   /**
    * Wraps the blocks from paragraph `from` to `to` (both included, tables between them too)
    * in a new section, as one undo step. A table is taken whole when `from` is its first
-   * paragraph or `to` its last one. `locked`: Word users cannot delete the section.
+   * paragraph or `to` its last one. `locked`: the section cannot be deleted;
+   * `contentLocked`: its content cannot be edited by hand, in Word or here (code still can).
    */
-  defineSection(key, { from, to }, { title, locked = false } = {}) {
+  defineSection(key, { from, to }, { title, locked = false, contentLocked = false } = {}) {
     this.#require();
     checkSectionKey('defineSection', key);
     checkIndex('defineSection', { from, to });
     const info = JSON.parse(engineCall(() => this.#session.define_section(
-      key, from, to, title == null ? undefined : String(title), Boolean(locked), this.#selectionJSON(),
+      key, from, to, title == null ? undefined : String(title), Boolean(locked), Boolean(contentLocked), this.#selectionJSON(),
     )));
     this.#changed();
     return info;
@@ -755,6 +806,145 @@ export class DocxEditor extends EventTarget {
     checkSectionKey('unwrapSection', key);
     engineCall(() => this.#session.unwrap_section(key, this.#selectionJSON()));
     this.#changed();
+  }
+
+  /**
+   * Sets a section's locks as one undo step: `locked`, it cannot be deleted; `contentLocked`,
+   * its content cannot be edited by hand (typing, formatting, pictures), in Word or here.
+   * Calls from code (`replaceSection`, `insertParagraphs`…) still change it.
+   */
+  setSectionLock(key, { locked = false, contentLocked = false } = {}) {
+    this.#require();
+    checkSectionKey('setSectionLock', key);
+    const info = JSON.parse(engineCall(() => this.#session.set_section_lock(
+      key, Boolean(locked), Boolean(contentLocked), this.#selectionJSON(),
+    )));
+    this.#changed();
+    return info;
+  }
+
+  /**
+   * Inserts a new section as one undo step: by default a heading with its title (Word's
+   * Heading 1–3 by nesting depth) and an empty paragraph. Place it with `after`, `before`
+   * or `inside` (a section key); without them it goes at the end of the document.
+   * @returns {{section: object, first: number, count: number}}
+   */
+  insertSection(key, { title, after, before, inside, heading = true, paragraphs = [''], locked = false, contentLocked = false } = {}) {
+    this.#require();
+    checkSectionKey('insertSection', key);
+    const given = [['after', after], ['before', before], ['inside', inside]].filter(([, v]) => v != null);
+    if (given.length > 1) throw new Error('docx-editor: insertSection takes only one of after, before or inside');
+    const [place, relativeTo] = given[0] ?? ['end', null];
+    const sections = this.sections();
+    const other = sections.find(s => s.key === relativeTo);
+    const depth = place === 'end' ? 0 : place === 'inside' ? (other?.depth ?? -1) + 1 : other?.depth ?? 0;
+    const [result] = this.#insertSections([{ key, title, place, relativeTo, depth, heading, paragraphs, locked, contentLocked }]);
+    return result;
+  }
+
+  /**
+   * Creates sections from the document's headings as one undo step: each heading of level
+   * `fromLevel`–`toLevel` (1 = Heading 1) with what follows it up to the next heading of the
+   * same or a higher level; lower levels nest. Keys come from the heading text
+   * ("2. Caracterización" → "caracterizacion"). Headings whose part is already a section, or
+   * that would cut a table or hold a section break, are reported in `skipped`.
+   * @returns {{created: Array<object>, skipped: Array<{paragraph: number, text: string, reason: string}>}}
+   */
+  sectionsFromHeadings({ fromLevel = 1, toLevel = fromLevel } = {}) {
+    this.#require();
+    checkIndex('sectionsFromHeadings', { fromLevel, toLevel });
+    const result = JSON.parse(engineCall(() => this.#session.sections_from_headings(fromLevel, toLevel, this.#selectionJSON())));
+    if (result.created.length) this.#changed();
+    return result;
+  }
+
+  /** The section schema stored in the document (`setSectionSchema()`), or null */
+  sectionSchema() {
+    if (!this.#session) return null;
+    return JSON.parse(this.#session.section_schema_json());
+  }
+
+  /**
+   * Stores in the .docx which sections this type of document must have, in order (null
+   * removes it), as one undo step. It travels with the file as a custom XML part, so other
+   * tools can read it. `required` defaults to true; `parent` nests a section in an earlier one.
+   * @param {{type: string, title?: string, sections: Array<{key: string, title?: string, required?: boolean, parent?: string}>} | null} schema
+   */
+  setSectionSchema(schema) {
+    this.#require();
+    const payload = schemaPayload(schema);
+    engineCall(() => this.#session.set_section_schema(JSON.stringify(payload), this.#selectionJSON()));
+    this.#changed();
+  }
+
+  /**
+   * Checks the sections against the schema: missing, repeated, empty, out of order or in the
+   * wrong parent (`valid` is false), and sections the schema does not list (`unexpected`,
+   * which does not make it invalid). Without a schema everything is valid.
+   * @returns {{valid: boolean, type: string|null, issues: Array<{kind: 'missing'|'duplicated'|'parent'|'empty'|'order'|'unexpected', key: string, title: string, message: string}>}}
+   */
+  validateSections() {
+    const sections = this.sections();
+    const structure = this.structure();
+    const isEmpty = s => sectionIsEmpty(sectionContent(s, structure, this.#elements || []));
+    return validateSections(this.sectionSchema(), sections, isEmpty, this.labels.sectionIssues);
+  }
+
+  /**
+   * Inserts the schema's required sections that the document lacks (with `optional`, every
+   * one), each in its place by the schema's order, as one undo step: a heading with its
+   * title and an empty paragraph, or `paragraphs`.
+   * @returns {Array<{section: object, first: number, count: number}>}
+   */
+  addMissingSections({ optional = false, heading = true, paragraphs = [''] } = {}) {
+    this.#require();
+    const plan = planMissingSections(this.sectionSchema(), this.sections(), { optional });
+    if (!plan.length) return [];
+    return this.#insertSections(plan.map(p => ({ ...p, heading, paragraphs })));
+  }
+
+  /** Whether the logical sections are outlined in the margin */
+  get sectionsVisible() {
+    return this.#sectionLayer.visible;
+  }
+
+  /** Outlines the logical sections in the margin (a bracket and the title), or hides them */
+  setShowSections(show = true) {
+    this.#sectionLayer.setVisible(show);
+  }
+
+  #insertSections(list) {
+    const payload = list.map(({ key, title, place, relativeTo, depth, heading, paragraphs, locked, contentLocked }) => {
+      checkSectionKey('insertSection', key);
+      const name = title == null ? key : String(title);
+      const items = (Array.isArray(paragraphs) ? paragraphs : [paragraphs])
+        .map(p => (typeof p === 'string' ? { text: p } : p))
+        .map(toNewParagraph);
+      const style = typeof heading === 'string' ? heading : `Heading${Math.min(3, Math.max(0, depth) + 1)}`;
+      if (heading) items.unshift(toNewParagraph({ text: name, style }));
+      if (!items.length) throw new Error('docx-editor: insertSection needs a heading or at least one paragraph');
+      return { key, title: name, place, relativeTo, paragraphs: items, locked: Boolean(locked), contentLocked: Boolean(contentLocked) };
+    });
+    const results = JSON.parse(engineCall(() => this.#session.insert_sections(JSON.stringify(payload), this.#selectionJSON())));
+    this.#changed();
+    results.forEach(r => this.#flash(r));
+    return results;
+  }
+
+  /**
+   * Why a change by hand to paragraphs `from`–`to` is not allowed, or null: it touches a
+   * section whose content is locked or, when `deleting`, would remove a section that cannot
+   * be deleted
+   */
+  #lockedMessage(from, to, { deleting = true } = {}) {
+    if (from >= TEXT_BOX_BASE) return null;
+    for (const s of this.sections()) {
+      if (s.first == null) continue;
+      if (s.contentLocked && from <= s.last && to >= s.first) return this.labels.sectionContentLocked(s.title);
+      const covers = from <= s.first && to >= s.last && (from < s.first || to > s.last);
+      if (deleting && s.locked && covers) return this.labels.sectionLocked(s.title);
+    }
+    return null;
   }
 
   images() {
@@ -887,6 +1077,8 @@ export class DocxEditor extends EventTarget {
 
   /** Resize/move with the mouse or keyboard (`change` = null deletes) */
   #userImageEdit(ref, change) {
+    const blocked = this.#lockedMessage(ref.paragraph, ref.paragraph, { deleting: false });
+    if (blocked) return this.#emit('message', { message: blocked, error: false });
     try {
       if (!change) {
         this.deleteImage(ref);
@@ -1009,6 +1201,7 @@ export class DocxEditor extends EventTarget {
   }
 
   #refreshElements() {
+    this.#sectionCache = null;
     this.#elements = JSON.parse(this.#session.get_document_elements_json());
     this.#partParagraphs = JSON.parse(this.#session.header_footer_paragraphs_json());
   }
@@ -1121,6 +1314,7 @@ export class DocxEditor extends EventTarget {
       this.#loadFonts(layout);
       this.#canvasEditor.endRender();
       this.#activity.paint();
+      this.#sectionLayer.paint();
     } catch (err) {
       console.error('docx-editor: render failed', err);
       this.#emit('message', { message: String(err), error: true });
@@ -1220,6 +1414,9 @@ export class DocxEditor extends EventTarget {
 
   #applyUpdates(updates, refocus) {
     if (!updates.length) return;
+    const indices = updates.map(u => u.index);
+    const blocked = this.#lockedMessage(Math.min(...indices), Math.max(...indices), { deleting: false });
+    if (blocked) return this.#emit('message', { message: blocked, error: false });
     try {
       this.#session.update_paragraphs_runs(JSON.stringify(updates));
     } catch (err) {

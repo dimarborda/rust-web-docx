@@ -923,7 +923,10 @@ pub use shapes::{ShapeStyle, TextBox};
 mod insert_objects;
 #[path = "section_edit.rs"]
 mod section_edit;
-pub use section_edit::{SectionInfo, SECTION_TAG_PREFIX};
+pub use section_edit::{section_key_from_title, HeadingSections, SectionInfo, SectionPlace, SkippedHeading, SECTION_TAG_PREFIX};
+#[path = "section_schema.rs"]
+mod section_schema;
+pub use section_schema::{SchemaSection, SectionSchema, SECTION_SCHEMA_NS};
 #[path = "structure_edit.rs"]
 mod structure_edit;
 #[path = "table_edit.rs"]
@@ -1074,6 +1077,14 @@ impl DocxModifier {
             self.parts_revision += 1;
         }
         self.package.put(name, bytes);
+    }
+
+    /// Deletes a package part, remembering it for undo when a step is open
+    fn remove_file(&mut self, name: &str) {
+        if self.package.remove(name).is_some() {
+            self.revision += 1;
+            self.parts_revision += 1;
+        }
     }
 
     /// Starts a new undo step; changes made until the next checkpoint undo together

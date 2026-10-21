@@ -283,6 +283,72 @@ docx-toolbar {
 
 /* Activity marks (markActivity, and the highlight of changes made from code): a tinted area,
    a bar in the margin and a label; view only, never saved into the .docx */
+/* Logical sections (option showSections): a bracket in the left margin and the title */
+.docx-editor .docx-section-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.docx-editor .docx-section-bracket {
+  position: absolute;
+  width: 5px;
+  box-sizing: border-box;
+  border-left: 1.5px solid var(--docx-section-color, #64748b);
+  opacity: 0.75;
+}
+
+.docx-editor .docx-section-bracket.starts {
+  border-top: 1.5px solid var(--docx-section-color, #64748b);
+}
+
+.docx-editor .docx-section-bracket.ends {
+  border-bottom: 1.5px solid var(--docx-section-color, #64748b);
+}
+
+.docx-editor .docx-section-bracket.content-locked {
+  border-left-style: dashed;
+}
+
+.docx-editor .docx-section-name {
+  position: absolute;
+  transform: translate(-100%, -1px);
+  width: max-content;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--docx-section-color, #64748b);
+  font: 500 9.5px/1.3 system-ui, sans-serif;
+  text-align: right;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.docx-editor .docx-section-name:hover,
+.docx-editor .docx-section-name:focus-visible {
+  background: var(--docx-section-color, #64748b);
+  color: #ffffff;
+  outline: none;
+}
+
+.docx-editor .docx-section-name.compact {
+  transform: translate(-1px, -1px);
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0;
+  background: var(--docx-section-color, #64748b);
+}
+
+@media print {
+  .docx-editor .docx-section-layer {
+    display: none;
+  }
+}
+
 .docx-editor .docx-activity-layer {
   position: absolute;
   pointer-events: none;

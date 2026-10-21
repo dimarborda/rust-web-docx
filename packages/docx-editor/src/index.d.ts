@@ -63,6 +63,15 @@ export interface DocxEditorLabels {
   agent: string;
   /** Tooltip of the activity chips */
   goToActivity: string;
+  /** Hint when an edit by hand touches a section whose content is locked */
+  sectionContentLocked: (title: string) => string;
+  /** Hint when an edit by hand would delete a section that cannot be deleted */
+  sectionLocked: (title: string) => string;
+  /** Marks after a section's title in the margin outline */
+  sectionLockedMark: string;
+  sectionContentLockedMark: string;
+  /** Messages of `validateSections()` issues */
+  sectionIssues: Partial<Record<SectionIssueKind, (title: string, details: { count?: number; expected?: string | null }) => string>>;
 }
 
 /** A marker of the standard lexicon, as `markers()` lists it */
@@ -165,8 +174,75 @@ export interface SectionInfo {
   depth: number;
   /** Key of the enclosing section */
   parent: string | null;
-  /** Word users cannot delete the section (its content stays editable) */
+  /** The section cannot be deleted (in Word or by hand here) */
   locked: boolean;
+  /** Its content cannot be edited by hand, in Word or here; code can still fill it */
+  contentLocked: boolean;
+}
+
+/** A section in a document type's schema, see `setSectionSchema()` */
+export interface SchemaSection {
+  key: string;
+  title?: string | null;
+  /** Default true */
+  required?: boolean;
+  /** Key of the section it must be nested in (listed before it) */
+  parent?: string | null;
+}
+
+/** Which sections a type of document must have, in order */
+export interface SectionSchema {
+  /** Document type, e.g. 'informe-tecnico' */
+  type: string;
+  title?: string | null;
+  sections: SchemaSection[];
+}
+
+export type SectionIssueKind = 'missing' | 'duplicated' | 'parent' | 'empty' | 'order' | 'unexpected';
+
+/** A problem found by `validateSections()` */
+export interface SectionIssue {
+  kind: SectionIssueKind;
+  key: string;
+  title: string;
+  /** Readable explanation in the editor's locale */
+  message: string;
+  /** `duplicated`: how many times the key appears */
+  count?: number;
+  /** `parent`: where the schema wants it and where it is */
+  expected?: string | null;
+  actual?: string | null;
+}
+
+export interface SectionValidation {
+  /** False when any issue other than `unexpected` was found */
+  valid: boolean;
+  /** The schema's document type, null without a schema */
+  type: string | null;
+  issues: SectionIssue[];
+}
+
+/** A section added by `insertSection()` or `addMissingSections()` */
+export interface InsertedSection {
+  section: SectionInfo;
+  /** First new paragraph and how many were inserted (the heading included) */
+  first: number;
+  count: number;
+}
+
+export interface InsertSectionOptions {
+  /** Default: the key */
+  title?: string;
+  /** Section key to insert after, before or inside (at the end of its content); none: end of the document */
+  after?: string;
+  before?: string;
+  inside?: string;
+  /** A heading with the title: true (default, Heading 1–3 by depth), a style or false */
+  heading?: boolean | 'Title' | 'Heading1' | 'Heading2' | 'Heading3';
+  /** Content after the heading (default: one empty paragraph) */
+  paragraphs?: string | Array<string | NewParagraph>;
+  locked?: boolean;
+  contentLocked?: boolean;
 }
 
 /** A section with its content, from `sectionContent()` */
@@ -322,6 +398,8 @@ export interface DocxEditorOptions {
   readOnly?: boolean;
   /** Milliseconds a change made from code stays highlighted (default 1800); false: none */
   flash?: number | false;
+  /** Outline the logical sections in the left margin (default false); see `setShowSections` */
+  showSections?: boolean;
 }
 
 export interface DocxEditorEventMap {
@@ -459,7 +537,11 @@ export class DocxEditor extends EventTarget {
    * Throws, without changing anything, on a key in use, or a range that cuts a table or
    * another section, lies inside a table or holds a section break. Sections can be nested.
    */
-  defineSection(key: string, range: { from: number; to: number }, options?: { title?: string; locked?: boolean }): SectionInfo;
+  defineSection(
+    key: string,
+    range: { from: number; to: number },
+    options?: { title?: string; locked?: boolean; contentLocked?: boolean },
+  ): SectionInfo;
   /**
    * Replaces the content of a section as one undo step, keeping the section (key, title,
    * lock). `keepHeading`: a heading paragraph opening the section stays and the paragraphs go
@@ -469,6 +551,45 @@ export class DocxEditor extends EventTarget {
   replaceSection(key: string, paragraphs: string | Array<string | NewParagraph>, options?: { keepHeading?: boolean }): { first: number; count: number };
   /** Removes a section's marker as one undo step; its content and inner sections stay */
   unwrapSection(key: string): void;
+  /**
+   * Sets a section's locks as one undo step. `locked`: it cannot be deleted; `contentLocked`:
+   * typing, formatting and picture edits inside it are refused (with a `message` event), in
+   * Word too. Calls from code still change it.
+   */
+  setSectionLock(key: string, locks: { locked?: boolean; contentLocked?: boolean }): SectionInfo;
+  /** Inserts a new section (by default a heading and an empty paragraph) as one undo step */
+  insertSection(key: string, options?: InsertSectionOptions): InsertedSection;
+  /**
+   * Creates sections from the headings of levels `fromLevel`–`toLevel` (default 1–1) as one
+   * undo step; lower levels nest in higher ones and keys come from the heading text.
+   */
+  sectionsFromHeadings(options?: { fromLevel?: number; toLevel?: number }): {
+    created: SectionInfo[];
+    skipped: Array<{ paragraph: number; text: string; reason: string }>;
+  };
+  /** The section schema stored in the document, or null */
+  sectionSchema(): SectionSchema | null;
+  /**
+   * Stores the section schema in the .docx (a custom XML part other tools can read), or
+   * removes it with null, as one undo step. Throws on an empty type, invalid or repeated keys
+   * and parents not listed before their children.
+   */
+  setSectionSchema(schema: SectionSchema | null): void;
+  /** Checks the sections against the schema (always valid without one) */
+  validateSections(): SectionValidation;
+  /**
+   * Inserts the schema's required sections that are missing (`optional`: all of them), each
+   * where the schema's order puts it, as one undo step
+   */
+  addMissingSections(options?: {
+    optional?: boolean;
+    heading?: boolean;
+    paragraphs?: string | Array<string | NewParagraph>;
+  }): InsertedSection[];
+  /** Whether the sections are outlined in the margin */
+  readonly sectionsVisible: boolean;
+  /** Outlines the logical sections in the left margin (a bracket and the title), or hides them */
+  setShowSections(show?: boolean): void;
   /**
    * Tables of the body in order, with their size, first row text and paragraph range. Tables
    * nested in cells or text boxes are not listed.

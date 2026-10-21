@@ -18,6 +18,8 @@ const TYPING_GROUP_MS = 1500;
 /**
  * @param {object} env
  * @param {() => any} env.session            current DocxSession
+ * @param {(start: object, end: object) => string|null} [env.editBlocked] why an edit of that
+ *                                             range is refused (a locked section), or null
  * @param {() => {list: any[], byIndex: Map}} env.paragraphs  every paragraph (body and table
  *        cells) in document order, each with `index`, `text` and `container`
  * @param {() => number} env.zoom
@@ -205,6 +207,12 @@ export function createCanvasEditor(env) {
   function edit(text, kind, range = ordered()) {
     if (!session() || !focus || env.readOnly()) return;
     const [start, end] = range;
+    // Sections whose content is locked (or that cannot be deleted) refuse edits by hand
+    const blocked = env.editBlocked?.(start, end);
+    if (blocked) {
+      env.hint(blocked);
+      return;
+    }
     const continues = lastEdit && lastEdit.kind === kind && Date.now() - lastEdit.time < TYPING_GROUP_MS &&
       (samePos(lastEdit.caret, start) || samePos(lastEdit.caret, end));
     const coalesce = continues && (kind === 'delete' || (kind === 'type' && !/\s/.test(text)));
