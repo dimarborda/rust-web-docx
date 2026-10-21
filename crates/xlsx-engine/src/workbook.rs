@@ -13,6 +13,8 @@ use ooxml_core::{content_types, Package, Undone, ZipLimits};
 
 use crate::cell_ref::{CellRange, CellRef};
 use crate::dates::{has_time, iso_to_unix_ms, serial_to_unix_ms, unix_ms_to_serial};
+use crate::formula::{self, ParseError};
+use crate::recalc::{self, defined_names, sheet_formulas};
 use crate::shared_strings::{SharedStrings, EMPTY_SST};
 use crate::sheet::{CellNode, SheetXml};
 use crate::styles::{date_style, Styles};
@@ -81,6 +83,8 @@ pub enum CellInput {
     Bool(bool),
     /// Milliseconds since 1970-01-01 UTC
     Date(f64),
+    /// A formula (with or without the leading `=`), in Excel's English syntax
+    Formula(String),
     /// Removes the value (and formula), keeping the cell format
     Clear,
 }
@@ -271,6 +275,19 @@ impl Workbook {
         let xml = self.package.get_string(&self.worksheet_part(sheet)?)?;
         let parsed = SheetXml::parse(&xml)?;
         let reader = CellReader { strings: self.shared_strings()?, styles: self.styles()?, date1904: self.date1904() };
+        // Cells of a shared formula store only a link to its first cell: show their own formula
+        let mut shared: HashMap<CellRef, String> = HashMap::new();
+        let in_range = |at: CellRef| at.row >= range.first.row && at.row <= range.last.row && at.col >= range.first.col && at.col <= range.last.col;
+        let has_shared = parsed.rows.iter().flat_map(|r| &r.cells).any(|c| {
+            in_range(c.at) && c.formula.as_ref().is_some_and(|f| f.kind.as_deref() == Some("shared") && f.text.trim().is_empty())
+        });
+        if has_shared {
+            for (at, expr) in sheet_formulas(&parsed) {
+                if let (true, Ok(expr)) = (in_range(at), expr) {
+                    shared.insert(at, expr.to_display());
+                }
+            }
+        }
         let mut nodes: HashMap<CellRef, &CellNode> = HashMap::new();
         for row in parsed.rows.iter().filter(|r| r.number >= range.first.row && r.number <= range.last.row) {
             for cell in row.cells.iter().filter(|c| c.at.col >= range.first.col && c.at.col <= range.last.col) {
@@ -283,7 +300,16 @@ impl Workbook {
                     .map(|col| {
                         let at = CellRef { row, col };
                         match nodes.get(&at) {
-                            Some(node) => reader.read(node),
+                            Some(node) => {
+                                let mut data = reader.read(node);
+                                if let Some(f) = data.formula.as_mut() {
+                                    match shared.get(&at) {
+                                        Some(text) if f.is_empty() => *f = text.clone(),
+                                        _ => *f = display_formula(f),
+                                    }
+                                }
+                                data
+                            }
                             None => CellData { at, value: CellValue::Empty, formula: None },
                         }
                     })
@@ -351,6 +377,7 @@ impl Workbook {
         let mut styles_changed = styles_part.is_none() && styles_xml.is_some();
 
         let mut edits: BTreeMap<CellRef, Option<String>> = BTreeMap::new();
+        let mut formulas: HashMap<CellRef, String> = HashMap::new();
         for (at, input) in &inputs {
             let existing = parsed.cell(*at);
             if existing.and_then(|c| c.formula.as_ref()).is_some_and(|f| f.shared_master) {
@@ -378,11 +405,25 @@ impl Workbook {
                     }
                     (None, Some(format_number(serial)))
                 }
+                CellInput::Formula(text) => {
+                    let text = text.trim();
+                    let text = text.strip_prefix('=').unwrap_or(text).trim();
+                    let stored = match formula::parse(text) {
+                        Ok(expr) => expr.to_formula(),
+                        // Excel may know it: written as is and calculated when the file opens
+                        Err(ParseError::Unsupported(_)) => text.to_string(),
+                        Err(ParseError::Invalid(why)) => return Err(format!("La fórmula de {} no es válida: {}", at, why)),
+                    };
+                    formulas.insert(*at, stored);
+                    (None, None)
+                }
                 CellInput::Clear => (None, None),
             };
-            let element = match (&content, &style_attr) {
-                (None, None) => None,
-                _ => Some(cell_element(&prefix, *at, style_attr.as_deref(), existing.and_then(|c| c.phonetic.as_deref()), kind, content.as_deref())),
+            let phonetic = existing.and_then(|c| c.phonetic.as_deref());
+            let element = match (formulas.get(at), &content, &style_attr) {
+                (Some(f), _, _) => Some(formula_element(&prefix, *at, style_attr.as_deref(), phonetic, f)),
+                (None, None, None) => None,
+                _ => Some(cell_element(&prefix, *at, style_attr.as_deref(), phonetic, kind, content.as_deref())),
             };
             if existing.is_none() && element.is_none() {
                 continue;
@@ -410,6 +451,7 @@ impl Workbook {
                 None => self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml)?,
             }
         }
+        self.recalculate_after_edit();
         self.prepare_recalculation()
     }
 
@@ -435,9 +477,48 @@ impl Workbook {
             for (part, xml) in changes {
                 self.package.put(part, xml.into_bytes());
             }
+            self.recalculate_after_edit();
             self.prepare_recalculation()?;
         }
         Ok(total)
+    }
+
+    /// Recalculates every formula of the workbook and stores the results that changed in the
+    /// cells; returns how many cells got a new value. Formulas this engine cannot evaluate keep
+    /// the value Excel cached (Excel recalculates them when it opens the file).
+    pub fn recalculate(&mut self) -> Result<usize, String> {
+        let sheets = self.sheets()?;
+        let mut xmls = Vec::with_capacity(sheets.len());
+        for sheet in &sheets {
+            xmls.push(match sheet.kind == SheetKind::Worksheet && self.package.contains(&sheet.part) {
+                true => Some(self.package.get_string(&sheet.part)?),
+                false => None,
+            });
+        }
+        if !xmls.iter().flatten().any(|xml| xml.contains("<f") || xml.contains(":f")) {
+            return Ok(0);
+        }
+        let names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
+        let date1904 = self.date1904();
+        let outcome = recalc::recalculate(
+            &names,
+            &xmls,
+            &self.shared_strings()?,
+            &defined_names(&self.workbook_xml()?),
+            date1904,
+            recalc::now_serial(date1904),
+        )?;
+        for (sheet, xml) in sheets.iter().zip(outcome.sheets) {
+            if let Some(xml) = xml {
+                self.package.put(sheet.part.clone(), xml.into_bytes());
+            }
+        }
+        Ok(outcome.updated)
+    }
+
+    /// After an edit: a recalculation that fails leaves the cached values for Excel to refresh
+    fn recalculate_after_edit(&mut self) {
+        let _ = self.recalculate();
     }
 
     /// Adds a part related to the workbook: the part, its relationship and its content type
@@ -578,7 +659,7 @@ impl CellReader {
 }
 
 /// A number as written in `<v>`: the shortest text that reads back as the same number
-fn format_number(n: f64) -> String {
+pub(crate) fn format_number(n: f64) -> String {
     if n == 0.0 {
         "0".to_string()
     } else if n.abs() >= 1e16 || n.abs() < 1e-6 {
@@ -586,6 +667,28 @@ fn format_number(n: f64) -> String {
     } else {
         format!("{}", n)
     }
+}
+
+/// A formula as people read it: without the `_xlfn.` prefixes Excel stores on newer functions
+fn display_formula(stored: &str) -> String {
+    if stored.contains("_xlfn.") || stored.contains("_xlws.") {
+        formula::parse(stored).map(|e| e.to_display()).unwrap_or_else(|_| stored.to_string())
+    } else {
+        stored.to_string()
+    }
+}
+
+/// A `<c>` element with a formula and no cached value (the recalculation fills it in)
+fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, formula: &str) -> String {
+    let mut out = format!(r#"<{}c r="{}""#, prefix, at);
+    if let Some(s) = style {
+        out.push_str(&format!(r#" s="{}""#, escape_xml(s)));
+    }
+    if let Some(ph) = phonetic {
+        out.push_str(&format!(r#" ph="{}""#, escape_xml(ph)));
+    }
+    out.push_str(&format!("><{p}f>{}</{p}f></{p}c>", escape_xml(formula), p = prefix));
+    out
 }
 
 /// A `<c>` element with only the attributes that survive a new value: reference, format and
@@ -760,7 +863,7 @@ mod tests {
         assert_eq!((a3.value, a3.formula.as_deref()), (CellValue::Number(1234.5), Some("SUM(A2:A2)")));
         let b3 = wb.cell(1, "B3").unwrap();
         assert_eq!((b3.value, b3.formula.as_deref()), (CellValue::Text("Cliente!".into()), Some("A1&\"!\"")));
-        assert_eq!(wb.cell(1, "C4").unwrap().formula.as_deref(), Some(""));
+        assert_eq!(wb.cell(1, "C4").unwrap().formula.as_deref(), Some("A4*2"));
 
         let range = wb.range(1, "A1:B2").unwrap();
         assert_eq!(range.len(), 2);
@@ -906,6 +1009,29 @@ mod tests {
     }
 
     #[test]
+    fn writes_formulas_and_recalculates_what_depends_on_an_edit() {
+        let mut wb = open(&blank_xlsx().unwrap());
+        wb.set_values(0, "A1", vec![vec![Some(CellInput::Number(2.0)), Some(CellInput::Number(3.0))]]).unwrap();
+        wb.set_value(0, "C1", CellInput::Formula("=SUM(A1:B1)*10%".into())).unwrap();
+        wb.set_value(0, "D1", CellInput::Formula("xlookup(2,A1:B1,A1:B1)".into())).unwrap();
+        assert_eq!(value(&wb, 0, "C1"), CellValue::Number(0.5));
+        assert_eq!(wb.cell(0, "D1").unwrap().formula.as_deref(), Some("XLOOKUP(2,A1:B1,A1:B1)"));
+        assert!(part(&wb, "xl/worksheets/sheet1.xml").contains("<f>_xlfn.XLOOKUP(2,A1:B1,A1:B1)</f><v>2</v>"));
+
+        wb.checkpoint(None);
+        wb.set_value(0, "A1", CellInput::Number(7.0)).unwrap();
+        assert_eq!(value(&wb, 0, "C1"), CellValue::Number(1.0));
+        wb.undo();
+        assert_eq!(value(&wb, 0, "C1"), CellValue::Number(0.5));
+
+        // Unknown to this engine: written, left for Excel to calculate
+        wb.set_value(0, "E1", CellInput::Formula("OFFSET(A1,0,1)".into())).unwrap();
+        assert_eq!(wb.cell(0, "E1").unwrap(), CellData { at: CellRef::parse("E1").unwrap(), value: CellValue::Empty, formula: Some("OFFSET(A1,0,1)".into()) });
+        let err = wb.set_value(0, "F1", CellInput::Formula("SUM(A1".into())).unwrap_err();
+        assert!(err.contains("F1"), "{}", err);
+    }
+
+    #[test]
     fn untouched_parts_round_trip_byte_for_byte() {
         let original = open(&template());
         // Opening and saving without changes keeps every part
@@ -918,7 +1044,8 @@ mod tests {
         let mut wb = open(&template());
         wb.set_value(1, "A2", CellInput::Number(99.0)).unwrap();
         let edited = open(&wb.to_bytes().unwrap());
-        let touched = ["xl/hojas/datos.xml", "xl/libro.xml", "xl/_rels/libro.xml.rels", "[Content_Types].xml"];
+        // The summary sheet reads the edited cell, so its cached result changes too
+        let touched = ["xl/hojas/datos.xml", "xl/hojas/resumen.xml", "xl/libro.xml", "xl/_rels/libro.xml.rels", "[Content_Types].xml"];
         for name in original.package().order() {
             if name == "xl/calcChain.xml" {
                 assert!(!edited.package().contains(name));
@@ -926,8 +1053,14 @@ mod tests {
                 assert_eq!(original.package().get(name), edited.package().get(name), "part {}", name);
             }
         }
-        // In the edited sheet only the cell changed
-        assert_eq!(part(&edited, "xl/hojas/datos.xml"), DATOS.replace(r#"<c r="A2" s="2"><v>1234.5</v></c>"#, r#"<c r="A2" s="2"><v>99</v></c>"#));
+        // In the edited sheet only the cell and the cached results of the formulas that read it
+        // changed
+        let expected = DATOS
+            .replace(r#"<c r="A2" s="2"><v>1234.5</v></c>"#, r#"<c r="A2" s="2"><v>99</v></c>"#)
+            .replace(r#"<f>SUM(A2:A2)</f><v>1234.5</v>"#, r#"<f>SUM(A2:A2)</f><v>99</v>"#)
+            .replace(r#"si="0">A3*2</f><v>2469</v>"#, r#"si="0">A3*2</f><v>198</v>"#);
+        assert_eq!(part(&edited, "xl/hojas/datos.xml"), expected);
+        assert_eq!(part(&edited, "xl/hojas/resumen.xml"), RESUMEN.replace("<v>1234.5</v>", "<v>99</v>"));
         let names: Vec<_> = edited.package().order().to_vec();
         assert_eq!(names, original.package().order().iter().filter(|n| *n != "xl/calcChain.xml").cloned().collect::<Vec<_>>());
     }

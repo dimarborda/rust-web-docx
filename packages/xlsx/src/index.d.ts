@@ -7,6 +7,14 @@ export function initEngine(wasm?: string | URL | BufferSource): Promise<void>;
  */
 export type CellValue = string | number | boolean | Date | null;
 
+/**
+ * A formula to write, in Excel's English syntax (`SUM`, `IF`, `,` between arguments; `;` is
+ * also accepted); the leading `=` is optional
+ */
+export interface FormulaInput {
+  formula: string;
+}
+
 /** What a cell holds; `error` values are codes such as `#DIV/0!` */
 export type CellType = 'empty' | 'number' | 'string' | 'boolean' | 'date' | 'error';
 
@@ -14,9 +22,12 @@ export interface Cell {
   /** Reference, e.g. `B3` */
   ref: string;
   type: CellType;
-  /** For formulas, the value cached when the file was last calculated */
+  /**
+   * For formulas, the result: recalculated after every edit, or the value saved in the file
+   * for formulas the engine does not evaluate
+   */
   value: CellValue;
-  /** Formula without `=`; empty for cells that reuse a shared formula of another cell */
+  /** Formula without `=` (cells of a shared formula get their own, shifted) */
   formula?: string;
 }
 
@@ -42,12 +53,13 @@ export class Sheet {
   /** The values of a range (`A1:C3`), by row */
   getValues(range: string): CellValue[][];
   /** Writes one value; `null` clears the cell and keeps its format */
-  setValue(ref: string, value: CellValue): void;
+  setValue(ref: string, value: CellValue | FormulaInput): void;
   /**
    * Writes rows of values from `start` rightwards and down, creating rows and cells as needed.
    * `undefined` leaves a cell as it is; `null` clears it. Writing a value replaces a formula.
+   * The formulas that depend on the cells written are recalculated.
    */
-  setValues(start: string, rows: ReadonlyArray<ReadonlyArray<CellValue | undefined>>): void;
+  setValues(start: string, rows: ReadonlyArray<ReadonlyArray<CellValue | FormulaInput | undefined>>): void;
   /** Drawing API: the grid of the sheet */
   layout(): SheetLayout;
   /**
@@ -152,6 +164,11 @@ export class Workbook {
   redo(): HistoryMove | null;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /**
+   * Recalculates every formula and stores the results that changed; returns how many cells
+   * changed. Formulas the engine does not evaluate keep the value saved in the file.
+   */
+  recalculate(): number;
   /** The workbook as .xlsx bytes */
   toBytes(): Uint8Array;
   /** Frees the engine memory of this workbook; it cannot be used afterwards */

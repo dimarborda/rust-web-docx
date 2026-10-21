@@ -63,6 +63,25 @@ test('markers() finds fields and pending content in text cells', async () => {
   assert.equal((await reopen(template)).sheet(0).getValue('A1'), 'Cliente: Acme');
 });
 
+test('formulas are written and recalculated after every edit', async () => {
+  const wb = await createWorkbook();
+  const sheet = wb.sheet(0);
+  sheet.setValues('A1', [[2, 3, { formula: '=SUM(A1:B1)*10%' }, { formula: 'IF(C1>0.4,"alto","bajo")' }]]);
+  assert.deepEqual(sheet.getValues('C1:D1'), [[0.5, 'alto']]);
+  assert.deepEqual(sheet.getCell('C1'), { ref: 'C1', type: 'number', value: 0.5, formula: 'SUM(A1:B1)*10%' });
+
+  wb.checkpoint();
+  sheet.setValue('A1', 1);
+  assert.deepEqual(sheet.getValues('C1:D1'), [[0.4, 'bajo']]);
+  wb.undo();
+  assert.equal(sheet.getValue('C1'), 0.5);
+
+  const again = (await reopen(wb)).sheet(0);
+  assert.deepEqual(again.getValues('C1:D1'), [[0.5, 'alto']]);
+  assert.equal(wb.recalculate(), 0);
+  assert.throws(() => sheet.setValue('E1', { formula: '=SUM(A1' }), /E1/);
+});
+
 test('invalid input is refused with a reason', async () => {
   const wb = await createWorkbook();
   const sheet = wb.sheet(0);

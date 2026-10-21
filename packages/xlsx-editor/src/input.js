@@ -119,19 +119,19 @@ function parseDate(text, info, today) {
  * - `number`, `percent` (value already divided by 100), `boolean`
  * - `date`: a `Date` holding the wall-clock time as UTC, as `@dimarborda/xlsx` writes it
  * - `time`: a time without date, as the fraction of a day Excel stores
- * - `formula`: starts with `=`; kept as text, since formulas are not calculated yet
+ * - `formula`: starts with `=`; value `{ formula }`, ready for `sheet.setValues`
  * - `string`: anything else; a leading `'` forces text and is dropped, as in Excel
  * @param {string} text
  * @param {string} [locale]
  * @param {{today?: Date}} [options] the year of dates typed without one (default: now)
- * @returns {{type: 'empty' | 'string' | 'number' | 'percent' | 'boolean' | 'date' | 'time' | 'formula', value: null | string | number | boolean | Date}}
+ * @returns {{type: 'empty' | 'string' | 'number' | 'percent' | 'boolean' | 'date' | 'time' | 'formula', value: null | string | number | boolean | Date | {formula: string}}}
  */
 export function parseInput(text, locale = 'en', { today = new Date() } = {}) {
   const raw = String(text ?? '');
   if (raw.startsWith("'")) return { type: 'string', value: raw.slice(1) };
   const s = raw.trim();
   if (!s) return { type: 'empty', value: null };
-  if (s.startsWith('=') && s.length > 1) return { type: 'formula', value: raw };
+  if (s.startsWith('=') && s.length > 1) return { type: 'formula', value: { formula: s } };
   const info = localeInfo(locale);
   const upper = s.toUpperCase();
   if (upper === info.trueText) return { type: 'boolean', value: true };

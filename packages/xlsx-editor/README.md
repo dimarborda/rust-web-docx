@@ -2,7 +2,7 @@
 
 Componente para ver y editar libros de Excel (`.xlsx`) en el navegador, dibujados en canvas como los muestra Excel. Por dentro usa el motor Rust/WebAssembly de [`@dimarborda/xlsx`](../xlsx), que lee el archivo, resuelve estilos y formatos de número y guarda sin pérdidas. Funciona en cualquier frontend (HTML, React, Vue, Svelte, Angular, Tauri) y nada sale del navegador.
 
-> **Estado: fase 2, edición de celdas.** Se escriben valores en la cuadrícula, se borran, se copian y pegan, y se deshacen. Las fórmulas todavía no se recalculan (ver [Limitaciones](#limitaciones)). Con el atributo `readonly` sigue siendo un visor.
+> **Estado: fase 2, edición de celdas.** Se escriben valores y fórmulas en la cuadrícula, se borran, se copian y pegan, y se deshacen. Las fórmulas habituales se recalculan al momento (ver [Limitaciones](#limitaciones)). Con el atributo `readonly` sigue siendo un visor.
 
 ```bash
 npm install @dimarborda/xlsx-editor
@@ -25,7 +25,7 @@ npm install @dimarborda/xlsx-editor
 - **Cuadrícula:** anchos de columna y altos de fila del archivo, filas y columnas ocultas, celdas combinadas, paneles inmovilizados y líneas de cuadrícula (o su ausencia).
 - **Navegación:** desplazamiento fluido en hojas grandes (solo se dibuja lo visible), zoom, pestañas de hojas, selección con ratón y teclado, y una barra con la celda activa y su contenido o fórmula.
 
-Aún no se dibujan gráficos, imágenes, formato condicional ni comentarios, y el texto girado se dibuja horizontal. Las fórmulas muestran el último valor que guardó Excel; no se recalculan.
+Aún no se dibujan gráficos, imágenes, formato condicional ni comentarios, y el texto girado se dibuja horizontal. Las fórmulas se recalculan tras cada cambio con el motor de `@dimarborda/xlsx`; las que usan algo que no admite muestran el último valor que guardó Excel.
 
 ## Edición
 
@@ -54,7 +54,7 @@ Lo escrito se interpreta como lo hace Excel en el idioma del editor (`locale`; `
 | `14:30` · `14:30:15` | `2:30 PM` | Hora, como fracción del día |
 | `VERDADERO` · `FALSO` | `TRUE` · `FALSE` | Booleano (sin distinguir mayúsculas) |
 | `'0012` | `'0012` | Texto `0012`: el apóstrofo inicial fuerza texto |
-| `=SUMA(A1:A3)` | `=SUM(A1:A3)` | Texto (ver Limitaciones) |
+| `=SUM(A1:A3)` | `=SUM(A1:A3)` | Fórmula (ver Limitaciones) |
 | Cualquier otra cosa | | Texto |
 | (vacío) | | Celda vacía |
 
@@ -62,7 +62,7 @@ Los valores se escriben con `sheet.setValues` de `@dimarborda/xlsx`, que conserv
 
 ### Limitaciones
 
-- **Fórmulas:** no se calculan. Lo que empieza por `=` se guarda como texto, y las celdas con fórmula muestran el último valor guardado por Excel. Al guardar, el libro pide a Excel que recalcule todo al abrirlo (`fullCalcOnLoad`). El recálculo en el editor es una fase posterior.
+- **Fórmulas:** lo que empieza por `=` se guarda como fórmula y se calcula, igual que las fórmulas que dependen de ella. Se escriben en la sintaxis en inglés (`=SUM(A1:A3)`, `,` o `;` entre argumentos) en cualquier idioma del editor. Las funciones admitidas están en el [README de `@dimarborda/xlsx`](../xlsx#fórmulas); con otras, la celda muestra el último valor guardado y Excel la calcula al abrir el archivo (`fullCalcOnLoad`).
 - **Formato:** escribir no cambia el formato de número (salvo en fechas), y las columnas no se ensanchan solas: una fecha en una columna estrecha se ve como `####`, como en Excel.
 - No se puede sobrescribir la celda de origen de una fórmula compartida (la que usan otras celdas); el editor emite `error` y deja el libro como estaba.
 

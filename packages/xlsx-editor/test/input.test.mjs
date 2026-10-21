@@ -82,7 +82,7 @@ test('text, formulas, apostrophes and empty input', () => {
   assert.deepEqual(parse('Hola mundo', 'es'), { type: 'string', value: 'Hola mundo' });
   assert.deepEqual(parse("'0012", 'es'), { type: 'string', value: '0012' });
   assert.deepEqual(parse("'15/03/2024", 'es'), { type: 'string', value: '15/03/2024' });
-  assert.deepEqual(parse('=SUMA(A1:A3)', 'es'), { type: 'formula', value: '=SUMA(A1:A3)' });
+  assert.deepEqual(parse('=SUM(A1:A3)', 'es'), { type: 'formula', value: { formula: '=SUM(A1:A3)' } });
   assert.deepEqual(parse('=', 'es'), { type: 'string', value: '=' });
   assert.deepEqual(parse('', 'es'), { type: 'empty', value: null });
   assert.deepEqual(parse('   ', 'es'), { type: 'empty', value: null });

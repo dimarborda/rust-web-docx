@@ -81,8 +81,8 @@ La API completa, los ejemplos con React, Next.js y Tauri y las opciones de fuent
 
 El mismo repositorio incluye un visor de libros de Excel que comparte con el editor de Word la capa de paquete OOXML ([`crates/ooxml-core`](crates/ooxml-core)):
 
-- [`@dimarborda/xlsx`](packages/xlsx): motor Rust/WebAssembly para leer, escribir y rellenar libros `.xlsx` sin perder lo que no se toca, en Node.js o en el navegador.
-- [`@dimarborda/xlsx-editor`](packages/xlsx-editor): componente `<xlsx-editor>` que dibuja las hojas en canvas. Por ahora es un visor; la edición desde la cuadrícula llegará después.
+- [`@dimarborda/xlsx`](packages/xlsx): motor Rust/WebAssembly para leer, escribir y rellenar libros `.xlsx` sin perder lo que no se toca, con recálculo de las fórmulas habituales, en Node.js o en el navegador.
+- [`@dimarborda/xlsx-editor`](packages/xlsx-editor): componente `<xlsx-editor>` que dibuja las hojas en canvas y permite editar valores y fórmulas desde la cuadrícula.
 
 Con `npm run dev`, la demo del visor está en `http://localhost:5173/xlsx.html`.
 

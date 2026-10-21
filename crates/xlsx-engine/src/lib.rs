@@ -3,12 +3,15 @@
 //! Cells cross the boundary as JSON; `packages/xlsx/src/index.js` turns them into JS values.
 
 pub mod blank;
+pub mod calc;
+pub mod formula;
 pub mod cell_ref;
 pub mod dates;
 pub mod shared_strings;
 pub mod sheet;
 pub mod styles;
 pub mod numfmt;
+pub mod recalc;
 pub mod text;
 pub mod theme;
 pub mod view;
@@ -46,7 +49,8 @@ fn cell_json(cell: &CellData) -> Value {
     out
 }
 
-/// One value to write: a string, number or boolean, `null` (clear), `{"date": ms}` or
+/// One value to write: a string, number or boolean, `null` (clear), `{"date": ms}`,
+/// `{"formula": "SUM(A1:A3)"}` or
 /// `{"skip": true}` (leave the cell as it is)
 fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
     Ok(Some(match value {
@@ -55,9 +59,10 @@ fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
         Value::Bool(b) => CellInput::Bool(*b),
         Value::Number(n) => CellInput::Number(n.as_f64().ok_or("Número no válido.")?),
         Value::Object(o) if o.get("skip") == Some(&Value::Bool(true)) => return Ok(None),
-        Value::Object(o) => match o.get("date").and_then(Value::as_f64) {
-            Some(ms) => CellInput::Date(ms),
-            None => return Err("Valor de celda no admitido.".to_string()),
+        Value::Object(o) => match (o.get("date").and_then(Value::as_f64), o.get("formula").and_then(Value::as_str)) {
+            (Some(ms), _) => CellInput::Date(ms),
+            (None, Some(f)) => CellInput::Formula(f.to_string()),
+            _ => return Err("Valor de celda no admitido.".to_string()),
         },
         Value::Array(_) => return Err("Valor de celda no admitido: una lista dentro de una celda.".to_string()),
     }))
@@ -135,6 +140,11 @@ impl XlsxWorkbook {
             inputs.push(row.iter().map(cell_input).collect::<Result<Vec<_>, _>>().map_err(js_err)?);
         }
         self.workbook.set_values(sheet, start, inputs).map_err(js_err)
+    }
+
+    /// Recalculates the formulas of the workbook; returns how many cells got a new value
+    pub fn recalculate(&mut self) -> Result<usize, JsValue> {
+        self.workbook.recalculate().map_err(js_err)
     }
 
     /// Replaces `{{FIELD}}` placeholders with the strings of a JSON object; returns how many

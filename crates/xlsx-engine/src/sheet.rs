@@ -20,6 +20,22 @@ pub struct Formula {
     pub text: String,
     /// The cell holds a shared formula that other cells reuse (`<f t="shared" ref="…">`)
     pub shared_master: bool,
+    /// Formula type (`t`): `shared`, `array`, `dataTable`, or none for a normal formula
+    pub kind: Option<String>,
+    /// Group of a shared formula (`si`)
+    pub shared_index: Option<u32>,
+}
+
+impl Formula {
+    fn from_start(e: &BytesStart) -> Formula {
+        let kind = get_attr_value(e, "t");
+        Formula {
+            text: String::new(),
+            shared_master: kind.as_deref() == Some("shared") && get_attr_value(e, "ref").is_some(),
+            kind,
+            shared_index: attr_u32(e, "si"),
+        }
+    }
 }
 
 /// One `<c>` element
@@ -170,10 +186,7 @@ impl<'a> SheetXml<'a> {
                     if tag_is(name, "v") {
                         reading = Some(("v", after));
                     } else if tag_is(name, "f") {
-                        current.formula = Some(Formula {
-                            text: String::new(),
-                            shared_master: get_attr_value(&e, "t").as_deref() == Some("shared") && get_attr_value(&e, "ref").is_some(),
-                        });
+                        current.formula = Some(Formula::from_start(&e));
                         reading = Some(("f", after));
                     } else if tag_is(name, "is") {
                         in_inline = true;
@@ -188,10 +201,7 @@ impl<'a> SheetXml<'a> {
                     let name = e.name();
                     let current = cell.as_mut().unwrap();
                     if tag_is(name.as_ref(), "f") {
-                        current.formula = Some(Formula {
-                            text: String::new(),
-                            shared_master: get_attr_value(&e, "t").as_deref() == Some("shared") && get_attr_value(&e, "ref").is_some(),
-                        });
+                        current.formula = Some(Formula::from_start(&e));
                     } else if tag_is(name.as_ref(), "v") {
                         current.value = Some(String::new());
                     } else if tag_is(name.as_ref(), "is") {

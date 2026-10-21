@@ -59,7 +59,8 @@ function toInput(value, where) {
     if (Number.isNaN(ms)) throw new TypeError(`La fecha de ${where} no es válida.`);
     return { date: ms };
   }
-  throw new TypeError(`Valor no admitido en ${where}: usa texto, número, booleano, Date o null.`);
+  if (value && typeof value === 'object' && typeof value.formula === 'string') return { formula: value.formula };
+  throw new TypeError(`Valor no admitido en ${where}: usa texto, número, booleano, Date, { formula } o null.`);
 }
 
 /** One worksheet of a workbook */
@@ -90,14 +91,18 @@ export class Sheet {
     return JSON.parse(call(() => this.workbook._engine.range_json(this.index, range))).map(row => row.map(c => toCell(c).value));
   }
 
-  /** Writes one value; `null` clears the cell (its format stays) */
+  /**
+   * Writes one value; `null` clears the cell (its format stays) and `{ formula: '=SUM(A1:A3)' }`
+   * writes a formula
+   */
   setValue(ref, value) {
     this.setValues(ref, [[value]]);
   }
 
   /**
    * Writes rows of values from the cell `start` rightwards and down. `undefined` (or a hole)
-   * leaves a cell as it is; `null` clears it.
+   * leaves a cell as it is; `null` clears it; `{ formula }` writes a formula. The formulas that
+   * depend on the cells written are recalculated.
    */
   setValues(start, rows) {
     if (!Array.isArray(rows) || !rows.every(Array.isArray)) {
@@ -233,6 +238,15 @@ export class Workbook {
 
   get canRedo() {
     return this._engine.can_redo();
+  }
+
+  /**
+   * Recalculates every formula and stores the new results; returns how many cells changed.
+   * Edits already recalculate what depends on them: this is for a workbook just opened whose
+   * saved results may be stale. Formulas the engine does not evaluate keep their saved value.
+   */
+  recalculate() {
+    return call(() => this._engine.recalculate());
   }
 
   /** The workbook as .xlsx bytes */
