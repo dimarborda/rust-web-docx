@@ -1,6 +1,6 @@
 {
   "name": "@dimarborda/xlsx-editor",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Excel (.xlsx) editor for the browser and engine for Node.js: Rust + WebAssembly that edits workbooks without losing what it does not touch, with a canvas grid as a framework-agnostic web component",
   "type": "module",
   "license": "MIT",
