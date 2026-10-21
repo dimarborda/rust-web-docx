@@ -46,6 +46,12 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `wb.checkpoint(selección?)` | Abre un paso de deshacer: los cambios hasta el siguiente `checkpoint` se deshacen juntos. `selección` es un texto libre que `undo()` devuelve. `wb.setSelectionAfter(selección)` guarda la de después, que devuelve `redo()`. |
 | `wb.undo()` / `wb.redo()` | Deshace o rehace un paso: `{ selection, parts }`, o `null` si no hay nada. `wb.canUndo` / `wb.canRedo` dicen si se puede. |
 | `wb.recalculate()` | Recalcula todas las fórmulas y devuelve cuántas celdas cambiaron de valor. |
+| `wb.areas({ sheet })` / `hoja.areas()` | Las áreas del libro (ver [Áreas](#áreas-para-agentes)). |
+| `wb.area(destino, { sheet, maxRows, locale })` / `hoja.area(rango)` | Contexto de un área para un agente. |
+| `hoja.regionAt('B5')` | La región alrededor de una celda, como la selecciona Ctrl+A en Excel (o su tabla). |
+| `hoja.setFormat('A1:C3', formato)` / `hoja.clearFormat(rango)` | Da formato (ver [Formato](#formato)) o lo quita. |
+| `hoja.setColumnWidth('B:D', 14)` | Ancho de columnas en caracteres. |
+| `hoja.mergeCells('A1:H1')` / `hoja.unmergeCells(rango)` | Combina o separa celdas; al combinar, solo la primera puede tener valor. |
 | `wb.toBytes()` | El libro como `.xlsx`. |
 | `wb.close()` | Libera la memoria del motor. |
 
@@ -63,6 +69,39 @@ Se usa la sintaxis en inglés que guarda Excel (`SUM`, `IF`, `,` entre argumento
 - **Fechas:** `TODAY`, `NOW`, `DATE`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `EDATE`, `EOMONTH`, `DAYS`.
 
 Una fórmula que use otra cosa (una función que no está en la lista, `OFFSET`, `INDIRECT`, referencias a otros libros o a tablas, fórmulas matriciales, resultados que se desbordan a varias celdas) o que forme una referencia circular conserva el valor que guardó Excel, y las que dependen de ella lo usan. Al abrirse el archivo, Excel la calcula (ver abajo).
+
+### Áreas para agentes
+
+Un agente no necesita leer toda la hoja: puede pedir las áreas y luego el contexto de la que le interesa. `wb.areas()` usa lo que el propio archivo marca, en este orden:
+
+1. **Tablas** de Excel (Dar formato como tabla, `xl/tables/tableN.xml`): nombre, rango, nombres de columna y fila de totales.
+2. **Nombres definidos** que apuntan a un rango (`Ventas = Datos!$A$3:$H$40`) y el **área de impresión**.
+3. **Filtros** (`autoFilter`) de la hoja.
+4. **Regiones**: bloques de celdas llenas contiguas, como los selecciona Ctrl+A, donde el archivo no marca nada. Las filas iniciales con una sola celda (o una combinada) son el **título**, igual que un texto suelto justo encima; la primera fila de textos seguida de datos (o en negrita) es la **cabecera**.
+
+Cada área es `{ kind, name, sheet, sheetName, ref, address, title, headerRow, totalsRow, body, columns }`; `address` (`Ventas!A1:H64`) sirve como destino en cualquier llamada.
+
+`wb.area(destino)` acepta el nombre de una tabla o de un rango con nombre, una dirección con hoja o, con `{ sheet }`, un rango de esa hoja. Devuelve la descripción del área y además:
+
+- `columnsInfo`: por columna, su nombre, tipo (`number`, `text`, `date`, `mixed`…), cuántas celdas tienen valor, suma, mínimo, máximo y media de los números, y cuántas fórmulas hay con un ejemplo (`D4: =B4*C4`).
+- `rows`: las primeras `maxRows` filas de datos (30 por defecto) con el texto que muestran las celdas, `firstRow`, `rowCount` y `truncated`.
+- `totals`, `merges` y `markdown`: el área como tabla Markdown con números de fila y letras de columna, lista para pasarla a un modelo.
+
+### Formato
+
+`hoja.setFormat(rango, formato)` cambia solo lo que se indica y conserva el resto del aspecto de cada celda:
+
+| Propiedad | Valor |
+|---|---|
+| `bold`, `italic`, `underline`, `strike` | `true` / `false` |
+| `color` | Color de la letra, `#RRGGBB` |
+| `fontSize`, `fontName` | Puntos; nombre de fuente |
+| `fill` | Fondo `#RRGGBB`; `null` lo quita |
+| `numberFormat` | Código de Excel: `#,##0.00`, `0%`, `dd/mm/yyyy`, `#,##0.00 "€"`… |
+| `align`, `valign`, `wrap` | `left`, `center`, `right`…; `top`, `center`, `bottom`; ajuste de texto |
+| `border` | Un estilo (`'thin'`, `'medium'`, `'thick'`, `'dashed'`, `'dotted'`, `'double'`) en todos los lados, `null` para quitarlos, o `{ style, color, edges }` con `edges`: `all`, `outline`, `inside`, `top`, `bottom`, `left` o `right` |
+
+Los formatos nuevos se añaden a `xl/styles.xml` y se reutilizan los iguales que ya existan; nada de lo que ya estaba se reescribe.
 
 ### Fechas
 

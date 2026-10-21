@@ -63,6 +63,15 @@ function toInput(value, where) {
   throw new TypeError(`Valor no admitido en ${where}: usa texto, número, booleano, Date, { formula } o null.`);
 }
 
+/** Column letters (`'B'`, `'b'`) or number (2) → column number */
+function columnNumber(col) {
+  if (Number.isInteger(col) && col >= 1) return col;
+  if (typeof col === 'string' && /^[A-Za-z]{1,3}$/.test(col.trim())) {
+    return [...col.trim().toUpperCase()].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+  }
+  throw new TypeError(`Columna no válida: ${col} (usa una letra como 'B' o un número desde 1).`);
+}
+
 /** One worksheet of a workbook */
 export class Sheet {
   /**
@@ -128,6 +137,59 @@ export class Sheet {
    */
   cellViews(locale = 'en') {
     return JSON.parse(call(() => this.workbook._engine.sheet_cells_json(this.index, locale)));
+  }
+
+  /** Areas of this sheet (see `Workbook.areas`) */
+  areas() {
+    return this.workbook.areas({ sheet: this.index });
+  }
+
+  /**
+   * The region around a cell, as Excel's Ctrl+A selects it (or the table, or the cell alone):
+   * an area like those of `areas()`
+   */
+  regionAt(ref) {
+    return JSON.parse(call(() => this.workbook._engine.region_at_json(this.index, ref)));
+  }
+
+  /** Context of a range of this sheet or of a named area (see `Workbook.area`) */
+  area(target, options = {}) {
+    return this.workbook.area(target, { ...options, sheet: this.index });
+  }
+
+  /**
+   * Formats a range (`A1:C3`): `{bold, italic, underline, strike, color, fontSize, fontName,
+   * fill, numberFormat, align, valign, wrap, border}`. What is not given stays as it is.
+   */
+  setFormat(range, format) {
+    if (!format || typeof format !== 'object') throw new TypeError('setFormat espera un objeto, por ejemplo { bold: true }.');
+    call(() => this.workbook._engine.set_format_json(this.index, range, JSON.stringify(format)));
+  }
+
+  /** Back to the default format for the cells of a range (values stay) */
+  clearFormat(range) {
+    call(() => this.workbook._engine.clear_format(this.index, range));
+  }
+
+  /**
+   * Width of a column or columns (`'B'`, `'B:D'`, `2`) in characters, as Excel measures it
+   * @param {string | number} columns
+   * @param {number} width
+   */
+  setColumnWidth(columns, width) {
+    const [a, b = a] = typeof columns === 'string' ? columns.split(':') : [columns];
+    if (typeof width !== 'number' || !Number.isFinite(width)) throw new TypeError('El ancho debe ser un número de caracteres.');
+    call(() => this.workbook._engine.set_column_width(this.index, columnNumber(a), columnNumber(b), width));
+  }
+
+  /** Merges a range into one cell; only its first cell may hold a value */
+  mergeCells(range) {
+    call(() => this.workbook._engine.merge_cells(this.index, range));
+  }
+
+  /** Splits the merged cells that overlap a range; returns how many */
+  unmergeCells(range) {
+    return call(() => this.workbook._engine.unmerge_cells(this.index, range));
   }
 }
 
@@ -238,6 +300,32 @@ export class Workbook {
 
   get canRedo() {
     return this._engine.can_redo();
+  }
+
+  /**
+   * Areas an agent can point at, as the file marks them: tables ("Format as Table"), defined
+   * names and print areas, filters, and blocks of adjacent filled cells with their title and
+   * header (`kind: 'region'`). Each is `{kind, name, sheet, sheetName, ref, address, title,
+   * headerRow, totalsRow, body, columns}`.
+   * @param {{sheet?: string | number}} [options] only those of one sheet
+   */
+  areas({ sheet } = {}) {
+    const index = sheet === undefined ? undefined : this.sheet(sheet).index;
+    return JSON.parse(call(() => this._engine.areas_json(index)));
+  }
+
+  /**
+   * What an agent needs to work on an area without reading the whole sheet: its description
+   * (as in `areas()`), each column with its type, formulas and number totals, the first
+   * `maxRows` rows of data as the cells show them, and the same as a Markdown table.
+   * @param {string} target a table or defined name, an address (`'Ventas'!A1:H40`) or, with
+   *   `sheet`, a range of that sheet
+   * @param {{sheet?: string | number, maxRows?: number, locale?: string}} [options]
+   */
+  area(target, { sheet, maxRows = 30, locale = 'en' } = {}) {
+    const index = sheet === undefined ? undefined : this.sheet(sheet).index;
+    if (!Number.isInteger(maxRows) || maxRows < 0) throw new TypeError('maxRows debe ser un entero mayor o igual que 0.');
+    return JSON.parse(call(() => this._engine.area_context_json(String(target), index, maxRows, locale)));
   }
 
   /**

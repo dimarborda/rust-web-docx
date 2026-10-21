@@ -90,7 +90,7 @@ pub enum CellInput {
 }
 
 pub struct Workbook {
-    package: Package,
+    pub(crate) package: Package,
     workbook_part: String,
     /// The recalculation set-up has been done (see `prepare_recalculation`)
     recalc_prepared: bool,
@@ -117,7 +117,7 @@ impl Workbook {
         Ok(Workbook { package, workbook_part, recalc_prepared: false })
     }
 
-    fn workbook_xml(&self) -> Result<String, String> {
+    pub(crate) fn workbook_xml(&self) -> Result<String, String> {
         self.package.get_string(&self.workbook_part)
     }
 
@@ -129,7 +129,7 @@ impl Workbook {
     }
 
     /// Part related to the workbook by a relationship of type `name` (`sharedStrings`, `styles`)
-    fn related_part(&self, name: &str) -> Option<String> {
+    pub(crate) fn related_part(&self, name: &str) -> Option<String> {
         self.workbook_rels()
             .into_iter()
             .find(|r| type_is(&r.rel_type, name) && !r.external)
@@ -187,7 +187,7 @@ impl Workbook {
     }
 
     /// The worksheet at `index` (its part name), refusing chart sheets and missing parts
-    fn worksheet_part(&self, index: usize) -> Result<String, String> {
+    pub(crate) fn worksheet_part(&self, index: usize) -> Result<String, String> {
         let sheets = self.sheets()?;
         let sheet = sheets
             .get(index)
@@ -217,7 +217,7 @@ impl Workbook {
         }
     }
 
-    fn shared_strings(&self) -> Result<SharedStrings, String> {
+    pub(crate) fn shared_strings(&self) -> Result<SharedStrings, String> {
         match self.related_part("sharedStrings") {
             Some(part) => SharedStrings::parse(&self.package.get_string(&part)?),
             None => Ok(SharedStrings::default()),
@@ -517,12 +517,12 @@ impl Workbook {
     }
 
     /// After an edit: a recalculation that fails leaves the cached values for Excel to refresh
-    fn recalculate_after_edit(&mut self) {
+    pub(crate) fn recalculate_after_edit(&mut self) {
         let _ = self.recalculate();
     }
 
     /// Adds a part related to the workbook: the part, its relationship and its content type
-    fn add_workbook_part(&mut self, rel_name: &str, target: &str, content_type: &str, xml: String) -> Result<(), String> {
+    pub(crate) fn add_workbook_part(&mut self, rel_name: &str, target: &str, content_type: &str, xml: String) -> Result<(), String> {
         let part = resolve_target(&self.workbook_part, target);
         let rels_part = rels_part_for(&self.workbook_part);
         let rels = self.package.get_string(&rels_part).unwrap_or_else(|_| {
@@ -544,7 +544,7 @@ impl Workbook {
     /// After the first edit: drops the calculation chain (Excel rebuilds it, and a stale one can
     /// make it repair the file) and asks Excel to recalculate every formula on open, since cached
     /// values may depend on the cells written
-    fn prepare_recalculation(&mut self) -> Result<(), String> {
+    pub(crate) fn prepare_recalculation(&mut self) -> Result<(), String> {
         if self.recalc_prepared {
             return Ok(());
         }
@@ -725,7 +725,7 @@ const AFTER_CALC_PR: &[&str] = &[
 ];
 
 /// Offset of the first child of the root element named one of `names`
-fn first_child_named(xml: &str, names: &[&str]) -> Result<Option<usize>, String> {
+pub(crate) fn first_child_named(xml: &str, names: &[&str]) -> Result<Option<usize>, String> {
     let mut reader = Reader::from_str(xml);
     let mut depth = 0usize;
     loop {

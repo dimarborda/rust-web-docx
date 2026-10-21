@@ -2,8 +2,10 @@
 //! with limits, lossless writing) comes from `ooxml-core`, shared with the .docx engine.
 //! Cells cross the boundary as JSON; `packages/xlsx/src/index.js` turns them into JS values.
 
+pub mod areas;
 pub mod blank;
 pub mod calc;
+pub mod format;
 pub mod formula;
 pub mod cell_ref;
 pub mod dates;
@@ -66,6 +68,66 @@ fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
         },
         Value::Array(_) => return Err("Valor de celda no admitido: una lista dentro de una celda.".to_string()),
     }))
+}
+
+/// A format from JSON: `{bold, italic, underline, strike, color, fontSize, fontName, fill,
+/// numberFormat, align, valign, wrap, border}`; `border` is a style (`"thin"`), `null` to remove
+/// borders, or `{style, color, edges}`
+fn format_input(value: &Value) -> Result<format::Format, String> {
+    let obj = value.as_object().ok_or("El formato debe ser un objeto.")?;
+    let known = ["bold", "italic", "underline", "strike", "color", "fontSize", "fontName", "fill", "numberFormat", "align", "valign", "wrap", "border"];
+    if let Some(unknown) = obj.keys().find(|k| !known.contains(&k.as_str())) {
+        return Err(format!("Propiedad de formato desconocida: '{}'. Usa {}.", unknown, known.join(", ")));
+    }
+    let flag = |k: &str| -> Result<Option<bool>, String> {
+        match obj.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            _ => Err(format!("'{}' debe ser true o false.", k)),
+        }
+    };
+    let text = |k: &str| -> Result<Option<String>, String> {
+        match obj.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.clone())),
+            _ => Err(format!("'{}' debe ser un texto.", k)),
+        }
+    };
+    let fill = match obj.get("fill") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(s)) => Some(Some(s.clone())),
+        _ => return Err("'fill' debe ser un color (#RRGGBB) o null.".to_string()),
+    };
+    let border = match obj.get("border") {
+        None => None,
+        Some(Value::Null) => Some(format::BorderSpec { style: None, color: None, edges: format::Edges::All }),
+        Some(Value::String(s)) => Some(format::BorderSpec { style: Some(s.clone()), color: None, edges: format::Edges::All }),
+        Some(Value::Object(b)) => Some(format::BorderSpec {
+            style: b.get("style").and_then(Value::as_str).map(str::to_string),
+            color: b.get("color").and_then(Value::as_str).map(str::to_string),
+            edges: format::Edges::parse(b.get("edges").and_then(Value::as_str).unwrap_or("all"))?,
+        }),
+        _ => return Err("'border' debe ser un estilo (\"thin\"), null o {style, color, edges}.".to_string()),
+    };
+    Ok(format::Format {
+        bold: flag("bold")?,
+        italic: flag("italic")?,
+        underline: flag("underline")?,
+        strike: flag("strike")?,
+        font_color: text("color")?,
+        font_size: match obj.get("fontSize") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_f64().ok_or("'fontSize' debe ser un número.")?),
+        },
+        font_name: text("fontName")?,
+        fill,
+        number_format: text("numberFormat")?,
+        horizontal: text("align")?,
+        vertical: text("valign")?,
+        wrap: flag("wrap")?,
+        border,
+    })
 }
 
 fn undone_json(done: Option<ooxml_core::Undone>) -> String {
@@ -140,6 +202,60 @@ impl XlsxWorkbook {
             inputs.push(row.iter().map(cell_input).collect::<Result<Vec<_>, _>>().map_err(js_err)?);
         }
         self.workbook.set_values(sheet, start, inputs).map_err(js_err)
+    }
+
+    /// Areas of the workbook (tables, defined names, print areas, filters, regions) as JSON;
+    /// only those of the sheet at `sheet` when given
+    pub fn areas_json(&self, sheet: Option<usize>) -> Result<String, JsValue> {
+        let names = self.workbook.sheet_names().map_err(js_err)?;
+        let areas = self.workbook.areas().map_err(js_err)?;
+        let list: Vec<Value> = areas
+            .iter()
+            .filter(|a| sheet.is_none_or(|s| a.sheet == s))
+            .map(|a| a.to_json(names.get(a.sheet).map(String::as_str).unwrap_or("")))
+            .collect();
+        Ok(Value::Array(list).to_string())
+    }
+
+    /// Context of an area for an agent (see `Workbook::area_context`): `target` is a table or
+    /// defined name, an address with its sheet, or a range of the sheet at `sheet`
+    pub fn area_context_json(&self, target: &str, sheet: Option<usize>, max_rows: usize, locale: &str) -> Result<String, JsValue> {
+        let area = self.workbook.resolve_area(target, sheet).map_err(js_err)?;
+        let context = self.workbook.area_context(&area, max_rows, &numfmt::Locale::from_tag(locale)).map_err(js_err)?;
+        Ok(context.to_string())
+    }
+
+    /// The region around a cell (Excel's current region) as JSON
+    pub fn region_at_json(&self, sheet: usize, reference: &str) -> Result<String, JsValue> {
+        let names = self.workbook.sheet_names().map_err(js_err)?;
+        let area = self.workbook.region_at(sheet, reference).map_err(js_err)?;
+        Ok(area.to_json(names.get(sheet).map(String::as_str).unwrap_or("")).to_string())
+    }
+
+    /// Formats the cells of a range; `format` is JSON (see `format_input`)
+    pub fn set_format_json(&mut self, sheet: usize, range: &str, format: &str) -> Result<(), JsValue> {
+        let value: Value = serde_json::from_str(format).map_err(|e| js_err(format!("Formato no válido: {}", e)))?;
+        let format = format_input(&value).map_err(js_err)?;
+        self.workbook.set_format(sheet, range, &format).map_err(js_err)
+    }
+
+    /// Back to the default format for the cells of a range
+    pub fn clear_format(&mut self, sheet: usize, range: &str) -> Result<(), JsValue> {
+        self.workbook.clear_format(sheet, range).map_err(js_err)
+    }
+
+    /// Width in characters of the columns `first..=last` (1 = A)
+    pub fn set_column_width(&mut self, sheet: usize, first: u32, last: u32, width: f64) -> Result<(), JsValue> {
+        self.workbook.set_column_width(sheet, first, last, width).map_err(js_err)
+    }
+
+    pub fn merge_cells(&mut self, sheet: usize, range: &str) -> Result<(), JsValue> {
+        self.workbook.merge_cells(sheet, range).map_err(js_err)
+    }
+
+    /// Splits merged cells overlapping a range; returns how many
+    pub fn unmerge_cells(&mut self, sheet: usize, range: &str) -> Result<usize, JsValue> {
+        self.workbook.unmerge_cells(sheet, range).map_err(js_err)
     }
 
     /// Recalculates the formulas of the workbook; returns how many cells got a new value

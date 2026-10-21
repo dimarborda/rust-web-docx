@@ -66,6 +66,13 @@ Los valores se escriben con `sheet.setValues` de `@dimarborda/xlsx`, que conserv
 - **Formato:** escribir no cambia el formato de número (salvo en fechas), y las columnas no se ensanchan solas: una fecha en una columna estrecha se ve como `####`, como en Excel.
 - No se puede sobrescribir la celda de origen de una fórmula compartida (la que usan otras celdas); el editor emite `error` y deja el libro como estaba.
 
+### Áreas y contexto para agentes
+
+- `editor.selectArea(destino)`: selecciona un área y muestra su hoja. Acepta una tabla o un rango con nombre, una dirección (`Ventas!A1:H40`) o un rango de la hoja activa. Devuelve el área (ver `workbook.areas()` en [`@dimarborda/xlsx`](../xlsx#áreas-para-agentes)).
+- `editor.selectionContext({ maxRows })`: contexto de lo seleccionado para un agente: el rango, o con una sola celda la región que la rodea (su tabla, o el bloque que seleccionaría Ctrl+A). Devuelve título, cabecera, tipos y totales por columna, las primeras filas y una tabla Markdown.
+
+Para dar formato desde código se usa `editor.workbook.sheet(…).setFormat(…)` y después `editor.reload()`.
+
 ## Atributos
 
 | Atributo | Para qué |

@@ -261,6 +261,32 @@ export class XlsxEditor extends EventTarget {
     this.#setSelection(range.first, range.last, range.first);
   }
 
+  /**
+   * Selects an area and shows its sheet: a table or defined name, an address with its sheet
+   * (`Ventas!A1:H40`) or a range of the active sheet. Returns the area (see
+   * `workbook.areas()`).
+   */
+  selectArea(target) {
+    if (!this.#workbook) throw new Error('No hay ningún libro abierto.');
+    const { rows, columnsInfo, markdown, totals, merges, rowCount, rowsShown, truncated, firstRow, ...area } = this.#workbook.area(target, { sheet: this.#sheetIndex, maxRows: 0 });
+    if (area.sheet !== this.#sheetIndex) this.setSheet(area.sheet);
+    this.select(area.ref);
+    return area;
+  }
+
+  /**
+   * Context of what is selected, for an agent (see `workbook.area()`): the selected range, or
+   * with a single cell selected the region around it (its table, or the block Ctrl+A selects)
+   * @param {{maxRows?: number, expand?: boolean}} [options] `expand: false` keeps a single cell
+   */
+  selectionContext({ maxRows = 30, expand = true } = {}) {
+    const selection = this.selection;
+    if (!selection || !this.#workbook) return null;
+    let target = selection.range;
+    if (!target.includes(':') && expand) target = this.#workbook.sheet(this.#sheetIndex).regionAt(selection.ref).ref;
+    return this.#workbook.area(target, { sheet: this.#sheetIndex, maxRows, locale: this.locale });
+  }
+
   /** The selected range: `{ref, range, active, text}` or null */
   get selection() {
     if (!this.#selection) return null;

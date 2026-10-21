@@ -1,4 +1,4 @@
-import type { CellValue, Workbook } from '@dimarborda/xlsx';
+import type { Area, AreaContext, CellValue, Workbook } from '@dimarborda/xlsx';
 
 export { initEngine } from '@dimarborda/xlsx';
 
@@ -82,6 +82,16 @@ export class XlsxEditor extends EventTarget {
   setZoom(zoom: number): void;
   /** Selects a cell or range (`B3`, `A1:C4`) and scrolls it into view */
   select(ref: string): void;
+  /**
+   * Selects an area and shows its sheet: a table or defined name, an address with its sheet
+   * (`Ventas!A1:H40`) or a range of the active sheet
+   */
+  selectArea(target: string): Area;
+  /**
+   * Context of the selection for an agent: the selected range, or with one cell selected the
+   * region around it (`expand: false` keeps the cell)
+   */
+  selectionContext(options?: { maxRows?: number; expand?: boolean }): AreaContext | null;
   /** Draws again (after changing cells through `workbook`, call `reload()` instead) */
   render(): void;
   /** Reads the active sheet again from the workbook, after changing it from code */

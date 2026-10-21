@@ -39,6 +39,89 @@ export interface HistoryMove {
   parts: string[];
 }
 
+/** Where an area comes from in the file */
+export type AreaKind = 'table' | 'name' | 'printArea' | 'filter' | 'region';
+
+/** A range that holds something as a unit */
+export interface Area {
+  kind: AreaKind;
+  /** Table or defined name; null for filters, print areas and regions */
+  name: string | null;
+  sheet: number;
+  sheetName: string;
+  /** Range, e.g. `A1:H40` */
+  ref: string;
+  /** With the sheet, e.g. `Ventas!A1:H40`: usable as `target` anywhere */
+  address: string;
+  /** Text of the title rows above the data (regions) */
+  title: string | null;
+  headerRow: number | null;
+  totalsRow: number | null;
+  /** Rows of data, below the header and above the totals */
+  body: string | null;
+  /** Header texts or table column names, one per column */
+  columns: string[];
+}
+
+export interface AreaColumn {
+  /** Column letters */
+  col: string;
+  name: string;
+  type: 'number' | 'text' | 'date' | 'boolean' | 'error' | 'mixed' | 'empty';
+  /** Cells with a value */
+  filled: number;
+  numbers?: { count: number; sum: number; min: number; max: number; average: number };
+  /** Cells with a formula, and the first one as `D4: =B4*C4` */
+  formulas?: number;
+  exampleFormula?: string;
+}
+
+/** Context of an area for an agent */
+export interface AreaContext extends Area {
+  /** Rows of data in the area */
+  rowCount: number;
+  rowsShown: number;
+  truncated: boolean;
+  columnsInfo: AreaColumn[];
+  /** The first rows of data as the cells show them (formatted text) */
+  rows: string[][];
+  /** Row number of `rows[0]` */
+  firstRow: number | null;
+  /** Totals row as shown, for tables with one */
+  totals: string[] | null;
+  /** Merged cells that overlap the area */
+  merges: string[];
+  /** Header, rows and totals as a Markdown table, with row numbers and column letters */
+  markdown: string;
+}
+
+/** A border: a style (`'thin'`), null to remove borders, or the full form */
+export type BorderInput =
+  | 'thin' | 'medium' | 'thick' | 'dashed' | 'dotted' | 'double' | 'hair'
+  | null
+  | { style: string | null; color?: string; edges?: 'all' | 'outline' | 'top' | 'bottom' | 'left' | 'right' | 'inside' };
+
+/** What to change in the look of cells; what is not given stays as it is */
+export interface CellFormat {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** Font color, `#RRGGBB` */
+  color?: string;
+  /** Points */
+  fontSize?: number;
+  fontName?: string;
+  /** Background `#RRGGBB`; null removes it */
+  fill?: string | null;
+  /** Excel format code: `#,##0.00`, `0%`, `dd/mm/yyyy`, `"$"#,##0`… */
+  numberFormat?: string;
+  align?: 'general' | 'left' | 'center' | 'right' | 'justify' | 'fill' | 'centerContinuous' | 'distributed';
+  valign?: 'top' | 'center' | 'bottom' | 'justify' | 'distributed';
+  wrap?: boolean;
+  border?: BorderInput;
+}
+
 /** One worksheet */
 export class Sheet {
   private constructor();
@@ -67,6 +150,22 @@ export class Sheet {
    * language `locale` (`es`, `en-US`…; default `en`)
    */
   cellViews(locale?: string): CellViewRow[];
+  /** Areas of this sheet */
+  areas(): Area[];
+  /** The region around a cell as Excel's Ctrl+A selects it (or its table, or the cell alone) */
+  regionAt(ref: string): Area;
+  /** Context of a range of this sheet or of a named area */
+  area(target: string, options?: { maxRows?: number; locale?: string }): AreaContext;
+  /** Formats the cells of a range; what is not given stays as it is */
+  setFormat(range: string, format: CellFormat): void;
+  /** Back to the default format (values stay) */
+  clearFormat(range: string): void;
+  /** Width of a column or columns (`'B'`, `'B:D'`, `2`) in characters */
+  setColumnWidth(columns: string | number, width: number): void;
+  /** Merges a range into one cell; only its first cell may hold a value */
+  mergeCells(range: string): void;
+  /** Splits the merged cells that overlap a range; returns how many */
+  unmergeCells(range: string): number;
 }
 
 /** Grid of a sheet, as Excel stores it */
@@ -164,6 +263,17 @@ export class Workbook {
   redo(): HistoryMove | null;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /**
+   * Areas as the file marks them (tables, defined names, print areas, filters) and blocks of
+   * adjacent filled cells with their title and header
+   */
+  areas(options?: { sheet?: string | number }): Area[];
+  /**
+   * Context of an area for an agent: `target` is a table or defined name, an address
+   * (`'Ventas'!A1:H40`) or, with `sheet`, a range of that sheet. `maxRows` (default 30) limits
+   * the rows shown.
+   */
+  area(target: string, options?: { sheet?: string | number; maxRows?: number; locale?: string }): AreaContext;
   /**
    * Recalculates every formula and stores the results that changed; returns how many cells
    * changed. Formulas the engine does not evaluate keep the value saved in the file.
