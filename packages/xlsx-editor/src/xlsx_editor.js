@@ -4,7 +4,7 @@
 // frozen panes in place and handles selection, the in-cell editor, the clipboard, undo and tabs.
 import { createWorkbook, initEngine, openWorkbook } from './engine.js';
 import { canvasFont, drawHeaders, drawRegion, key } from './draw.js';
-import { columnName, parseRange, sheetAxes } from './grid.js';
+import { MAX_COLS, MAX_ROWS, columnName, parseRange, sheetAxes } from './grid.js';
 import { editText, parseInput, parseTSV, toTSV } from './input.js';
 
 const COL_HEADER_H = 22;
@@ -113,7 +113,10 @@ export class XlsxEditor extends EventTarget {
     this.#input = root.querySelector('.xlsx-editor-input');
     this.#sink = root.querySelector('.xlsx-editor-clipboard');
 
-    this.#scroller.addEventListener('scroll', () => this.render());
+    this.#scroller.addEventListener('scroll', () => {
+      this.#growOnScroll();
+      this.render();
+    });
     this.#scroller.addEventListener('pointerdown', e => this.#onPointerDown(e));
     this.#scroller.addEventListener('keydown', e => this.#onKeyDown(e));
     this.#scroller.addEventListener('dblclick', () => this.#beginEdit({ mode: 'edit' }));
@@ -258,6 +261,7 @@ export class XlsxEditor extends EventTarget {
   select(ref) {
     const range = parseRange(ref);
     this.#commitEdit(null, { focus: false });
+    this.#extend(range.last.row, range.last.col);
     this.#setSelection(range.first, range.last, range.first);
   }
 
@@ -384,7 +388,12 @@ export class XlsxEditor extends EventTarget {
       }
     }
     this.#mdw = this.#measureMdw();
-    const { rows, cols } = sheetAxes(layout, { maxRow, maxCol }, this.#mdw);
+    let { rows, cols } = sheetAxes(layout, { maxRow, maxCol }, this.#mdw);
+    // Reading the same sheet again keeps the room scrolled into past its cells
+    if (this.#sheetIndex === index && this.#sheet) {
+      rows = rows.grown(this.#sheet.rows.count, MAX_ROWS);
+      cols = cols.grown(this.#sheet.cols.count, MAX_COLS);
+    }
     const frozen = layout.frozen ?? { rows: 0, cols: 0 };
     this.#sheet = {
       cells, merges, mergeAt, covered, rows, cols,
@@ -415,6 +424,30 @@ export class XlsxEditor extends EventTarget {
 
   #colHeaderH() {
     return this.#sheet?.headings ? Math.round(COL_HEADER_H * this.zoom) : 0;
+  }
+
+  /**
+   * Makes room up to row `row` and column `col` and some more, as Excel does when scrolling or
+   * moving past the end of the shown grid
+   */
+  #extend(row, col) {
+    const sheet = this.#sheet;
+    if (!sheet) return;
+    const rows = row + 50 > sheet.rows.count ? sheet.rows.grown(row + 200, MAX_ROWS) : sheet.rows;
+    const cols = col + 5 > sheet.cols.count ? sheet.cols.grown(col + 20, MAX_COLS) : sheet.cols;
+    if (rows === sheet.rows && cols === sheet.cols) return;
+    sheet.rows = rows;
+    sheet.cols = cols;
+    this.#updateSpacer();
+  }
+
+  /** Grows the grid when the view comes near its bottom or right end */
+  #growOnScroll() {
+    const s = this.#scroller;
+    if (!this.#sheet) return;
+    const nearBottom = s.scrollTop + s.clientHeight * 2 >= s.scrollHeight;
+    const nearRight = s.scrollLeft + s.clientWidth * 2 >= s.scrollWidth;
+    if (nearBottom || nearRight) this.#extend(nearBottom ? this.#sheet.rows.count : 1, nearRight ? this.#sheet.cols.count : 1);
   }
 
   #updateSpacer() {
@@ -679,8 +712,9 @@ export class XlsxEditor extends EventTarget {
 
   /** Moves the active cell (or, with `extend`, the moving corner of the range) one step */
   #move(dr, dc, extend = false) {
-    const { rows, cols } = this.#sheet;
     const from = extend ? this.#selection.cursor : this.#selection.active;
+    this.#extend(from.row + Math.max(dr, 0), from.col + Math.max(dc, 0));
+    const { rows, cols } = this.#sheet;
     // Step over merged ranges and hidden rows or columns
     const range = this.#expandToMerges(from, from);
     let row = dr > 0 ? range.last.row + 1 : dr < 0 ? range.first.row - 1 : from.row;

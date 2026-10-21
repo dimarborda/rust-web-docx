@@ -65,6 +65,12 @@ export class Axis {
     return this.offset(this.count + 1);
   }
 
+  /** The same axis with room for `count` rows/columns, up to `max` (sizes are kept) */
+  grown(count, max) {
+    const next = Math.min(max, Math.max(this.count, count));
+    return next === this.count ? this : new Axis(next, this.defaultSize, this.custom);
+  }
+
   /** The row/column under position `pos` (clamped to the grid) */
   indexAt(pos) {
     if (pos <= 0) return 1;
@@ -78,6 +84,10 @@ export class Axis {
     return lo;
   }
 }
+
+/** Last row and column of a worksheet */
+export const MAX_ROWS = 1_048_576;
+export const MAX_COLS = 16_384;
 
 /** Column letters: 1 → A, 27 → AA */
 export function columnName(col) {
@@ -133,7 +143,7 @@ export function sheetAxes(layout, used, mdw, defaultRowPt = 15) {
     lastRow = Math.max(lastRow, last.row);
     lastCol = Math.max(lastCol, last.col);
   }
-  const rows = Math.min(1_048_576, Math.max(lastRow + 100, 200));
-  const cols = Math.min(16_384, Math.max(lastCol, used.maxCol) + 12, 16_384);
+  const rows = Math.min(MAX_ROWS, Math.max(lastRow + 100, 200));
+  const cols = Math.min(MAX_COLS, Math.max(lastCol, used.maxCol) + 12);
   return { rows: new Axis(rows, rowPx, rowSizes), cols: new Axis(Math.max(cols, 26), colPx, colSizes) };
 }

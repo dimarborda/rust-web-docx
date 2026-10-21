@@ -2,7 +2,7 @@
 // Run with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Axis, colWidthToPx, columnName, defaultColPx, parseRange, parseRef, ptToPx, sheetAxes } from '../src/grid.js';
+import { Axis, MAX_ROWS, colWidthToPx, columnName, defaultColPx, parseRange, parseRef, ptToPx, sheetAxes } from '../src/grid.js';
 
 test('Excel sizes in pixels', () => {
   assert.equal(Math.round(ptToPx(15)), 20);
@@ -58,4 +58,14 @@ test('sheet axes cover the used cells and some room to scroll', () => {
   const big = sheetAxes({ ...layout, cols: [] }, { maxRow: 5000, maxCol: 60 }, 7);
   assert.equal(big.rows.count, 5100);
   assert.equal(big.cols.count, 72);
+});
+
+test('an axis grows keeping its sizes, up to the end of the sheet', () => {
+  const axis = new Axis(200, 20, new Map([[3, 0], [10, 40]]));
+  const grown = axis.grown(500, MAX_ROWS);
+  assert.equal(grown.count, 500);
+  assert.equal(grown.offset(11), axis.offset(11));
+  assert.equal(grown.total, axis.total + 300 * 20);
+  assert.equal(axis.grown(100, MAX_ROWS), axis, 'never shrinks');
+  assert.equal(axis.grown(MAX_ROWS + 10, MAX_ROWS).count, MAX_ROWS);
 });
