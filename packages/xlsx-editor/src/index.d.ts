@@ -1,6 +1,6 @@
-import type { Area, AreaContext, CellValue, Workbook } from '@dimarborda/xlsx';
+import type { Area, AreaContext, CellValue, Workbook } from './engine';
 
-export { initEngine } from '@dimarborda/xlsx';
+export * from './engine';
 
 export interface XlsxEditorOptions {
   /** Language the cells are formatted in (`es`, `en-US`…); default: the page's or the browser's */

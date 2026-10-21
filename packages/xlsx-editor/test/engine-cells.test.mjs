@@ -1,9 +1,9 @@
 // Reading and writing cells through the public API. The engine's Rust tests cover templates
 // saved by Excel and the byte-for-byte round trip; these check the JS side of the boundary.
-// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx
+// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkbook, openWorkbook } from '../src/index.js';
+import { createWorkbook, openWorkbook } from '../src/engine.js';
 
 const reopen = async wb => openWorkbook(wb.toBytes());
 

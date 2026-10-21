@@ -1,8 +1,8 @@
 // Areas for agents and basic formatting through the public API.
-// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx
+// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkbook, openWorkbook } from '../src/index.js';
+import { createWorkbook, openWorkbook } from '../src/engine.js';
 
 async function report() {
   const wb = await createWorkbook();

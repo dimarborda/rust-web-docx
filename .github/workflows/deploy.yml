@@ -57,11 +57,9 @@ jobs:
       - name: JS tests
         run: npm test -w packages/docx-editor
 
-      # The xlsx engine (built above for the xlsx viewer page) and its packages
+      # The xlsx engine (built above for the xlsx editor page) and the editor package
       - name: xlsx tests
-        run: |
-          npm test -w packages/xlsx
-          npm test -w packages/xlsx-editor
+        run: npm test -w packages/xlsx-editor
 
       - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3

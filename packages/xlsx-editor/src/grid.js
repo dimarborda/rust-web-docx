@@ -108,7 +108,7 @@ export function parseRange(range) {
 /**
  * Rows and columns of a sheet as axes: sizes from the layout, extent from the used cells plus
  * some room to scroll past them
- * @param {import('@dimarborda/xlsx').SheetLayout} layout
+ * @param {import('./engine.js').SheetLayout} layout
  * @param {{maxRow: number, maxCol: number}} used
  * @param {number} mdw maximum digit width of the default font, pixels
  * @param {number} defaultRowPt default row height when the sheet sets none, points

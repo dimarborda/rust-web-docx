@@ -1,8 +1,8 @@
 // Public API on Node: the engine loads from the package and workbooks round-trip.
-// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx
+// Run after `npm run build:wasm:xlsx` with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkbook, openWorkbook } from '../src/index.js';
+import { createWorkbook, openWorkbook } from '../src/engine.js';
 
 test('createWorkbook() has one sheet', async () => {
   const wb = await createWorkbook();

@@ -1,6 +1,6 @@
-//! Excel (.xlsx) engine compiled to WebAssembly for @dimarborda/xlsx. The package layer (ZIP
+//! Excel (.xlsx) engine compiled to WebAssembly for @dimarborda/xlsx-editor. The package layer (ZIP
 //! with limits, lossless writing) comes from `ooxml-core`, shared with the .docx engine.
-//! Cells cross the boundary as JSON; `packages/xlsx/src/index.js` turns them into JS values.
+//! Cells cross the boundary as JSON; `packages/xlsx-editor/src/engine.js` turns them into JS values.
 
 pub mod areas;
 pub mod blank;

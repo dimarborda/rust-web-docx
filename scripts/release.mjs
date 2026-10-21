@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Publishes a new version of one of the monorepo's npm packages.
 //
-//   npm run release -- <patch|minor|major|x.y.z> [--pkg=docx|xlsx|xlsx-editor] [--dry-run] [--otp=123456]
+//   npm run release -- <patch|minor|major|x.y.z> [--pkg=docx|xlsx-editor] [--dry-run] [--otp=123456]
 //
-// --pkg picks the package: docx (default, @dimarborda/docx-editor, tags vx.y.z), xlsx
-// (@dimarborda/xlsx, tags xlsx-vx.y.z) or xlsx-editor (@dimarborda/xlsx-editor, tags
-// xlsx-editor-vx.y.z). Each package is versioned and published on its own.
+// --pkg picks the package: docx (default, @dimarborda/docx-editor, tags vx.y.z) or xlsx-editor
+// (@dimarborda/xlsx-editor, tags xlsx-editor-vx.y.z). Each package is versioned and published on
+// its own, with its WebAssembly engine inside.
 //
 // 1. Checks: on master, no pending changes (except .claude/), up to date with origin, logged
 //    in to npm and the version not published yet.
@@ -13,7 +13,7 @@
 // 3. Checks the package contents (engine .wasm, sources, types).
 // 4. Bumps the version (package.json + package-lock.json) and publishes. If publishing fails
 //    the version bump is undone.
-// 5. Commits "chore(release): x.y.z", tags it (vx.y.z, or xlsx-vx.y.z for xlsx) and pushes both.
+// 5. Commits "chore(release): x.y.z", tags it (vx.y.z, or xlsx-editor-vx.y.z) and pushes both.
 //
 // --dry-run runs steps 1–3 and `npm publish --dry-run`, changing nothing (pending changes are
 // only a warning there, to check a release before committing).
@@ -33,18 +33,14 @@ const PACKAGES = {
     tagPrefix: 'v',
     required: ['wasm/docx_engine_bg.wasm', 'wasm/docx_engine.js', 'src/index.js', 'src/index.d.ts', 'src/style.css', 'README.md', 'LICENSE'],
   },
-  xlsx: {
-    dir: 'packages/xlsx',
-    buildScript: 'build:wasm:xlsx',
-    tagPrefix: 'xlsx-v',
-    required: ['wasm/xlsx_engine_bg.wasm', 'wasm/xlsx_engine.js', 'src/index.js', 'src/index.d.ts', 'README.md', 'LICENSE'],
-  },
-  // No engine of its own: it depends on the published @dimarborda/xlsx, so release that first
   'xlsx-editor': {
     dir: 'packages/xlsx-editor',
     buildScript: 'build:wasm:xlsx',
     tagPrefix: 'xlsx-editor-v',
-    required: ['src/index.js', 'src/index.d.ts', 'src/xlsx_editor.js', 'src/style.css', 'src/fonts.js', 'README.md', 'LICENSE'],
+    required: [
+      'wasm/xlsx_engine_bg.wasm', 'wasm/xlsx_engine.js', 'src/index.js', 'src/index.d.ts', 'src/engine.js', 'src/engine.d.ts',
+      'src/xlsx_editor.js', 'src/style.css', 'src/fonts.js', 'README.md', 'LICENSE',
+    ],
   },
 };
 
@@ -94,7 +90,7 @@ function nextVersion(current, kind) {
     case 'major': return `${major + 1}.0.0`;
     case 'minor': return `${major}.${minor + 1}.0`;
     case 'patch': return `${major}.${minor}.${patch + 1}`;
-    default: fail(`Indica patch, minor, major o una versión x.y.z (recibido: ${kind ?? 'nada'}).\n  Uso: npm run release -- minor [--pkg=docx|xlsx|xlsx-editor] [--dry-run] [--otp=123456]`);
+    default: fail(`Indica patch, minor, major o una versión x.y.z (recibido: ${kind ?? 'nada'}).\n  Uso: npm run release -- minor [--pkg=docx|xlsx-editor] [--dry-run] [--otp=123456]`);
   }
 }
 

@@ -24,7 +24,7 @@ En el `.docx` cada sección es un control de contenido de bloque (`w:sdt`) con `
 
 ## Marcadores: campos y pendientes
 
-Un léxico estándar, compartido con [`@dimarborda/xlsx`](../../packages/xlsx), para que un agente o una automatización sepa qué falta en un documento sin adivinar:
+Un léxico estándar, compartido con [`@dimarborda/xlsx-editor`](../../packages/xlsx-editor), para que un agente o una automatización sepa qué falta en un documento sin adivinar:
 
 | Escritura | Tipo | Significado |
 | :--- | :--- | :--- |

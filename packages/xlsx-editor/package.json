@@ -1,7 +1,7 @@
 {
   "name": "@dimarborda/xlsx-editor",
   "version": "0.0.1",
-  "description": "Excel (.xlsx) editor for the browser: canvas grid over a Rust + WebAssembly engine, as a framework-agnostic web component",
+  "description": "Excel (.xlsx) editor for the browser and engine for Node.js: Rust + WebAssembly that edits workbooks without losing what it does not touch, with a canvas grid as a framework-agnostic web component",
   "type": "module",
   "license": "MIT",
   "author": "Dimar Borda",
@@ -14,17 +14,28 @@
     "xlsx",
     "excel",
     "spreadsheet",
-    "viewer",
     "editor",
+    "viewer",
+    "formulas",
+    "template",
     "webassembly",
     "wasm",
+    "rust",
+    "openxml",
     "canvas",
     "web-component"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "exports": {
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
+    },
+    "./engine": {
+      "types": "./src/engine.d.ts",
+      "default": "./src/engine.js"
     },
     "./fonts": "./src/fonts.js",
     "./style.css": "./src/style.css"
@@ -36,15 +47,16 @@
     "*.css"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "node -e \"require('fs').accessSync('wasm/xlsx_engine_bg.wasm')\" || (echo 'Falta el motor WebAssembly: publica con npm run release:xlsx-editor desde la raíz del repositorio' && exit 1)"
   },
   "files": [
     "src",
+    "wasm",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "@dimarborda/xlsx": "^0.1.0",
     "@fontsource/arimo": "^5.3.0",
     "@fontsource/caladea": "^5.3.0",
     "@fontsource/carlito": "^5.3.0",

@@ -117,7 +117,7 @@ function parseDate(text, info, today) {
  * What a typed text means.
  * - `empty`: nothing (clears the cell); value `null`
  * - `number`, `percent` (value already divided by 100), `boolean`
- * - `date`: a `Date` holding the wall-clock time as UTC, as `@dimarborda/xlsx` writes it
+ * - `date`: a `Date` holding the wall-clock time as UTC, as the engine writes it
  * - `time`: a time without date, as the fraction of a day Excel stores
  * - `formula`: starts with `=`; value `{ formula }`, ready for `sheet.setValues`
  * - `string`: anything else; a leading `'` forces text and is dropped, as in Excel

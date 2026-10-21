@@ -1,4 +1,5 @@
-// Excel (.xlsx) workbooks backed by the Rust/WebAssembly engine. In Node the engine is read
+// Excel (.xlsx) workbooks backed by the Rust/WebAssembly engine, without any interface: works in
+// Node (`@dimarborda/xlsx-editor/engine`) and in the browser. In Node the engine is read
 // from the package itself; in the browser bundlers serve the .wasm next to the JS, or pass its
 // location with `initEngine(url)`.
 import init, { initSync, XlsxWorkbook } from '../wasm/xlsx_engine.js';

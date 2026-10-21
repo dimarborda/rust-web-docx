@@ -1,8 +1,8 @@
 // XlsxEditor: shows an Excel workbook on a canvas, as Excel draws it, and edits its cells. The
-// workbook is read, formatted and written by the Rust/WebAssembly engine of @dimarborda/xlsx;
+// workbook is read, formatted and written by the Rust/WebAssembly engine (engine.js);
 // this class lays out the grid, scrolls it virtually (only the visible cells are drawn), keeps
 // frozen panes in place and handles selection, the in-cell editor, the clipboard, undo and tabs.
-import { createWorkbook, initEngine, openWorkbook } from '@dimarborda/xlsx';
+import { createWorkbook, initEngine, openWorkbook } from './engine.js';
 import { canvasFont, drawHeaders, drawRegion, key } from './draw.js';
 import { columnName, parseRange, sheetAxes } from './grid.js';
 import { editText, parseInput, parseTSV, toTSV } from './input.js';
@@ -178,7 +178,7 @@ export class XlsxEditor extends EventTarget {
     this.#root.classList.toggle('is-readonly', this.#readOnly);
   }
 
-  /** The open workbook (`@dimarborda/xlsx`), or null */
+  /** The open workbook (see `./engine`), or null */
   get workbook() {
     return this.#workbook;
   }
