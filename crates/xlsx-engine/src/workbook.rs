@@ -9,7 +9,7 @@ use quick_xml::reader::Reader;
 
 use ooxml_core::rels::{parse_relationships, rels_part_for, resolve_target, type_is, with_relationship, without_relationship, Relationship};
 use ooxml_core::xml::{element_ranges, escape_xml, get_attr_value, prefix_of, root_element, set_attr, tag_is};
-use ooxml_core::{content_types, Package, ZipLimits};
+use ooxml_core::{content_types, Package, Undone, ZipLimits};
 
 use crate::cell_ref::{CellRange, CellRef};
 use crate::dates::{has_time, iso_to_unix_ms, serial_to_unix_ms, unix_ms_to_serial};
@@ -491,6 +491,47 @@ impl Workbook {
         Ok(())
     }
 
+    /// Starts an undo step: the edits made until the next checkpoint undo together.
+    /// `selection` is whatever the caller needs to restore its selection on undo (any text).
+    pub fn checkpoint(&mut self, selection: Option<String>) {
+        self.package.checkpoint(selection);
+    }
+
+    /// Where the selection ended up after the current step's edits (restored on redo)
+    pub fn set_selection_after(&mut self, selection: Option<String>) {
+        self.package.set_selection_after(selection);
+    }
+
+    /// Undoes the last step; `None` when there is nothing to undo
+    pub fn undo(&mut self) -> Option<Undone> {
+        let done = self.package.undo();
+        self.after_history_move(&done);
+        done
+    }
+
+    /// Redoes the last undone step
+    pub fn redo(&mut self) -> Option<Undone> {
+        let done = self.package.redo();
+        self.after_history_move(&done);
+        done
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.package.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.package.can_redo()
+    }
+
+    /// Undo may bring back the calc chain or drop `fullCalcOnLoad`: check again on the next edit
+    /// (`prepare_recalculation` changes nothing when it is already in place)
+    fn after_history_move(&mut self, done: &Option<Undone>) {
+        if done.is_some() {
+            self.recalc_prepared = false;
+        }
+    }
+
     /// The workbook as .xlsx bytes: untouched parts are written back as they were read
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         self.package.to_bytes()
@@ -824,6 +865,44 @@ mod tests {
         assert_eq!(with_full_calc_on_load(&no_calc).unwrap(), WORKBOOK.replace(r#"<calcPr calcId="191029"/>"#, r#"<calcPr fullCalcOnLoad="1"/>"#));
         let bare = r#"<x:workbook xmlns:x="m"><x:sheets/></x:workbook>"#;
         assert_eq!(with_full_calc_on_load(bare).unwrap(), r#"<x:workbook xmlns:x="m"><x:sheets/><x:calcPr fullCalcOnLoad="1"/></x:workbook>"#);
+    }
+
+    #[test]
+    fn undoes_and_redoes_edits_step_by_step() {
+        let original = template();
+        let mut wb = open(&original);
+        assert!(!wb.can_undo());
+        wb.checkpoint(Some("A1".into()));
+        wb.set_value(0, "A1", CellInput::Text("Nuevo".into())).unwrap();
+        wb.set_selection_after(Some("A2".into()));
+        wb.checkpoint(Some("C2".into()));
+        wb.set_value(0, "C2", CellInput::Number(7.0)).unwrap();
+        assert_eq!(value(&wb, 0, "C2"), CellValue::Number(7.0));
+
+        let done = wb.undo().unwrap();
+        assert_eq!(done.selection.as_deref(), Some("C2"));
+        assert_eq!(value(&wb, 0, "C2"), CellValue::Empty);
+        assert_eq!(value(&wb, 0, "A1"), CellValue::Text("Nuevo".into()));
+        let done = wb.undo().unwrap();
+        assert_eq!(done.selection.as_deref(), Some("A1"));
+        assert!(!wb.can_undo() && wb.can_redo());
+        // Back to the file as it was read, calc chain included
+        for name in ["xl/hojas/resumen.xml", "xl/libro.xml", "xl/sharedStrings.xml", "[Content_Types].xml"] {
+            assert_eq!(part(&wb, name), part(&open(&original), name), "{}", name);
+        }
+        assert!(wb.package().contains("xl/calcChain.xml"));
+
+        assert_eq!(wb.redo().unwrap().selection.as_deref(), Some("A2"));
+        assert_eq!(value(&wb, 0, "A1"), CellValue::Text("Nuevo".into()));
+        assert!(!wb.package().contains("xl/calcChain.xml"));
+
+        // A new edit after undoing everything asks for recalculation again
+        wb.undo().unwrap();
+        wb.checkpoint(None);
+        wb.set_value(0, "C1", CellInput::Bool(true)).unwrap();
+        assert!(!wb.can_redo());
+        assert!(part(&wb, "xl/libro.xml").contains(r#"fullCalcOnLoad="1""#));
+        assert!(!wb.package().contains("xl/calcChain.xml"));
     }
 
     #[test]

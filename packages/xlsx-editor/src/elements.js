@@ -2,20 +2,21 @@
 //
 //   <xlsx-editor src="/plantilla.xlsx" style="height: 80vh"></xlsx-editor>
 //   <xlsx-editor blank locale="es" zoom="1.25" tabs="false"></xlsx-editor>
+//   <xlsx-editor src="/informe.xlsx" readonly></xlsx-editor>
 //
 // `element.editor` is the XlsxEditor (null until the `ready` event). Editor events (load,
-// sheetchange, selectionchange) are re-dispatched on the element; a file that cannot be
-// opened dispatches `error`.
+// sheetchange, selectionchange, change, error) are re-dispatched on the element; a file that
+// cannot be opened dispatches `error` too.
 import { XlsxEditor } from './xlsx_editor.js';
 
-const FORWARDED = ['load', 'sheetchange', 'selectionchange'];
+const FORWARDED = ['load', 'sheetchange', 'selectionchange', 'change', 'error'];
 
 // Outside the browser (SSR) there is no HTMLElement: the class still loads, and the element is
 // only registered where customElements exists (see index.js)
 const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
 
 export class XlsxEditorElement extends ElementBase {
-  static observedAttributes = ['src', 'zoom', 'sheet'];
+  static observedAttributes = ['src', 'zoom', 'sheet', 'readonly'];
 
   editor = null;
   #creating = null;
@@ -38,6 +39,7 @@ export class XlsxEditorElement extends ElementBase {
     if (!this.editor) return;
     if (name === 'src' && value) this.#open(value);
     if (name === 'zoom' && value) this.editor.setZoom(Number(value));
+    if (name === 'readonly') this.editor.readOnly = value !== null;
     if (name === 'sheet' && value) this.#run(() => this.editor.setSheet(/^\d+$/.test(value) ? Number(value) : value));
   }
 
@@ -47,10 +49,12 @@ export class XlsxEditorElement extends ElementBase {
       zoom: Number(this.getAttribute('zoom')) || 1,
       tabs: this.getAttribute('tabs') !== 'false',
       formulaBar: this.getAttribute('formula-bar') !== 'false',
+      readOnly: this.hasAttribute('readonly'),
       wasmUrl: this.getAttribute('wasm-url') || undefined,
     });
     FORWARDED.forEach(type => editor.addEventListener(type, e => {
       this.dispatchEvent(new CustomEvent(type, { detail: e.detail, bubbles: true }));
+      if (type === 'error' && !this.hasAttribute('quiet')) console.error('xlsx-editor:', e.detail.error);
     }));
     this.editor = editor;
     this.dispatchEvent(new CustomEvent('ready', { detail: { editor } }));

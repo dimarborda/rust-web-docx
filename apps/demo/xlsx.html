@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rust XLSX · Visor de hojas de cálculo</title>
-  <meta name="description" content="Visor de libros de Excel (.xlsx) en el navegador: Rust y WebAssembly dibujados en canvas." />
+  <title>Rust XLSX · Editor de hojas de cálculo</title>
+  <meta name="description" content="Editor de libros de Excel (.xlsx) en el navegador: Rust y WebAssembly dibujados en canvas." />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <style>
     :root { color-scheme: light; }
@@ -17,13 +17,14 @@
     button, label.file { font: inherit; font-size: 0.9rem; padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
     label.file input { display: none; }
     select { font: inherit; font-size: 0.9rem; padding: 5px 8px; border-radius: 6px; border: 1px solid #cbd5e1; }
+    label.check { font-size: 0.9rem; display: flex; gap: 4px; align-items: center; }
     #status { font-size: 0.85rem; color: #64748b; min-width: 10rem; }
     .drop xlsx-editor { outline: 3px dashed #217346; outline-offset: -3px; }
   </style>
 </head>
 <body>
   <header>
-    <h1>&lt;xlsx-editor&gt; · visor</h1>
+    <h1>&lt;xlsx-editor&gt; · editor</h1>
     <span id="status"></span>
     <label class="file">Abrir .xlsx…<input id="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
     <select id="zoom" aria-label="Zoom">
@@ -32,6 +33,9 @@
       <option value="1.25">125 %</option>
       <option value="1.5">150 %</option>
     </select>
+    <label class="check"><input id="readonly" type="checkbox" /> Solo lectura</label>
+    <button id="undo" type="button" title="Ctrl/Cmd+Z">Deshacer</button>
+    <button id="redo" type="button" title="Ctrl/Cmd+Y">Rehacer</button>
     <button id="save" type="button">Descargar</button>
     <a href="/">Editor de Word</a>
   </header>

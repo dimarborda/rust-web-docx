@@ -20,6 +20,14 @@ export interface Cell {
   formula?: string;
 }
 
+/** What `undo()` or `redo()` changed */
+export interface HistoryMove {
+  /** The selection given to `checkpoint()` (undo) or `setSelectionAfter()` (redo) */
+  selection: string | null;
+  /** Package parts that changed */
+  parts: string[];
+}
+
 /** One worksheet */
 export class Sheet {
   private constructor();
@@ -131,6 +139,19 @@ export class Workbook {
    * content still to be written. `offset` / `length` are in code points within the cell text.
    */
   markers(filter?: { kind?: 'field' | 'pending' }): WorkbookMarker[];
+  /**
+   * Starts an undo step: the edits made until the next checkpoint undo together. `selection`
+   * (any string, e.g. JSON) comes back from `undo()` so the caller can restore its selection.
+   */
+  checkpoint(selection?: string): void;
+  /** Where the selection ended up after the current step; `redo()` returns it */
+  setSelectionAfter(selection?: string): void;
+  /** Undoes the last step; `null` when there is nothing to undo */
+  undo(): HistoryMove | null;
+  /** Redoes the last undone step; `null` when there is nothing to redo */
+  redo(): HistoryMove | null;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
   /** The workbook as .xlsx bytes */
   toBytes(): Uint8Array;
   /** Frees the engine memory of this workbook; it cannot be used afterwards */
