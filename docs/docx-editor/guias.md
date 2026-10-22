@@ -122,6 +122,22 @@ editor.fillMarker(first, 'Diseño e implementación del módulo de pagos.'); // 
 
 `place` es `body`, `table`, `textbox` o `headerFooter`; `section` es la [sección lógica](#secciones-lógicas) más interna que lo contiene. `fillMarker` vuelve a encontrar el marcador aunque se haya escrito texto antes de él desde que se listó, y lanza un `Error` si ya no está. Para analizar un texto suelto (por ejemplo, lo que va a insertar un agente) sin documento: `import { findMarkers } from '@dimarborda/docx-editor'`.
 
+### Resaltar los pendientes
+
+En un documento largo, quien lo llena no distingue a simple vista qué le falta. Con `highlightPending` cada `[…]` pendiente se ve con un fondo suave; con `{ fields: true }` también los campos, en otro color:
+
+```js
+const editor = await DocxEditor.create(contenedor, { highlightPending: true });
+editor.setHighlightPending({ fields: true });  // pendientes y campos; false lo apaga
+editor.highlightedMarkers;                     // ['pending', 'field']
+
+// Botón «Siguiente pendiente»: desde el cursor, volviendo al principio al final
+const next = editor.nextMarker({ kind: 'pending', wrap: true });
+if (next) editor.select({ paragraph: next.paragraph, offset: next.offset }, { paragraph: next.paragraph, offset: next.offset + next.length });
+```
+
+Es solo de vista: no se guarda en el `.docx`, no se imprime ni sale en `downloadPdf`. El resaltado se actualiza al escribir: al rellenar o borrar un marcador, el suyo desaparece. Los colores se cambian con las variables CSS `--docx-pending-highlight` y `--docx-field-highlight`.
+
 ## Actividad: dónde está trabajando el agente
 
 Cuando un agente modifica el documento por API, la persona que lo está leyendo debe poder ubicarse. Hay dos niveles, ambos solo de vista (no se guarda nada en el `.docx`, no mueven el cursor ni el scroll del usuario, y no cuestan nada si no se usan):

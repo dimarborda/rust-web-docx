@@ -344,9 +344,25 @@ docx-toolbar {
 }
 
 @media print {
-  .docx-editor .docx-section-layer {
+  .docx-editor .docx-section-layer,
+  .docx-editor .docx-marker-layer {
     display: none;
   }
+}
+
+.docx-editor .docx-marker-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+.docx-editor .docx-marker-highlight {
+  position: absolute;
+  border-radius: 2px;
+  background: var(--docx-pending-highlight, rgb(250 204 21 / 0.32));
+}
+
+.docx-editor .docx-marker-highlight.field {
+  background: var(--docx-field-highlight, rgb(56 189 248 / 0.22));
 }
 
 .docx-editor .docx-activity-layer {

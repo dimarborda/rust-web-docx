@@ -400,6 +400,11 @@ export interface DocxEditorOptions {
   flash?: number | false;
   /** Outline the logical sections in the left margin (default false); see `setShowSections` */
   showSections?: boolean;
+  /**
+   * Highlight the pending `[ … ]` markers on the pages (default false); `{ fields: true }`
+   * highlights the `{{fields}}` too. See `setHighlightPending`
+   */
+  highlightPending?: boolean | { fields?: boolean };
 }
 
 export interface DocxEditorEventMap {
@@ -466,6 +471,19 @@ export class DocxEditor extends EventTarget {
    * pending content (citations such as [1], checkboxes and [sic] are not markers)
    */
   markers(filter?: { kind?: 'field' | 'pending'; section?: string }): Marker[];
+  /**
+   * The first marker after `from` (default: the end of the selection, or the document start),
+   * in document order; with `wrap`, the first one when none is left after it. Null when none
+   */
+  nextMarker(options?: { kind?: 'field' | 'pending'; from?: TextPosition; wrap?: boolean }): Marker | null;
+  /** Kinds of marker highlighted on the pages: [] (off), ['pending'] or ['pending', 'field'] */
+  readonly highlightedMarkers: Array<'pending' | 'field'>;
+  /**
+   * Highlights the pending `[ … ]` markers on the pages (`{ fields: true }`: the fields too), or
+   * turns it off with false. View only: not saved, printed or exported. Colors: the CSS
+   * variables `--docx-pending-highlight` and `--docx-field-highlight`
+   */
+  setHighlightPending(show?: boolean | { fields?: boolean }): void;
   /**
    * Replaces one marker with text as one undo step, keeping its formatting, and highlights the
    * change for a moment. Throws when the marker is no longer there.

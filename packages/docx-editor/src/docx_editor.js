@@ -6,7 +6,8 @@ import { createCanvasEditor } from './canvas_editor.js';
 import { checkIndex, engineCall, tableRowsPayload } from './table_api.js';
 import { checkSectionKey, planMissingSections, schemaPayload, sectionContent, sectionIsEmpty, validateSections } from './section_api.js';
 import { createSectionLayer } from './section_layer.js';
-import { collectMarkers, innermostSection, relocateMarker, variablePairs } from './marker_api.js';
+import { collectMarkers, innermostSection, markerAfter, relocateMarker, variablePairs } from './marker_api.js';
+import { createMarkerLayer } from './marker_layer.js';
 import { createActivityLayer, textDiff } from './activity.js';
 import { onFontsChanged } from './fonts_registry.js';
 import { disableLigatures, drawPageItems, fontWidthsSignature, layoutFontFaces, measureText, usesSubstitute } from './render.js';
@@ -81,6 +82,9 @@ const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  *                                        `markActivity()`); false: no highlight
  * @property {boolean} [showSections=false] outline the logical sections in the margin (see
  *                                        `setShowSections()`)
+ * @property {boolean|{fields?: boolean}} [highlightPending=false] highlight the pending `[ … ]`
+ *                                        markers ({ fields: true }: the `{{fields}}` too; see
+ *                                        `setHighlightPending()`)
  *
  * Events (dispatched on the editor; `<docx-editor>` re-dispatches them on the element):
  * - `load`             a document was opened
@@ -122,6 +126,7 @@ export class DocxEditor extends EventTarget {
   #activity;
   #activityJSON = '[]';
   #sectionLayer;
+  #markerLayer;
   /** `sections()` until the document changes */
   #sectionCache = null;
 
@@ -129,7 +134,7 @@ export class DocxEditor extends EventTarget {
   constructor(container, options = {}) {
     super();
     if (!engineReady()) throw new Error('docx-editor: await initEngine() or use DocxEditor.create()');
-    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, flash: 1800, showSections: false, ...options };
+    this.options = { zoom: 1, gridlines: true, pageLabels: true, locale: 'es', readOnly: false, flash: 1800, showSections: false, highlightPending: false, ...options };
     this.#readOnly = !!this.options.readOnly;
     const base = LABELS[this.options.locale] || LABELS.en;
     this.labels = { ...base, ...options.labels, sectionIssues: { ...base.sectionIssues, ...options.labels?.sectionIssues } };
@@ -199,6 +204,16 @@ export class DocxEditor extends EventTarget {
       ),
     });
     if (this.options.showSections) this.#sectionLayer.setVisible(true);
+
+    this.#markerLayer = createMarkerLayer({
+      cards: () => this.#rendered.cards,
+      zoom: () => this.#zoom,
+      markers: kind => this.markers({ kind }),
+      rects: (a, b) => JSON.parse(this.#session?.selection_rects_range(
+        a.paragraph, a.offset, b.paragraph, b.offset, measureText, undefined,
+      ) || '[]'),
+    });
+    if (this.options.highlightPending) this.#markerLayer.setOption(this.options.highlightPending);
 
     // Formatting shortcuts while the caret is in this editor
     this.#onKeyDown = e => {
@@ -377,6 +392,33 @@ export class DocxEditor extends EventTarget {
     if (!this.#session) return [];
     const all = collectMarkers(this.#paragraphs().list, this.sections(), scanMarkers, { kind });
     return section == null ? all : all.filter(m => m.section === section);
+  }
+
+  /**
+   * The first marker after position `from` (default: the end of the selection, or the start of
+   * the document), in document order; with `wrap`, the first one of the document when none is
+   * left after it. Null when there is none. Feeds a "go to the next pending" button.
+   * @param {{kind?: 'field'|'pending', from?: {paragraph: number, offset: number}, wrap?: boolean}} [options]
+   */
+  nextMarker({ kind, from, wrap = false } = {}) {
+    if (!this.#session) return null;
+    return markerAfter(this.markers({ kind }), from ?? this.selection?.end ?? null, { wrap });
+  }
+
+  /** Kinds of marker highlighted on the pages: [] (off), ['pending'] or ['pending', 'field'] */
+  get highlightedMarkers() {
+    return this.#markerLayer.kinds;
+  }
+
+  /**
+   * Highlights the pending `[ … ]` markers on the pages (`{ fields: true }`: the `{{fields}}`
+   * too, in another color), or turns it off with false. View only: it is not saved, printed or
+   * exported, and a marker filled or deleted loses its highlight. Colors: the CSS variables
+   * `--docx-pending-highlight` and `--docx-field-highlight`.
+   * @param {boolean | {fields?: boolean}} [show=true]
+   */
+  setHighlightPending(show = true) {
+    this.#markerLayer.setOption(show);
   }
 
   /**
@@ -1315,6 +1357,7 @@ export class DocxEditor extends EventTarget {
       this.#canvasEditor.endRender();
       this.#activity.paint();
       this.#sectionLayer.paint();
+      this.#markerLayer.paint();
     } catch (err) {
       console.error('docx-editor: render failed', err);
       this.#emit('message', { message: String(err), error: true });

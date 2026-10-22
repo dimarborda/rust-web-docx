@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { initSync, DocxSession, scan_markers_json } from '../wasm/docx_engine.js';
-import { collectMarkers, relocateMarker, variablePairs } from '../src/marker_api.js';
+import { collectMarkers, markerAfter, relocateMarker, variablePairs } from '../src/marker_api.js';
+import { highlightKinds, markerBoxes } from '../src/marker_layer.js';
 import { normalizeTarget, remapTarget, targetSpan, textDiff } from '../src/activity.js';
 
 initSync({ module: readFileSync(new URL('../wasm/docx_engine_bg.wasm', import.meta.url)) });
@@ -86,4 +87,49 @@ test('activity ranges follow paragraphs inserted or removed before them', () => 
   // "a" deleted: everything moves up
   assert.deepEqual(remapTarget({ paragraph: 2, offset: 1, length: 2 }, textDiff(before, ['b', 'c', 'd'])), { paragraph: 1, offset: 1, length: 2 });
   assert.deepEqual(remapTarget({ section: 's' }, inserted), { section: 's' });
+});
+
+test('highlightPending picks the kinds of marker to paint', () => {
+  assert.deepEqual(highlightKinds(true), ['pending']);
+  assert.deepEqual(highlightKinds({ fields: true }), ['pending', 'field']);
+  assert.deepEqual(highlightKinds({}), ['pending']);
+  assert.deepEqual(highlightKinds(false), []);
+  assert.deepEqual(highlightKinds(undefined), []);
+});
+
+test('markerBoxes paints each line of each marker, and nothing once it is gone', () => {
+  const markers = collectMarkers(paragraphs(['Plazo: [Completar: plazo] días', 'Cliente {{CLIENTE}}', 'Sin nada']), [], scan_markers_json);
+  const calls = [];
+  // A marker that wraps onto the next line gives two rects; empty rects are skipped
+  const rects = (start, end) => {
+    calls.push([start, end]);
+    return start.paragraph === 0
+      ? [{ page: 1, x: 90, y: 100, width: 60, height: 14 }, { page: 1, x: 72, y: 114, width: 30, height: 14 }]
+      : [{ page: 2, x: 120, y: 40, width: 0, height: 14 }, { page: 2, x: 125, y: 40, width: 70, height: 14 }];
+  };
+  assert.deepEqual(markerBoxes(markers, rects).map(b => [b.kind, b.page, b.x]), [
+    ['pending', 1, 90],
+    ['pending', 1, 72],
+    ['field', 2, 125],
+  ]);
+  assert.deepEqual(calls, [
+    [{ paragraph: 0, offset: 7 }, { paragraph: 0, offset: 25 }],
+    [{ paragraph: 1, offset: 8 }, { paragraph: 1, offset: 19 }],
+  ]);
+  // Filled: the scan finds no marker, so there is nothing left to paint
+  const filled = collectMarkers(paragraphs(['Plazo: 30 días', 'Cliente Acme']), [], scan_markers_json);
+  assert.deepEqual(markerBoxes(filled, rects), []);
+});
+
+test('markerAfter walks the markers in document order', () => {
+  const markers = collectMarkers(paragraphs(['[…] y [Completar: a]', 'nada', 'Fin: [...]']), [], scan_markers_json);
+  const at = m => m && [m.paragraph, m.offset];
+  assert.deepEqual(at(markerAfter(markers, null)), [0, 0]);
+  // A marker starting exactly at `from` does not count: calling again moves on
+  assert.deepEqual(at(markerAfter(markers, { paragraph: 0, offset: 0 })), [0, 6]);
+  assert.deepEqual(at(markerAfter(markers, { paragraph: 0, offset: 6 })), [2, 5]);
+  assert.deepEqual(at(markerAfter(markers, { paragraph: 1, offset: 2 })), [2, 5]);
+  assert.equal(markerAfter(markers, { paragraph: 2, offset: 5 }), null);
+  assert.deepEqual(at(markerAfter(markers, { paragraph: 2, offset: 5 }, { wrap: true })), [0, 0]);
+  assert.equal(markerAfter([], null, { wrap: true }), null);
 });

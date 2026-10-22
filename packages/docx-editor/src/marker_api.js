@@ -77,6 +77,21 @@ export function relocateMarker(marker, text) {
 }
 
 /**
+ * The first of `markers` (in document order) starting after `from`; a marker starting exactly
+ * at `from` does not count, so calling it again from the marker found moves on. With `wrap`,
+ * the first marker when none is left after `from`. No `from`: the first marker.
+ * @param {Array<{paragraph: number, offset: number}>} markers
+ * @param {{paragraph: number, offset: number} | null} from
+ * @param {{wrap?: boolean}} [options]
+ */
+export function markerAfter(markers, from, { wrap = false } = {}) {
+  if (!markers.length) return null;
+  if (!from) return markers[0];
+  const after = markers.find(m => m.paragraph > from.paragraph || (m.paragraph === from.paragraph && m.offset > from.offset));
+  return after ?? (wrap ? markers[0] : null);
+}
+
+/**
  * Pairs for the engine's batch replace: a key with braces is replaced as written; a bare key
  * fills every spelling of that field found in the document ({{KEY}}, {{ KEY }}, {KEY},
  * {{KEY: hint}}) and `{{KEY}}` itself.
