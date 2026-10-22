@@ -184,6 +184,23 @@ editor.undo();   // deshace las dos filas de una vez
 - **`insertTableRows(table, at, rows, { copyFormatFrom })`** inserta antes de la fila `at`: `0` al principio, `rows` (la cantidad de filas) al final. Cada fila nueva copia la fila `copyFormatFrom` (por defecto la anterior a `at`, o la siguiente si insertas al principio): alto, bordes, sombreado, ancho de celdas, propiedades de párrafo y formato del primer *run*. Las filas con menos valores se completan con celdas vacías, que conservan el formato para lo que se escriba después; las filas con más valores que celdas producen un error. Devuelve `{ first, count }`: la primera fila nueva y cuántas se insertaron. Una fila de encabezado repetido solo se copia como encabezado si la insertas al principio. Ojo al insertar justo debajo del encabezado: la fila anterior es el encabezado y se copiaría su sombreado; pasa `copyFormatFrom` con una fila de datos. Lo mismo si las filas vacías de la plantilla tienen texto de relleno en gris o cursiva: copia una fila ya completada.
 - **`deleteTableRows(table, from, count)`** elimina filas; la tabla no puede quedar sin filas (para quitarla entera usa `replaceParagraphs` con su rango `first`–`last`).
 - Cada llamada es un solo paso de deshacer, dispara `change`, vuelve a dibujar el documento y funciona también en solo lectura.
+
+### Duplicar una tabla
+
+Para agregar otra copia de una tabla que ya está en el documento (una ficha con las etiquetas sombreadas, un cuadro de firmas…), duplícala en vez de crearla con `insertTable`, que usa el estilo del editor. La copia es idéntica: bordes, sombreado, anchos, celdas combinadas, formato y texto. Después ajústala con `setTableCell`, `insertTableRows` y `deleteTableRows`:
+
+```js
+const ficha = editor.tables().find(t => t.header[0] === 'Objetivo');
+const { table } = editor.duplicateTable(ficha.index, {
+  at: 'end',
+  values: [[null, 'Reducir los tiempos de entrega'], [null, 'Ana Pérez']], // null conserva el texto
+});
+editor.insertTableRows(table, 2, [['Plazo', '3 meses']]);
+```
+
+`at` funciona como en `insertTable` (`cursor`, `start` o `end`; el texto después del cursor queda debajo de la tabla). `values` cambia el texto de las celdas por fila y columna, como `setTableCell`, conservando su formato. Devuelve `{ table, first }`: el índice de la copia en `tables()` (la original se corre si la copia queda antes) y el párrafo de su primera celda. La copia y los valores son un solo paso de deshacer.
+
+En la copia no van los marcadores de Word (*bookmarks*), las marcas de comentarios, las referencias a notas al pie ni los ids de los controles de contenido, que deben ser únicos en el documento; los cambios con control de cambios quedan aceptados y las imágenes reciben ids nuevos. Una tabla que contiene una sección lógica no se puede duplicar.
 - Lanzan un `Error` claro, sin modificar nada, si un índice no existe, si la celda continúa una combinación vertical (el mensaje dice en qué fila escribir), si la fila que se copia o la posición tienen celdas combinadas verticalmente, o si la celda tiene una tabla anidada.
 
 ## PDF

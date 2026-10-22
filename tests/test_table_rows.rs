@@ -39,9 +39,13 @@ fn body() -> String {
 }
 
 fn doc() -> DocxModifier {
+    doc_with(&body())
+}
+
+fn doc_with(body: &str) -> DocxModifier {
     let document = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>{}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#,
-        body()
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>{}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#,
+        body
     );
     let mut buf = Cursor::new(Vec::new());
     {
@@ -222,4 +226,165 @@ fn test_writing_an_empty_inserted_cell_uses_the_copied_formatting() {
     assert!(cell.contains("Moderado"), "{}", cell);
     let run = &cell[cell.find("<w:r>").unwrap()..];
     assert!(run.contains(r#"<w:color w:val="C00000"/>"#) && run.contains("Arial"), "{}", run);
+}
+
+/// XML of body table `index` (top-level tables only)
+fn table_xml(m: &DocxModifier, index: usize) -> String {
+    let xml = document_xml(m);
+    let mut starts = Vec::new();
+    let mut depth = 0;
+    let mut pos = 0;
+    while let Some(i) = xml[pos..].find("<w:tbl") {
+        let at = pos + i;
+        let close = xml[pos..at].matches("</w:tbl>").count();
+        depth -= close as i32;
+        if xml[at..].starts_with("<w:tbl>") || xml[at..].starts_with("<w:tbl ") {
+            if depth == 0 {
+                starts.push(at);
+            }
+            depth += 1;
+        }
+        pos = at + 6;
+    }
+    let start = starts[index];
+    // The matching close tag
+    let mut depth = 0;
+    let mut i = start;
+    loop {
+        let open = xml[i..].find("<w:tbl>").map(|k| i + k);
+        let close = i + xml[i..].find("</w:tbl>").unwrap();
+        match open {
+            Some(o) if o < close => {
+                depth += 1;
+                i = o + 7;
+            }
+            _ => {
+                depth -= 1;
+                i = close + 8;
+                if depth == 0 {
+                    return xml[start..i].to_string();
+                }
+            }
+        }
+    }
+}
+
+fn texts(m: &DocxModifier) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = m.extract_paragraphs().unwrap().into_iter().map(|p| (p.index, p.text)).collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn test_duplicate_table_copies_the_formatting_and_fills_values() {
+    let mut m = doc();
+    let original = table_xml(&m, 0);
+    let summaries = m.table_summaries().unwrap();
+    let after_tables = summaries[1].last + 1; // the empty paragraph at the end
+    let values = vec![vec![None, Some("Probabilidad (%)".to_string())], vec![Some("Corte eléctrico".to_string())]];
+    let (table, first, caret) = m.duplicate_table(0, after_tables, 0, Some(&values)).unwrap();
+    assert_eq!((table, first), (2, after_tables));
+    assert_eq!(caret, (after_tables + 9, 0), "the caret is in the paragraph after the copy");
+    assert_eq!(table_xml(&m, 0), original, "the source table does not change");
+    assert_eq!(
+        rows_of(&m, 2),
+        vec![
+            vec!["Riesgo", "Probabilidad (%)", "Impacto"],
+            vec!["Corte eléctrico", "Media", "Alto"],
+            vec!["Fuga de datos", "Baja", "Crítico"],
+        ]
+    );
+    let copy = table_xml(&m, 2);
+    for kept in [BORDERS, r#"<w:tblHeader/>"#, r#"w:fill="1F4E79""#, r#"w:fill="DEEAF6""#, r#"<w:color w:val="C00000"/>"#, r#"<w:gridCol w:w="3000"/>"#] {
+        assert!(copy.contains(kept), "{} missing in {}", kept, copy);
+    }
+    assert!(!copy.contains("w14:paraId"), "paragraph ids stay unique");
+    // Written cells keep the cell's formatting
+    let written = &copy[copy.find("Corte eléctrico").unwrap() - 200..];
+    assert!(written.contains("Arial"), "{}", written);
+    assert_eq!(m.table_summaries().unwrap().len(), 3);
+}
+
+#[test]
+fn test_duplicate_table_before_the_source_and_inside_a_paragraph() {
+    let mut m = doc();
+    // In the middle of "Matriz de riesgos": the text after the position goes below the copy
+    let (table, first, caret) = m.duplicate_table(1, 0, 7, None).unwrap();
+    assert_eq!((table, first), (0, 1));
+    let tables = m.table_summaries().unwrap();
+    assert_eq!(tables.len(), 3);
+    assert_eq!(tables[0].header, vec!["Dos columnas", "", "C"]);
+    assert_eq!(tables[1].header, vec!["Riesgo", "Probabilidad", "Impacto"], "the source moves down");
+    let all = texts(&m);
+    assert_eq!(all[0], (0, "Matriz ".to_string()));
+    assert_eq!(all.iter().find(|(i, _)| *i == caret.0).map(|(_, t)| t.as_str()), Some("de riesgos"));
+    // Merged cells and the nested table come along
+    let copy = table_xml(&m, 0);
+    assert!(copy.contains(r#"<w:gridSpan w:val="2"/>"#) && copy.contains(r#"<w:vMerge w:val="restart"/>"#) && copy.contains("anidada"));
+    assert_eq!(rows_of(&m, 0), rows_of(&m, 2));
+}
+
+#[test]
+fn test_duplicate_table_refusals_leave_the_document_untouched() {
+    let mut m = doc();
+    let before = document_xml(&m);
+    let err = |r: Result<(usize, usize, (usize, usize)), String>| r.unwrap_err();
+    assert!(err(m.duplicate_table(5, 0, 0, None)).contains("No existe la tabla 5"));
+    // Inside a table
+    assert!(err(m.duplicate_table(0, 2, 0, None)).contains("dentro de otra tabla"));
+    assert!(err(m.duplicate_table(0, 0, 0, Some(&[vec![None, None, None, Some("x".into())]]))).contains("4 valores"));
+    assert!(err(m.duplicate_table(0, 0, 0, Some(&vec![vec![]; 4]))).contains("4 filas"));
+    // Fails while filling (a cell continuing a vertical merge) after splitting the paragraph:
+    // everything goes back
+    let continued = vec![vec![], vec![], vec![Some("x".to_string())]];
+    assert!(err(m.duplicate_table(1, 0, 7, Some(&continued))).contains("combinada"));
+    assert_eq!(document_xml(&m), before);
+}
+
+#[test]
+fn test_duplicate_table_leaves_out_what_must_stay_unique() {
+    let cell = |inner: &str| format!("<w:tc><w:tcPr><w:shd w:val=\"clear\" w:fill=\"EEEEEE\"/></w:tcPr>{}</w:tc>", inner);
+    let picture = r#"<w:r><w:drawing><wp:inline><wp:docPr id="7" name="Logo"/></wp:inline></w:drawing></w:r>"#;
+    let table = format!(
+        r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid><w:tr>{}{}</w:tr></w:tbl>"#,
+        cell(&format!(
+            r#"<w:p><w:bookmarkStart w:id="0" w:name="ficha"/><w:commentRangeStart w:id="3"/><w:r><w:t>Objetivo</w:t></w:r><w:commentRangeEnd w:id="3"/><w:r><w:commentReference w:id="3"/></w:r><w:bookmarkEnd w:id="0"/><w:r><w:footnoteReference w:id="2"/></w:r>{}</w:p>"#,
+            picture
+        )),
+        cell(r#"<w:sdt><w:sdtPr><w:id w:val="42"/><w:tag w:val="campo"/></w:sdtPr><w:sdtContent><w:p><w:ins w:id="5" w:author="A"><w:r><w:t>nuevo</w:t></w:r></w:ins><w:del w:id="6" w:author="A"><w:r><w:delText>viejo</w:delText></w:r></w:del></w:p></w:sdtContent></w:sdt>"#),
+    );
+    let mut m = doc_with(&format!("<w:p/>{}<w:p/>", table));
+    let original = table_xml(&m, 0);
+    let end = m.table_summaries().unwrap()[0].last + 1;
+    m.duplicate_table(0, end, 0, None).unwrap();
+    assert_eq!(table_xml(&m, 0), original);
+    let copy = table_xml(&m, 1);
+    for gone in ["bookmark", "comment", "footnoteReference", "<w:id ", "<w:ins", "<w:del", "viejo"] {
+        assert!(!copy.contains(gone), "{} left in {}", gone, copy);
+    }
+    for kept in ["Objetivo", "nuevo", r#"<w:tag w:val="campo"/>"#, r#"w:fill="EEEEEE""#, r#"name="Logo""#] {
+        assert!(copy.contains(kept), "{} missing in {}", kept, copy);
+    }
+    assert!(copy.contains(r#"<wp:docPr id="8""#), "the picture gets a new id: {}", copy);
+    // Saved and opened again, the document reads both tables
+    let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
+    assert_eq!(rows_of(&reopened, 0), rows_of(&reopened, 1));
+
+    // A table holding a logical section is refused
+    let sectioned = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid><w:tr><w:tc><w:sdt><w:sdtPr><w:tag w:val="section:datos"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>"#;
+    let mut m = doc_with(&format!("<w:p/>{}<w:p/>", sectioned));
+    assert!(m.duplicate_table(0, 0, 0, None).unwrap_err().contains("sección"));
+}
+
+#[test]
+fn test_duplicate_table_is_one_undo_step() {
+    let mut m = doc();
+    let original = document_xml(&m);
+    m.checkpoint(None);
+    m.duplicate_table(0, 10, 3, Some(&[vec![Some("Uno".into())], vec![Some("Dos".into())]])).unwrap();
+    let changed = document_xml(&m);
+    assert!(m.undo().is_some());
+    assert_eq!(document_xml(&m), original);
+    m.redo();
+    assert_eq!(document_xml(&m), changed);
 }

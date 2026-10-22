@@ -636,6 +636,39 @@ export class DocxEditor extends EventTarget {
   }
 
   /**
+   * Inserts a copy of table `table` (index of `tables()`) as one undo step, placed like
+   * `insertTable`, and leaves the caret in the paragraph after it. The copy looks the same:
+   * table, row and cell properties (shading, borders, widths), merged cells, formatting and
+   * text. `values` rewrites cells of the copy by row and column, keeping their formatting, as
+   * `setTableCell` does (null or a missing value keeps the copied text). Bookmarks, comment
+   * marks, footnote references and content control ids are left out of the copy; tracked
+   * changes are accepted in it. A table holding a logical section is refused.
+   * @param {number} table
+   * @param {{at?: 'cursor'|'start'|'end', values?: Array<Array<string|null>>}} [options]
+   * @returns {{table: number, first: number}} index of the copy in `tables()` and paragraph
+   *          index of its first cell
+   */
+  duplicateTable(table, { at = 'cursor', values } = {}) {
+    this.#require();
+    checkIndex('duplicateTable', { table });
+    let payload;
+    if (values != null) {
+      if (!Array.isArray(values) || values.some(row => !Array.isArray(row))) {
+        throw new Error('docx-editor: duplicateTable: `values` must be rows of cell texts, e.g. [["Objetivo", null]]');
+      }
+      payload = JSON.stringify(values.map(row => row.map(v => (v == null ? null : String(v).replace(/\r\n?/g, '\n')))));
+    }
+    const pos = this.#insertionPoint(at);
+    const result = JSON.parse(engineCall(() => this.#session.duplicate_table(
+      table, pos.paragraph, pos.offset, payload, this.#selectionJSON(),
+    )));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    this.#flashTable(result.table, 0, Infinity);
+    return { table: result.table, first: result.first };
+  }
+
+  /**
    * Inserts a PNG, JPEG or GIF picture as one undo step. Without a size the picture keeps its
    * pixel size; it never exceeds the text width of the page.
    * - In line with the text (default `wrap`): in a paragraph of its own, with the caret after it.

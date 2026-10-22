@@ -525,6 +525,18 @@ export class DocxEditor extends EventTarget {
    * paragraph after it. Throws when the position is inside another table.
    */
   insertTable(table: NewTable, options?: { at?: InsertPosition }): { first: number };
+  /**
+   * Inserts a copy of table `table` (index of `tables()`) as one undo step, placed like
+   * `insertTable`: same table, row and cell properties, merged cells, formatting and text.
+   * `values` rewrites cells of the copy by row and grid column, keeping their formatting (null
+   * keeps the copied text). Bookmarks, comment marks, footnote references and content control
+   * ids are left out of the copy; tracked changes are accepted in it. Throws for a table
+   * holding a logical section.
+   */
+  duplicateTable(
+    table: number,
+    options?: { at?: InsertPosition; values?: Array<Array<string | null>> },
+  ): { table: number; first: number };
   /** @deprecated Appends an empty table at the end; use `insertTable({ rows })` */
   insertTable(rows: number, cols: number, headers?: string[]): { first: number };
   /**

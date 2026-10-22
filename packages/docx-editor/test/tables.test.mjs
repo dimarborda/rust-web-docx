@@ -1,5 +1,5 @@
 // Existing-table API: the engine bindings DocxEditor calls (tables_json, set_table_cell,
-// insert_table_rows, delete_table_rows) and the argument checks of table_api.js.
+// insert_table_rows, delete_table_rows, duplicate_table) and the argument checks of table_api.js.
 // Run after `npm run build:wasm` with: npm test -w packages/docx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -85,6 +85,32 @@ test('each insert is one undo step even with several rows', () => {
   s.undo();
   assert.deepEqual(cells(s, 0), before);
   assert.equal(s.can_undo(), false);
+});
+
+test('duplicateTable copies a table with its formatting as one undo step', () => {
+  const s = sample();
+  const [source] = tables(s);
+  const count = tables(s).length;
+  const rich = table => JSON.parse(s.get_tables_json())[table].rich_rows;
+  const before = cells(s, 0);
+  // Right after the source table: the paragraph that follows it
+  const values = [[null, 'Copia'], ['Fila 1']];
+  const result = JSON.parse(s.duplicate_table(0, source.last + 1, 0, JSON.stringify(values), undefined));
+  assert.deepEqual([result.table, result.first], [1, source.last + 1]);
+  const copy = cells(s, 1);
+  assert.equal(copy.length, source.rows);
+  assert.equal(copy[0][0], cells(s, 0)[0][0], 'null keeps the copied text');
+  assert.equal(copy[0][1], 'Copia');
+  assert.equal(copy[1][0], 'Fila 1');
+  assert.deepEqual(copy.slice(2), cells(s, 0).slice(2));
+  // Same look: the header's shading and run formatting
+  const strip = rows => rows.map(r => r.cells.map(c => [c.bg_color, c.bold, c.font_size, c.color]));
+  assert.deepEqual(strip(rich(1)), strip(rich(0)));
+  assert.equal(reopen(s).tables.length, count + 1);
+  s.undo();
+  assert.equal(tables(s).length, count, 'one undo removes the copy');
+  assert.deepEqual(cells(s, 0), before);
+  assert.throws(() => s.duplicate_table(99, 0, 0, undefined, undefined), /No existe la tabla 99/);
 });
 
 test('invalid indices throw clear errors without changing the document', () => {

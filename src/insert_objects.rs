@@ -166,12 +166,6 @@ impl DocxModifier {
     /// and text after it goes below. Returns the index of the first cell's paragraph and the
     /// caret at the start of the paragraph after the table.
     pub fn insert_table(&mut self, index: usize, offset: usize, table: &NewTable) -> Result<(usize, (usize, usize)), String> {
-        if index >= HEADER_FOOTER_BASE {
-            return Err("No se pueden insertar tablas en encabezados ni pies de página.".to_string());
-        }
-        if index >= TEXT_BOX_BASE {
-            return Err("No se puede insertar una tabla dentro de un cuadro de texto.".to_string());
-        }
         let cols = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         if table.rows.is_empty() || cols == 0 {
             return Err("La tabla no tiene celdas.".to_string());
@@ -179,23 +173,7 @@ impl DocxModifier {
         if table.rows.len() > MAX_TABLE_ROWS || cols > MAX_TABLE_COLS {
             return Err(format!("La tabla supera el máximo de {} filas y {} columnas.", MAX_TABLE_ROWS, MAX_TABLE_COLS));
         }
-
-        let (len, in_table) = {
-            let xml = self.get_file_string("word/document.xml")?;
-            let range = self.body_paragraph(&xml, index)?;
-            (parse_paragraph_fragment(&xml[range.clone()], &self.styles).text.chars().count(), inside_table(&xml, range.start))
-        };
-        if in_table {
-            return Err("No se puede insertar una tabla dentro de otra tabla.".to_string());
-        }
-        // The table goes right before the paragraph that holds the text after the position
-        let offset = offset.min(len);
-        let target = if offset > 0 {
-            self.split_paragraph(index, offset)?;
-            index + 1
-        } else {
-            index
-        };
+        let target = self.table_insertion_point(index, offset)?;
 
         // Pictures of the cells: stored as media parts first, then drawn in their cells
         let total_width = {
@@ -233,6 +211,33 @@ impl DocxModifier {
 
         let cells = table.rows.len() * cols;
         Ok((target, (target + cells, 0)))
+    }
+
+    /// Body paragraph a new table goes right before, for a table inserted at (`index`,
+    /// `offset`): the paragraph is split there when the position is inside its text, so text
+    /// before it stays above the table and text after it goes below. Refuses positions in
+    /// headers, footers, text boxes and tables (nothing changes then).
+    pub(super) fn table_insertion_point(&mut self, index: usize, offset: usize) -> Result<usize, String> {
+        if index >= HEADER_FOOTER_BASE {
+            return Err("No se pueden insertar tablas en encabezados ni pies de página.".to_string());
+        }
+        if index >= TEXT_BOX_BASE {
+            return Err("No se puede insertar una tabla dentro de un cuadro de texto.".to_string());
+        }
+        let (len, in_table) = {
+            let xml = self.get_file_string("word/document.xml")?;
+            let range = self.body_paragraph(&xml, index)?;
+            (parse_paragraph_fragment(&xml[range.clone()], &self.styles).text.chars().count(), inside_table(&xml, range.start))
+        };
+        if in_table {
+            return Err("No se puede insertar una tabla dentro de otra tabla.".to_string());
+        }
+        let offset = offset.min(len);
+        if offset > 0 {
+            self.split_paragraph(index, offset)?;
+            return Ok(index + 1);
+        }
+        Ok(index)
     }
 
     /// Inserts a picture (PNG, JPEG or GIF) in a paragraph of its own at (`index`, `offset`).
@@ -633,7 +638,7 @@ fn with_first_run(paragraph: &str, run: &str) -> Result<String, String> {
 }
 
 /// Unique id for a new `wp:docPr` (Word refuses duplicates)
-fn next_doc_pr_id(doc: &str) -> u64 {
+pub(super) fn next_doc_pr_id(doc: &str) -> u64 {
     let re = regex::Regex::new(r#"<wp:docPr\b[^>]*\bid="(\d+)""#).expect("regex");
     re.captures_iter(doc).filter_map(|c| c[1].parse::<u64>().ok()).max().unwrap_or(0) + 1
 }

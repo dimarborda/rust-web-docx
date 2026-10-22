@@ -521,4 +521,148 @@ impl DocxModifier {
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
         Ok(())
     }
+
+    /// Inserts a copy of body table `table` at (`index`, `offset`), as `insert_table` places a
+    /// new one: same table, row and cell properties, merged cells, widths and text. `values`
+    /// rewrites cells of the copy by row and grid column, as `set_table_cell` does (`None`
+    /// keeps the copied text). What must stay unique in a document is left out of the copy:
+    /// bookmarks, comment marks, footnote and endnote references, editing permissions and
+    /// content control ids; tracked changes are accepted in it and pictures get new ids. A
+    /// table holding a logical section is refused. Returns the copy's table index, its first
+    /// cell's paragraph and the caret at the start of the paragraph after it.
+    pub fn duplicate_table(
+        &mut self,
+        table: usize,
+        index: usize,
+        offset: usize,
+        values: Option<&[Vec<Option<String>>]>,
+    ) -> Result<(usize, usize, (usize, usize)), String> {
+        let original = self.get_file_string("word/document.xml")?;
+        let copy = {
+            let tokens = tokenize(&original)?;
+            let loc = Self::table_at(locate_tables(&tokens), table)?;
+            if let Some(values) = values {
+                if values.len() > loc.rows.len() {
+                    return Err(format!("Hay valores para {} filas, pero la tabla {} tiene {}.", values.len(), table, loc.rows.len()));
+                }
+                if let Some((r, row)) = values.iter().enumerate().find(|(_, row)| row.len() > loc.cols) {
+                    return Err(format!("La fila {} tiene {} valores, pero la tabla {} tiene {} columnas.", r, row.len(), table, loc.cols));
+                }
+            }
+            clean_table_copy(&original[byte_range(&tokens, loc.tok)])?
+        };
+        let target = self.table_insertion_point(index, offset)?;
+        let result = self.place_table_copy(&copy, target, values);
+        if result.is_err() {
+            // The split paragraph and any cell already written go back as they were
+            self.put_file("word/document.xml".to_string(), original.into_bytes());
+        }
+        result
+    }
+
+    fn place_table_copy(
+        &mut self,
+        copy: &str,
+        target: usize,
+        values: Option<&[Vec<Option<String>>]>,
+    ) -> Result<(usize, usize, (usize, usize)), String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let mut next_id = super::insert_objects::next_doc_pr_id(&xml);
+        let doc_pr = Regex::new(r#"(<wp:docPr\b[^>]*\bid=")\d+""#).unwrap();
+        let copy = doc_pr.replace_all(copy, |c: &regex::Captures| {
+            let out = format!(r#"{}{}""#, &c[1], next_id);
+            next_id += 1;
+            out
+        });
+        let at = self.body_paragraph(&xml, target)?.start;
+        xml.insert_str(at, &copy);
+        let new_table = {
+            let tokens = tokenize(&xml)?;
+            locate_tables(&tokens)
+                .iter()
+                .position(|t| tokens[t.tok.0].span.start == at)
+                .ok_or("No se pudo ubicar la copia de la tabla.")?
+        };
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        for (row, cells) in values.unwrap_or_default().iter().enumerate() {
+            for (col, text) in cells.iter().enumerate() {
+                if let Some(text) = text {
+                    self.set_table_cell(new_table, row, col, text)?;
+                }
+            }
+        }
+        let xml = self.get_file_string("word/document.xml")?;
+        let end = {
+            let tokens = tokenize(&xml)?;
+            let loc = Self::table_at(locate_tables(&tokens), new_table)?;
+            tokens[loc.tok.1].span.end
+        };
+        let after = body_paragraph_ranges(&xml)?.partition_point(|r| r.start < end);
+        Ok((new_table, target, (after, 0)))
+    }
+}
+
+/// Elements left out of a copied table: marks whose ids must be unique in the document,
+/// references to notes and comments, and tracked deletions and property changes (accepted)
+const COPY_DROPS: &[&str] = &[
+    "bookmarkStart", "bookmarkEnd", "commentRangeStart", "commentRangeEnd", "commentReference",
+    "footnoteReference", "endnoteReference", "permStart", "permEnd", "del", "moveFrom",
+    "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd", "rPrChange",
+    "pPrChange", "tcPrChange", "trPrChange", "tblPrChange", "tblPrExChange", "tblGridChange",
+    "sectPrChange", "numberingChange", "cellIns", "cellDel", "cellMerge",
+];
+/// Elements whose content stays in a copied table without them (tracked insertions, accepted)
+const COPY_UNWRAPS: &[&str] = &["ins", "moveTo"];
+
+/// The XML of a table ready to be inserted again in the same document (see
+/// `DocxModifier::duplicate_table`)
+fn clean_table_copy(fragment: &str) -> Result<String, String> {
+    let tokens = tokenize(fragment)?;
+    let mut cuts: Vec<Range<usize>> = Vec::new();
+    let mut in_sdt_pr = 0usize;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        let Some(name) = element_name(tok) else {
+            if matches!(&tok.ev, Event::End(e) if tag_is(e.name().as_ref(), "sdtPr")) {
+                in_sdt_pr = in_sdt_pr.saturating_sub(1);
+            }
+            i += 1;
+            continue;
+        };
+        let end = element_end(&tokens, i);
+        if tag_is(name, "tag") && val_attr(tok).is_some_and(|v| v.starts_with(super::section_edit::SECTION_TAG_PREFIX)) {
+            return Err("La tabla contiene una sección lógica; quítala con unwrapSection antes de duplicar la tabla.".to_string());
+        }
+        // A content control's id: Word gives the copy a new one
+        let sdt_id = in_sdt_pr > 0 && tag_is(name, "id");
+        if sdt_id || COPY_DROPS.iter().any(|n| tag_is(name, n)) {
+            cuts.push(byte_range(&tokens, (i, end)));
+            i = end + 1;
+            continue;
+        }
+        if COPY_UNWRAPS.iter().any(|n| tag_is(name, n)) {
+            if end == i {
+                // An empty mark (e.g. an inserted paragraph mark in w:rPr)
+                cuts.push(tokens[i].span.clone());
+            } else {
+                cuts.push(tokens[i].span.clone());
+                cuts.push(tokens[end].span.clone());
+            }
+        }
+        if tag_is(name, "sdtPr") && end > i {
+            in_sdt_pr += 1;
+        }
+        i += 1;
+    }
+    cuts.sort_by_key(|r| r.start);
+    let mut out = String::with_capacity(fragment.len());
+    let mut pos = 0;
+    for cut in cuts {
+        out.push_str(&fragment[pos..cut.start]);
+        pos = cut.end;
+    }
+    out.push_str(&fragment[pos..]);
+    let ids = Regex::new(r#"\s+w14:(?:paraId|textId)="[^"]*""#).unwrap();
+    Ok(ids.replace_all(&out, "").into_owned())
 }

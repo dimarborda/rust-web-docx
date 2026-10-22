@@ -928,6 +928,32 @@ impl DocxSession {
         to_json(&serde_json::json!({ "first": first, "count": rows.len() }))
     }
 
+    /// Inserts a copy of an existing table at a position as one undo step (see
+    /// `DocxModifier::duplicate_table`). `values_json`: `[["Objetivo", null], ["Responsable", "Ana"]]`
+    /// (null keeps the copied text). Returns `{ "table": n, "first": n, "caret": { "paragraph": n, "offset": 0 } }`.
+    #[wasm_bindgen]
+    pub fn duplicate_table(
+        &mut self,
+        table: usize,
+        paragraph: usize,
+        offset: usize,
+        values_json: Option<String>,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
+        let values: Option<Vec<Vec<Option<String>>>> = match values_json {
+            Some(json) => serde_json::from_str(&json).map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?,
+            None => None,
+        };
+        self.modifier.checkpoint(selection_before);
+        let (new_table, first, (p, o)) = self
+            .modifier
+            .duplicate_table(table, paragraph, offset, values.as_deref())
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: p, offset: o };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "table": new_table, "first": first, "caret": caret }))
+    }
+
     /// Deletes rows of an existing table as one undo step (see `DocxModifier::delete_table_rows`)
     #[wasm_bindgen]
     pub fn delete_table_rows(
