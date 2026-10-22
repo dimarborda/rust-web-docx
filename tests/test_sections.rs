@@ -153,6 +153,36 @@ fn test_define_section_takes_whole_tables_and_nests() {
 }
 
 #[test]
+fn test_define_section_wraps_a_section_sharing_its_first_or_last_paragraph() {
+    let six = || docx(&["0", "1", "2", "3", "4", "5"].map(para).concat());
+    let outer_first = |inner: (usize, usize)| {
+        let mut m = six();
+        m.define_section("externa", 1, 5, None, false, false).unwrap();
+        m.define_section("interna", inner.0, inner.1, None, false, false).unwrap();
+        m
+    };
+    // Same last paragraph, same first one, both (issue #1): the outer section wraps the inner
+    // one whole, as when the outer one is marked first
+    for inner in [(3, 5), (1, 3), (1, 5)] {
+        let mut m = six();
+        m.define_section("interna", inner.0, inner.1, None, false, false).unwrap();
+        let externa = m.define_section("externa", 1, 5, None, false, false).unwrap();
+        assert_eq!((externa.first, externa.last, externa.depth), (Some(1), Some(5), 0));
+        let interna = m.sections().unwrap().into_iter().find(|s| s.key == "interna").unwrap();
+        assert_eq!((interna.first, interna.last, interna.parent.as_deref()), (Some(inner.0), Some(inner.1), Some("externa")));
+        if inner != (1, 5) {
+            assert_eq!(m.sections().unwrap(), outer_first(inner).sections().unwrap());
+        }
+        assert_eq!(texts(&m), ["0", "1", "2", "3", "4", "5"]);
+    }
+    // Still refused: a range sharing a border with a section it does not hold whole
+    let mut m = six();
+    m.define_section("interna", 1, 3, None, false, false).unwrap();
+    assert!(m.define_section("x", 1, 2, None, false, false).is_ok(), "nests inside instead");
+    assert!(m.define_section("y", 2, 5, None, false, false).unwrap_err().contains("corta"));
+}
+
+#[test]
 fn test_define_section_refusals_leave_the_document_untouched() {
     let mut m = report();
     let before = m.get_file_string("word/document.xml").unwrap();
@@ -334,6 +364,23 @@ fn test_sections_from_headings_nest_lower_levels() {
     assert!(again.created.is_empty());
     assert_eq!(again.skipped.len(), 6);
     assert!(again.skipped[0].reason.contains("ya abre la sección «introduccion»"));
+}
+
+#[test]
+fn test_sections_from_headings_inside_out_wraps_sections_sharing_a_border() {
+    // Alcance (3–4) ends with Introducción (1–4): marking level 2 first, then level 1
+    let mut m = technical_report();
+    m.sections_from_headings(2, 2).unwrap();
+    let result = m.sections_from_headings(1, 1).unwrap();
+    assert!(result.skipped.is_empty(), "{:?}", result.skipped);
+    let mut fresh = technical_report();
+    fresh.sections_from_headings(1, 2).unwrap();
+    let shape = |m: &DocxModifier| {
+        let mut s: Vec<_> = m.sections().unwrap().into_iter().map(|s| (s.key, s.first, s.last, s.depth, s.parent)).collect();
+        s.sort();
+        s
+    };
+    assert_eq!(shape(&m), shape(&fresh));
 }
 
 #[test]

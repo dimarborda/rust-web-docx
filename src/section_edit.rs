@@ -261,6 +261,31 @@ fn body_table_spans(tokens: &[Token]) -> Vec<Range<usize>> {
     out
 }
 
+/// Byte ranges of the body's block-level content controls (sections or not), nested ones
+/// included
+fn body_sdt_spans(tokens: &[Token]) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut in_body = false;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        match &tok.ev {
+            Event::Start(e) if tag_is(e.name().as_ref(), "body") => in_body = true,
+            Event::End(e) if tag_is(e.name().as_ref(), "body") => in_body = false,
+            Event::Start(_) if in_body && (is_element(tok, "p") || is_element(tok, "tbl")) => {
+                i = element_end(tokens, i) + 1;
+                continue;
+            }
+            Event::Start(_) if in_body && is_element(tok, "sdt") => {
+                out.push(tokens[i].span.start..tokens[element_end(tokens, i)].span.end);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Holds a paragraph-level section break (`w:sectPr` in `w:pPr`); Word does not allow one
 /// inside a content control
 fn has_section_break(xml: &str) -> bool {
@@ -268,9 +293,18 @@ fn has_section_break(xml: &str) -> bool {
 }
 
 /// Bytes of the blocks from paragraph `from` to `to` (both included), ready to be wrapped in a
-/// section: a table is taken whole when `from` is its first paragraph or `to` its last one.
-/// Refuses ranges that cut a table or a content control, or hold a section break.
-fn block_span(xml: &str, paragraphs: &[Range<usize>], tables: &[Range<usize>], from: usize, to: usize) -> Result<Range<usize>, String> {
+/// section: a table is taken whole when `from` is its first paragraph or `to` its last one, and
+/// so is a content control whose paragraphs all lie in the range, even when it starts or ends
+/// with the range. Refuses ranges that cut a table or a content control, or hold a section
+/// break.
+fn block_span(
+    xml: &str,
+    paragraphs: &[Range<usize>],
+    tables: &[Range<usize>],
+    sdts: &[Range<usize>],
+    from: usize,
+    to: usize,
+) -> Result<Range<usize>, String> {
     let (mut start, mut end) = match (paragraphs.get(from), paragraphs.get(to)) {
         (Some(a), Some(b)) => (a.start, b.end),
         _ => return Err(format!("El rango {}–{} no existe en el documento.", from, to)),
@@ -302,6 +336,17 @@ fn block_span(xml: &str, paragraphs: &[Range<usize>], tables: &[Range<usize>], f
                 ));
             }
             end = table.end;
+        }
+    }
+    // A content control sharing the first or last paragraph with the range: its first
+    // paragraph starts after `<w:sdtContent>` and its last one ends before `</w:sdt>`, so take
+    // the whole element (nested controls sharing the border too)
+    for sdt in sdts {
+        let first = paragraphs.partition_point(|r| r.start < sdt.start);
+        let last = paragraphs.partition_point(|r| r.end <= sdt.end);
+        if first < last && from <= first && last - 1 <= to {
+            start = start.min(sdt.start);
+            end = end.max(sdt.end);
         }
     }
     if !is_balanced(&xml[start..end]) {
@@ -445,9 +490,11 @@ impl DocxModifier {
 
     /// Wraps the blocks from paragraph `from` to `to` (both included, with the tables between
     /// them) in a new section. A table is wrapped whole when `from` is its first paragraph or
-    /// `to` its last one. `locked`: Word users cannot delete the section; `content_locked`:
-    /// nor edit its content (code still can). Refuses keys already in use and ranges that cut
-    /// a table or another section, lie inside a table, or hold a section break.
+    /// `to` its last one, and so is a section whose paragraphs all lie in the range, even when
+    /// it shares its first or last paragraph with it. `locked`: Word users cannot delete the
+    /// section; `content_locked`: nor edit its content (code still can). Refuses keys already
+    /// in use and ranges that cut a table or another section, lie inside a table, or hold a
+    /// section break.
     pub fn define_section(
         &mut self,
         key: &str,
@@ -465,7 +512,7 @@ impl DocxModifier {
         }
         let (from, to) = if to < from { (to, from) } else { (from, to) };
         let paragraphs = body_paragraph_ranges(&xml)?;
-        let span = block_span(&xml, &paragraphs, &body_table_spans(&tokens), from, to)?;
+        let span = block_span(&xml, &paragraphs, &body_table_spans(&tokens), &body_sdt_spans(&tokens), from, to)?;
         let id = SdtIds::new(&xml).next(key);
         let title = title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(key);
         let wrapped = format!("{}{}{}", section_open(key, title, id, locked, content_locked), &xml[span.clone()], SECTION_CLOSE);
@@ -613,6 +660,7 @@ impl DocxModifier {
         let tokens = tokenize(&xml)?;
         let paragraphs = body_paragraph_ranges(&xml)?;
         let tables = body_table_spans(&tokens);
+        let sdts = body_sdt_spans(&tokens);
         let existing = locate_sections(&tokens);
         let infos = self.sections()?;
         let mut taken: std::collections::HashSet<String> = existing.iter().map(|l| l.key.clone()).collect();
@@ -653,7 +701,7 @@ impl DocxModifier {
                 skipped.push(skip(format!("ya abre la sección «{}»", s.key)));
                 continue;
             }
-            let span = match block_span(&xml, &paragraphs, &tables, *index, last) {
+            let span = match block_span(&xml, &paragraphs, &tables, &sdts, *index, last) {
                 Ok(span) => span,
                 Err(reason) => {
                     skipped.push(skip(reason));
