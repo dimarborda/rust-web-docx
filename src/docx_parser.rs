@@ -52,6 +52,10 @@ pub struct RunInfo {
     pub color: String,
     pub font_size: Option<f64>,
     pub font_family: Option<String>,
+    /// Target of the `w:hyperlink` this run is inside, resolved from its `r:id` against the
+    /// part's relationships; `None` outside a hyperlink or when the relationship is missing
+    #[serde(default)]
+    pub href: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1339,6 +1343,19 @@ impl DocxModifier {
         let doc_xml = self.get_file_string("word/document.xml")?;
         let mut elements = parse_document_elements_with(&doc_xml, &self.styles);
         number_text_box_paragraphs(&mut elements);
+        // Runs inside a `w:hyperlink` carry its `r:id` in `href`; resolve it to the actual URL
+        let rels = self
+            .get_file_string("word/_rels/document.xml.rels")
+            .ok()
+            .map(|xml| parse_relationships_map(&xml))
+            .unwrap_or_default();
+        for_each_paragraph_mut(&mut elements, &mut |p| {
+            for run in &mut p.runs {
+                if let Some(rid) = &run.href {
+                    run.href = rels.get(rid).cloned();
+                }
+            }
+        });
         let elements = Rc::new(elements);
         self.cache.borrow_mut().elements = Some((self.revision, elements.clone()));
         Ok(elements)
@@ -2247,6 +2264,8 @@ pub fn parse_paragraph_with(
     let mut in_rpr = false;
     let mut in_t = false;
     let mut run = RawRun::default();
+    // `r:id` of the `w:hyperlink` currently open, stamped on every run started while inside it
+    let mut current_hyperlink: Option<String> = None;
     // Page-number fields: complex (fldChar begin/separate/end + instrText) or w:fldSimple
     let mut fields: Vec<PageField> = Vec::new();
     let mut in_instr = false;
@@ -2307,6 +2326,8 @@ pub fn parse_paragraph_with(
                     if !run.text.is_empty() {
                         raw_runs.push(std::mem::take(&mut run));
                     }
+                } else if tag_is(n, "hyperlink") {
+                    current_hyperlink = None;
                 } else if tag_is(n, "pBdr") {
                     in_pbdr = false;
                 } else if tag_is(n, "pPr") {
@@ -2428,9 +2449,12 @@ pub fn parse_paragraph_with(
             }
         } else if tag_is(n, "pPr") {
             in_ppr = is_start;
+        } else if tag_is(n, "hyperlink") && is_start {
+            current_hyperlink = get_attr_value(&e, "id");
         } else if tag_is(n, "r") && is_start {
             in_r = true;
             run = RawRun::default();
+            run.rel_id = current_hyperlink.clone();
         }
         buf.clear();
     }
@@ -2470,6 +2494,8 @@ struct RawRun {
     text: String,
     props: RunProps,
     style: Option<String>,
+    /// `r:id` of the enclosing `w:hyperlink`, if any; resolved to a URL in `elements_shared`
+    rel_id: Option<String>,
 }
 
 fn to_run_info(text: String, p: &RunProps) -> RunInfo {
@@ -2481,6 +2507,7 @@ fn to_run_info(text: String, p: &RunProps) -> RunInfo {
         color: p.color.clone().unwrap_or_default(),
         font_size: p.font_size,
         font_family: p.font_family.clone(),
+        href: None,
     }
 }
 
@@ -2519,7 +2546,10 @@ fn resolve_paragraph(
         .into_iter()
         .map(|r| {
             let eff = base_rpr.merged(&styles.character_props(r.style.as_deref())).merged(&r.props);
-            to_run_info(r.text, &eff)
+            let mut info = to_run_info(r.text, &eff);
+            // Holds the raw `r:id` until `elements_shared` resolves it against the relationships
+            info.href = r.rel_id;
+            info
         })
         .collect();
 
@@ -3394,5 +3424,37 @@ mod tests {
             _ => panic!("expected paragraph"),
         }
     }
-}
 
+    #[test]
+    fn test_hyperlink_run_captures_raw_relationship_id() {
+        let xml = wrap_body(
+            r#"<w:p><w:r><w:t>Antes </w:t></w:r><w:hyperlink r:id="rId7"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>ancla</w:t></w:r></w:hyperlink><w:r><w:t> después</w:t></w:r></w:p>"#,
+        );
+        let elements = parse_document_elements(&xml);
+        let DocumentElement::Paragraph(p) = &elements[0] else { panic!("expected paragraph") };
+        let hrefs: Vec<Option<&str>> = p.runs.iter().map(|r| r.href.as_deref()).collect();
+        // "ancla" is its own run (the rStyle differs from its neighbors), with the raw r:id;
+        // elements_shared() resolves it to a URL once the package's relationships are known
+        assert_eq!(hrefs, vec![None, Some("rId7"), None], "{:?}", p.runs);
+        assert_eq!(p.runs[1].text, "ancla");
+    }
+
+    #[test]
+    fn test_hyperlink_run_resolves_to_its_relationship_target() {
+        let bytes = crate::blank_generator::generate_blank_docx(crate::blank_generator::PageSize::Letter).unwrap();
+        let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse blank docx");
+        let doc_xml = wrap_body(
+            r#"<w:p><w:hyperlink r:id="rIdAnchor1"><w:r><w:t>Firmante1</w:t></w:r></w:hyperlink></w:p>"#,
+        );
+        modifier.put_file("word/document.xml".to_string(), doc_xml.into_bytes());
+        let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdAnchor1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="http://anchor/Firmante1" TargetMode="External"/>
+</Relationships>"#;
+        modifier.put_file("word/_rels/document.xml.rels".to_string(), rels.as_bytes().to_vec());
+
+        let elements = modifier.elements_shared().expect("Should resolve elements");
+        let DocumentElement::Paragraph(p) = &elements[0] else { panic!("expected paragraph") };
+        assert_eq!(p.runs[0].href.as_deref(), Some("http://anchor/Firmante1"), "{:?}", p.runs);
+    }
+}

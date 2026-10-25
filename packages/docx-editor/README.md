@@ -51,7 +51,7 @@ The container needs a height (for example `height: 80vh`). TypeScript types incl
 - **Agents**: `markActivity()` shows where an agent is working, and edits made through the API are highlighted for a moment without moving the user's caret. [Guide](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md#actividad-dónde-está-trabajando-el-agente)
 - **Content**: insert paragraphs with heading styles, tables and images (inline or floating), and read the document structure.
 - **Logical sections and existing tables**: read and replace parts of the document by key, and write cells or rows copying their formatting. [Guides](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md)
-- **Export**: lossless `.docx` and vector PDF.
+- **Export**: lossless `.docx` and vector PDF — `exportPdf()`/`exportPdfBlob()`/`downloadPdf()` keep Word hyperlinks as real PDF `/Link` annotations (URI action), at the exact position of the linked text, the same way LibreOffice or Word's own PDF export do.
 - **View**: read-only mode, zoom, watermark and an optional toolbar.
 
 Every method, option and event is in the [API reference](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/api.md). For React, Next.js, Tauri, fonts, styles and bundlers, see the [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/integraciones.md).

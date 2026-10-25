@@ -99,7 +99,27 @@ async function drawRuns(ctx, item) {
     });
     if (squeeze) ctx.page.pushOperators(ctx.lib.popGraphicsState());
     if (run.underline) line(ctx, run.x, item.y + 2, x, item.y + 2, run.color || item.color || '#000000', 1);
+    // A run inside a Word hyperlink becomes a real PDF /Link annotation, so tools that read
+    // the exported PDF (VEAD's signature anchors, e.g. http://anchor/Firmante1) find it
+    if (run.href) addLinkAnnotation(ctx, run.href, run.x, item.y - size, x - run.x, size * 1.2);
   }
+}
+
+/** Inserts a PDF /Link annotation (URI action) spanning a run's drawn position */
+function addLinkAnnotation(ctx, uri, x, y, width, height) {
+  const { x: x1, y: y1 } = px(ctx, x, y + height); // bottom-left (PDF points are y-up)
+  const { x: x2, y: y2 } = px(ctx, x + width, y); // top-right
+  const context = ctx.page.doc.context;
+  const annotRef = context.register(
+    context.obj({
+      Type: 'Annot',
+      Subtype: 'Link',
+      Rect: [x1, y1, x2, y2],
+      Border: [0, 0, 0],
+      A: { Type: 'Action', S: 'URI', URI: ctx.lib.PDFString.of(uri) },
+    })
+  );
+  ctx.page.node.addAnnot(annotRef);
 }
 
 /** Page decorations without runs (old-style header text, page labels) */

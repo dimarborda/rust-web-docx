@@ -50,6 +50,10 @@ pub struct TextRun {
     /// Character offset of the run in its paragraph's text
     #[serde(default)]
     pub start: usize,
+    /// Target of the `w:hyperlink` this run is inside, if any (PDF export turns it into a real
+    /// link annotation at this run's position)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1763,6 +1767,7 @@ fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize,
                     width: geo.label_width,
                     x: b.left + geo.label_offset + b.label_shift,
                     start: 0,
+                    href: None,
                 }],
                 line: None,
             });
@@ -2031,6 +2036,8 @@ struct LayoutSegment {
     color: String,
     font_size: f64,
     font_family: Option<String>,
+    /// Target of the `w:hyperlink` this segment is inside, if any
+    href: Option<String>,
 }
 
 enum AtomicUnit {
@@ -2059,6 +2066,7 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
             color: color.clone(),
             font_size: r.font_size.unwrap_or(default_fs),
             font_family: r.font_family.clone(),
+            href: r.href.clone(),
         };
         let mut text = String::new();
         let mut text_start = pos;
@@ -2161,6 +2169,7 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
             && last.color == seg.color
             && last.font_size == Some(seg.font_size)
             && last.font_family == seg.font_family
+            && last.href == seg.href
             && last.text != "\t"
             && last.start + last.text.chars().count() == seg.start
         {
@@ -2180,6 +2189,7 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
         width,
         x: 0.0,
         start: seg.start,
+        href: seg.href.clone(),
     });
 }
 
@@ -2306,6 +2316,7 @@ fn layout_paragraph_lines(
             color: if !p.color.is_empty() { p.color.clone() } else { default_color.to_string() },
             font_size: p.font_size.map(|pt| pt * PX_PER_PT),
             font_family: p.font_family.clone(),
+            href: None,
         }]
     };
     let total_chars = source_runs.iter().map(|r| r.text.chars().count()).sum::<usize>();
@@ -2389,6 +2400,7 @@ fn layout_paragraph_lines(
                     width: tab_w,
                     x: 0.0,
                     start: at,
+                    href: None,
                 });
                 line_w += tab_w;
                 just_wrapped = false;

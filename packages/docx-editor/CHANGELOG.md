@@ -9,6 +9,7 @@ Cambios de `@dimarborda/docx-editor`. El formato sigue [Keep a Changelog](https:
 - `duplicateTable(table, { at, values })`: inserta una copia de una tabla del documento con su mismo formato (sombreado, bordes, anchos, celdas combinadas) y, opcionalmente, cambia el texto de sus celdas, como un solo paso de deshacer ([#2](https://github.com/dimarborda/rust-web-docx/issues/2)).
 - Opción `highlightPending` y `setHighlightPending()`: resaltan en pantalla los marcadores pendientes `[…]` (con `{ fields: true }`, también los campos `{{…}}`). Es solo de vista: no se guarda, no se imprime ni sale en el PDF. Los colores se cambian con `--docx-pending-highlight` y `--docx-field-highlight` ([#3](https://github.com/dimarborda/rust-web-docx/issues/3)).
 - `nextMarker({ kind, from, wrap })`: el siguiente marcador después de una posición, para ofrecer «ir al siguiente pendiente» ([#3](https://github.com/dimarborda/rust-web-docx/issues/3)).
+- `exportPdf()`/`exportPdfBlob()`/`downloadPdf()` conservan los hipervínculos de Word como anotaciones `/Link` reales del PDF (acción URI), en la posición exacta del texto enlazado — igual que LibreOffice o el propio exportador de Word. Necesario para flujos de firma electrónica que leen la posición de la firma de un hipervínculo del PDF (p. ej. VEAD).
 
 ## [0.12.1] - 2026-10-22
 

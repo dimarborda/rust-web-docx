@@ -913,6 +913,7 @@ fn paragraph_base_format(info: &ParagraphInfo) -> RunInfo {
         color: info.color.clone(),
         font_size: info.font_size,
         font_family: info.font_family.clone(),
+        href: None,
     }
 }
 

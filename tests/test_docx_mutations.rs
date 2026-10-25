@@ -109,6 +109,7 @@ fn test_update_paragraph_runs_per_word() {
             color: "DC2626".to_string(),
             font_size: Some(18.0),
             font_family: Some("Calibri".to_string()),
+            href: None,
         },
         rust_web_docx::docx_parser::RunInfo {
             text: "QUE ".to_string(),
@@ -118,6 +119,7 @@ fn test_update_paragraph_runs_per_word() {
             color: "".to_string(),
             font_size: Some(18.0),
             font_family: Some("Calibri".to_string()),
+            href: None,
         },
         rust_web_docx::docx_parser::RunInfo {
             text: "JUAN PEREZ".to_string(),
@@ -127,6 +129,7 @@ fn test_update_paragraph_runs_per_word() {
             color: "2563EB".to_string(),
             font_size: Some(20.0),
             font_family: Some("Calibri".to_string()),
+            href: None,
         },
     ];
 
