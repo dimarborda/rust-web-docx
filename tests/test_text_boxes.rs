@@ -430,6 +430,64 @@ fn test_fill_text_box_with_image() {
     assert_eq!(box_texts(&reopened)[0].1, "Antes", "survives saving and reopening");
 }
 
+/// `cx`/`cy` (px) of the inserted picture's own `wp:extent` — the nearest one before its
+/// `<a:blip r:embed=…>`, so it is never confused with a text box's own `wp:extent`.
+fn last_extent_px(xml: &str) -> (f64, f64) {
+    let blip = xml.find("<a:blip r:embed=").expect("an inserted picture");
+    let idx = xml[..blip].rfind("<wp:extent").expect("the picture's own wp:extent");
+    let tag = &xml[idx..xml[idx..].find('/').map(|i| idx + i).unwrap_or(xml.len())];
+    let attr = |name: &str| -> f64 {
+        let needle = format!(r#"{}="#, name);
+        let start = tag.find(&needle).unwrap() + needle.len() + 1;
+        let end = start + tag[start..].find('"').unwrap();
+        tag[start..end].parse::<f64>().unwrap() / 9525.0
+    };
+    (attr("cx"), attr("cy"))
+}
+
+#[test]
+fn test_fill_text_box_shrinks_an_image_larger_than_the_box() {
+    // The box is 200×100 px (cx="1905000" cy="952500"); a 800×400 image has the same 2:1 ratio,
+    // so it should land exactly at the box's own size — never bigger.
+    let mut m = editable_doc();
+    let content = TextBoxContent {
+        ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
+        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(800, 400))) }],
+    };
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+    let (w, h) = last_extent_px(&document(&m));
+    assert!((w - 200.0).abs() < 1.0 && (h - 100.0).abs() < 1.0, "shrunk to the box's own size: {}x{}", w, h);
+}
+
+#[test]
+fn test_fill_text_box_shrinks_by_the_tighter_side() {
+    // A 400×400 square into a 200×100 box: shrinking by width alone (200×200) would still
+    // overflow the height, so the height check after it must shrink it again, down to 100×100.
+    let mut m = editable_doc();
+    let content = TextBoxContent {
+        ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
+        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(400, 400))) }],
+    };
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+    let (w, h) = last_extent_px(&document(&m));
+    assert!(w <= 200.5 && h <= 100.5, "fits inside the box: {}x{}", w, h);
+    assert!((w - h).abs() < 1.0, "stayed square (aspect ratio kept): {}x{}", w, h);
+    assert!((h - 100.0).abs() < 1.0, "shrunk down to the box's height: {}x{}", w, h);
+}
+
+#[test]
+fn test_fill_text_box_does_not_enlarge_a_smaller_image() {
+    // A 50×25 image is already smaller than the 200×100 box on both sides: it stays as is.
+    let mut m = editable_doc();
+    let content = TextBoxContent {
+        ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
+        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(50, 25))) }],
+    };
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+    let (w, h) = last_extent_px(&document(&m));
+    assert!((w - 50.0).abs() < 1.0 && (h - 25.0).abs() < 1.0, "left at its own size: {}x{}", w, h);
+}
+
 #[test]
 fn test_fill_text_box_refuses_a_marker_outside_a_text_box() {
     let mut m = editable_doc();

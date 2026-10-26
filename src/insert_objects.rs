@@ -388,13 +388,14 @@ impl DocxModifier {
         let xml = self.get_file_string(&part)?;
         // Checked once up front: an image with bad bytes or a malformed fragment must leave the
         // document exactly as it was, not half-written.
-        text_box_content_range(&xml, local)?;
+        let (_, max_w, max_h) = text_box_content_range(&xml, local)?;
         let mut decoded = Vec::with_capacity(content.images.len());
         for img in &content.images {
             let bytes = decode_image_data(&img.data)?;
             let (format, px_w, px_h) =
                 image_info(&bytes).ok_or_else(|| format!("La imagen «{}» del cuadro de texto no es PNG, JPEG ni GIF.", img.placeholder))?;
-            decoded.push((img.placeholder.clone(), bytes, format, px_w, px_h));
+            let (w, h) = shrink_to_fit(px_w as f64, px_h as f64, max_w, max_h);
+            decoded.push((img.placeholder.clone(), bytes, format, w, h));
         }
         validate_ooxml_fragment(&content.ooxml)?;
 
@@ -405,20 +406,20 @@ impl DocxModifier {
             xml = ensure_namespace(&xml, "r", NS_R, root_tag);
         }
         let mut body = content.ooxml.clone();
-        for (placeholder, bytes, format, px_w, px_h) in decoded {
+        for (placeholder, bytes, format, w, h) in decoded {
             let token = format!("{{{{img:{}}}}}", placeholder);
             if !body.contains(&token) {
                 continue;
             }
             let rel_id = self.add_image_part(&part, &bytes, format)?;
             let doc_pr_id = next_doc_pr_id(&xml);
-            let run = drawing_run(&rel_id, doc_pr_id, px_w as f64, px_h as f64, "");
+            let run = drawing_run(&rel_id, doc_pr_id, w, h, "");
             body = body.replace(&token, &run);
         }
 
         // ensure_namespace above may have shifted every byte offset: locate the range again
         // on the xml as it stands now, right before writing.
-        let range = text_box_content_range(&xml, local)?;
+        let (range, _, _) = text_box_content_range(&xml, local)?;
         xml.replace_range(range, &body);
         self.put_file(part, xml.into_bytes());
         Ok(())
@@ -427,7 +428,11 @@ impl DocxModifier {
 
 /// Byte range of the content of the `w:txbxContent` holding text-box paragraph `index` (from
 /// `TEXT_BOX_BASE`): between its start and end tags, for `fill_text_box` to replace whole.
-fn text_box_content_range(xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
+/// The content range of a text box's `txbxContent`, plus the text box's own size in px (its
+/// `wp:extent`, as parsed into `ImageRef.width`/`height`) — the limit `fill_text_box` shrinks a
+/// picture to, so it never spills out of the box it was put in for (shrink only, matching the
+/// original VEAD processor: no margin subtracted, width checked before height).
+fn text_box_content_range(xml: &str, index: usize) -> Result<(std::ops::Range<usize>, f64, f64), String> {
     if index < TEXT_BOX_BASE {
         return Err("Ese marcador no está dentro de un cuadro de texto.".to_string());
     }
@@ -453,12 +458,32 @@ fn text_box_content_range(xml: &str, index: usize) -> Result<std::ops::Range<usi
                     .position(|t| matches!(&t.ev, Event::Start(e) if tag_is(e.name().as_ref(), "txbxContent")))
                     .ok_or("El cuadro de texto no tiene contenido (txbxContent).")?;
                 let close = element_end(&tokens, open);
-                return Ok(start + tokens[open].span.end..start + tokens[close].span.start);
+                return Ok((start + tokens[open].span.end..start + tokens[close].span.start, span.image.width, span.image.height));
             }
             next += count;
         }
     }
     Err(format!("No existe el párrafo {}.", index))
+}
+
+/// Shrinks `(w, h)` to fit within `(max_w, max_h)` (px), keeping the aspect ratio — never
+/// enlarges, and a non-positive `max_w`/`max_h` (text box size unknown) leaves that side
+/// unconstrained. Matches the original VEAD processor: width checked first, then height on the
+/// already-shrunk size (two sequential shrinks, not a single min-ratio pass — same end result),
+/// no margin subtracted from the text box's own size.
+fn shrink_to_fit(w: f64, h: f64, max_w: f64, max_h: f64) -> (f64, f64) {
+    let (mut w, mut h) = (w, h);
+    if max_w > 0.0 && w > max_w {
+        let ratio = max_w / w;
+        w = max_w;
+        h *= ratio;
+    }
+    if max_h > 0.0 && h > max_h {
+        let ratio = max_h / h;
+        h = max_h;
+        w *= ratio;
+    }
+    (w, h)
 }
 
 /// Checks `fragment` is well-formed XML (matching tags) before it is spliced into the document;
