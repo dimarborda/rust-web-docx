@@ -645,12 +645,12 @@ impl DocxSession {
         Ok(())
     }
 
-    /// Every picture, text box and shape of the body (table cells included) in document order:
-    /// `[{ paragraph, index, kind: "picture" | "textbox" | "shape", width, height, wrap,
-    /// wrap_side, anchored, behind_text, h_relative, h_offset, h_align, v_relative, v_offset,
-    /// v_align, dist_top…, offset, alt, doc_pr_id, shape, text, bounds: { page, x, y, width,
-    /// height } | null }]`. `bounds` is where the last layout drew it. Legacy VML shapes are
-    /// drawn but left out (they cannot be edited).
+    /// Every picture, text box and shape of the body (table cells included) and of headers and
+    /// footers, in document order: `[{ paragraph, index, kind: "picture" | "textbox" | "shape",
+    /// width, height, wrap, wrap_side, anchored, behind_text, h_relative, h_offset, h_align,
+    /// v_relative, v_offset, v_align, dist_top…, offset, alt, doc_pr_id, shape, text, bounds: {
+    /// page, x, y, width, height } | null }]`. `bounds` is where the last layout drew it. Legacy
+    /// VML shapes are drawn but left out (they cannot be edited).
     #[wasm_bindgen]
     pub fn list_images(&self) -> Result<String, JsValue> {
         let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
@@ -662,6 +662,35 @@ impl DocxSession {
                     for row in &t.rich_rows {
                         for cell in &row.cells {
                             paragraphs.extend(cell.paragraphs.iter());
+                        }
+                    }
+                }
+            }
+        }
+        // Header/footer paragraphs (same traversal as header_footer_paragraphs_json): their own
+        // pictures/shapes, and the text boxes anchored there, need to list here too, or the JS
+        // layer can never select/move them (`selectImage`, `updateImage`'s return value).
+        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let hf = &inputs.header_footer;
+        let groups = [Some(&hf.header), Some(&hf.footer), hf.first_header.as_ref(), hf.first_footer.as_ref()];
+        let mut seen = std::collections::HashSet::new();
+        for els in groups.into_iter().flatten() {
+            for el in els.iter() {
+                match el {
+                    docx_parser::DocumentElement::Paragraph(p) => {
+                        if seen.insert(p.index) {
+                            paragraphs.push(p);
+                        }
+                    }
+                    docx_parser::DocumentElement::Table(t) => {
+                        for row in &t.rich_rows {
+                            for cell in &row.cells {
+                                for p in &cell.paragraphs {
+                                    if seen.insert(p.index) {
+                                        paragraphs.push(p);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
