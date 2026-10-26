@@ -6,6 +6,7 @@ Cambios de `@dimarborda/docx-editor`. El formato sigue [Keep a Changelog](https:
 
 ### Corregido
 
+- Una imagen o un cuadro de texto anclado dentro de un encabezado o pie ya se puede seleccionar y mover/redimensionar con el ratón en modo encabezado, y el cambio queda en la parte correcta del `.docx` (`header1.xml`/`footer1.xml`); antes el lienzo nunca los encontraba bajo el clic, y moverlos por código fallaba con «no está disponible en encabezados y pies de página».
 - `fillTextBox` encoge una imagen al tamaño del cuadro de texto que la recibe cuando es más grande que él (manteniendo la proporción, nunca la agranda); antes entraba a su tamaño nativo en píxeles, pudiendo salirse del cuadro.
 - `markers()`, `fillMarker`/`replaceVariables` y `fillTextBox` ya reconocen y rellenan marcadores dentro de un cuadro de texto flotante que está DENTRO de un encabezado o pie de página (membretes institucionales con logos en cuadros de texto del encabezado, típicos de plantillas de VEAD); antes se perdían en silencio, aunque el mismo tipo de cuadro de texto en el cuerpo del documento ya funcionaba. Nuevo valor de `Marker.place`: `"headerFooterTextbox"`.
 

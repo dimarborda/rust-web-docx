@@ -4,8 +4,10 @@
 //! header/footer's own top-level paragraphs (`tests/test_header_footer.rs`).
 
 use rust_web_docx::docx_parser::{
-    DocumentElement, DocxModifier, HEADER_FOOTER_BASE, HEADER_FOOTER_TEXTBOX_BASE, PART_SLOT, TextBoxContent, TextBoxImage,
+    DocumentElement, DocxModifier, ImageUpdate, NewImage, HEADER_FOOTER_BASE, HEADER_FOOTER_TEXTBOX_BASE, PART_SLOT, TextBoxContent,
+    TextBoxImage,
 };
+use rust_web_docx::layout_engine::{LayoutEngine, RenderCommand};
 use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
@@ -335,4 +337,101 @@ fn test_header_text_box_cannot_mix_with_the_body_or_a_table() {
     let table = rust_web_docx::docx_parser::NewTable { rows: vec![vec!["a".into()]], header: false, widths: None, align: None };
     assert!(m.insert_table(index, 0, &table).is_err(), "cannot insert a table inside a header's text box");
     assert_eq!(box_texts(&m, "header")[0].1, "{{box}}", "nothing changed");
+}
+
+// ---------- 6. A text box anchored in a header/footer can be selected and dragged, like one in
+// the body (bug: render_part used to null paragraph_index/image_index for every header/footer
+// Image/Shape, and update_image/delete_image only ever touched document.xml) ----------
+
+/// (paragraph index, image index) of the header's own drawing-bearing paragraph (the outer
+/// paragraph holding the `w:drawing`, numbered like any other header paragraph — not the text
+/// box's inner paragraph, which `box_texts` exposes)
+fn header_drawing(m: &DocxModifier) -> (usize, usize) {
+    let inputs = m.layout_inputs().unwrap();
+    inputs
+        .header_footer
+        .header
+        .iter()
+        .find_map(|e| match e {
+            DocumentElement::Paragraph(p) if !p.images.is_empty() => Some((p.index, 0)),
+            _ => None,
+        })
+        .expect("the header has a paragraph with a drawing")
+}
+
+#[test]
+fn test_anchored_text_box_in_a_header_gets_a_real_index_in_the_layout() {
+    let header = format!(r#"<w:p>{}</w:p>"#, text_box("Logo", 1));
+    let m = docx(&[("header1.xml", "rIdH", "default", "header", &header)]);
+
+    let elements: Vec<DocumentElement> = m.extract_elements().unwrap();
+    let inputs = m.layout_inputs().unwrap();
+    let layout = LayoutEngine::new().with_images(inputs.body_images.clone()).compute_layout(
+        &elements,
+        "FFFFFF",
+        &inputs.page_setup,
+        &inputs.header_footer,
+        None,
+        None,
+        0.0,
+    );
+
+    let shapes: Vec<_> = layout.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            RenderCommand::Shape { paragraph_index, image_index, .. } => Some((*paragraph_index, *image_index)),
+            _ => None,
+        })
+        .collect();
+    assert!(!shapes.is_empty(), "the header's text box is drawn");
+    assert!(
+        shapes.iter().any(|(p, i)| p.is_some() && i.is_some()),
+        "the header's floating text box must keep a real paragraph_index/image_index, like a body picture, so the canvas \
+         editor's imageAt() can find it under a click: {:?}",
+        shapes
+    );
+}
+
+#[test]
+fn test_update_image_on_a_header_text_box_moves_it_in_the_header_part() {
+    let header = format!(r#"<w:p>{}</w:p>"#, text_box("Logo", 1));
+    let mut m = docx(&[("header1.xml", "rIdH", "default", "header", &header)]);
+    let document_before = part_text(&m, "word/document.xml");
+
+    let (paragraph, image) = header_drawing(&m);
+    m.checkpoint(None);
+    let update = ImageUpdate { h_relative: Some("page".into()), h_offset: Some(500.0), ..Default::default() };
+    let updated = m.update_image(paragraph, image, &update).unwrap();
+    assert!(updated.anchored);
+    assert_eq!((updated.h_relative.as_str(), updated.h_offset), ("page", 500.0));
+
+    let header_xml = part_text(&m, "word/header1.xml");
+    assert!(header_xml.contains(r#"relativeFrom="page""#), "the new position landed in header1.xml: {}", header_xml);
+    assert!(header_xml.contains("<wp:posOffset>4762500</wp:posOffset>"), "500px in EMU: {}", header_xml);
+    assert_eq!(part_text(&m, "word/document.xml"), document_before, "document.xml must stay untouched");
+
+    // The document reopens without error and the new position survives the round trip
+    let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
+    assert!(part_text(&reopened, "word/header1.xml").contains(r#"relativeFrom="page""#));
+
+    assert!(m.undo().is_some(), "the move is one undo step");
+    assert!(!part_text(&m, "word/header1.xml").contains(r#"relativeFrom="page""#), "undo restores the header");
+}
+
+// ---------- 7. No regression: moving a BODY picture still writes to document.xml ----------
+
+#[test]
+fn test_update_image_on_a_body_picture_still_writes_to_document_xml() {
+    let mut m = docx(&[]);
+    m.checkpoint(None);
+    let (p, _) = m.insert_image(0, 0, &png(40, 20), &NewImage::default()).unwrap();
+
+    m.checkpoint(None);
+    let updated = m
+        .update_image(p, 0, &ImageUpdate { wrap: Some("square".into()), h_offset: Some(50.0), ..Default::default() })
+        .unwrap();
+    assert!(updated.anchored);
+    assert_eq!(updated.h_offset, 50.0);
+    assert!(part_text(&m, "word/document.xml").contains("<wp:posOffset>476250</wp:posOffset>"), "50px in EMU, in document.xml");
 }

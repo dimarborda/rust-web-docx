@@ -497,15 +497,9 @@ fn render_part(
             // Header and footer paragraphs keep their caret lines (edited in header mode);
             // anything else in them (text box text, repeated rows) is not a caret target
             RenderCommand::Text { line, paragraph_index, .. } if *paragraph_index < crate::docx_parser::HEADER_FOOTER_BASE => *line = None,
-            RenderCommand::Image { paragraph_index, image_index, .. } => {
-                *paragraph_index = None;
-                *image_index = None;
-            }
-            RenderCommand::Shape { paragraph_index, image_index, editable_text, .. } => {
-                *paragraph_index = None;
-                *image_index = None;
-                *editable_text = false;
-            }
+            // Images and shapes keep the paragraph_index/image_index/editable_text already
+            // computed for them (same as in the body): the canvas editor needs those to select
+            // and drag anchored pictures and text boxes anchored in a header or footer.
             _ => {}
         }
     }

@@ -6,7 +6,7 @@
 //! element is rewritten: the picture itself (`a:graphic`), its id and its description are
 //! carried over verbatim.
 
-use super::insert_objects::{ensure_namespace, NS_WP};
+use super::insert_objects::{ensure_namespace, root_tag_of, NS_WP};
 use super::*;
 use crate::paragraph_edit::{element_end, tokenize};
 use std::ops::Range;
@@ -163,35 +163,38 @@ pub(crate) fn drawing_spans(p_xml: &str) -> Result<Vec<DrawingSpan>, String> {
 }
 
 impl DocxModifier {
-    /// Pictures of body paragraph `index` (cells included) as the parser reads them
-    fn paragraph_drawing(&self, xml: &str, paragraph: usize, image: usize) -> Result<(Range<usize>, DrawingSpan), String> {
-        let range = self.body_paragraph(xml, paragraph)?;
+    /// Pictures of paragraph `paragraph` (body, table cell, header or footer) as the parser
+    /// reads them: the part holding it, its current XML, the paragraph's byte range in it, and
+    /// the drawing span for `image`.
+    fn paragraph_drawing(&self, paragraph: usize, image: usize) -> Result<(String, String, Range<usize>, DrawingSpan), String> {
+        let (part, local) = self.locate(paragraph)?;
+        let xml = self.get_file_string(&part)?;
+        let range = self.body_paragraph(&xml, local)?;
         let span = drawing_spans(&xml[range.clone()])?
             .into_iter()
             .nth(image)
             .ok_or_else(|| format!("El párrafo {} no tiene la imagen {}.", paragraph, image))?;
-        Ok((range, span))
+        Ok((part, xml, range, span))
     }
 
     /// Applies `update` to picture `image` of paragraph `paragraph` and returns it as read back
     pub fn update_image(&mut self, paragraph: usize, image: usize, update: &ImageUpdate) -> Result<ImageRef, String> {
         update.validate()?;
-        let mut xml = self.get_file_string("word/document.xml")?;
-        let (p_range, span) = self.paragraph_drawing(&xml, paragraph, image)?;
+        let (part, xml, p_range, span) = self.paragraph_drawing(paragraph, image)?;
         let current = span.image.clone();
         let target = merge_update(&current, update, &paragraph_align(&xml[p_range.clone()], &self.styles), self.page_text_area(&xml))?;
 
         let start = p_range.start + span.range.start;
         let end = p_range.start + span.range.end;
         let rebuilt = rebuild_drawing(&xml[start..end], &current, &target, next_relative_height(&xml))?;
+        let mut xml = xml;
         xml.replace_range(start..end, &rebuilt);
         if target.anchored {
-            xml = ensure_namespace(&xml, "wp", NS_WP, "w:document");
+            xml = ensure_namespace(&xml, "wp", NS_WP, root_tag_of(&part));
         }
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
 
-        let xml = self.get_file_string("word/document.xml")?;
-        let mut updated = self.paragraph_drawing(&xml, paragraph, image)?.1.image;
+        let mut updated = self.paragraph_drawing(paragraph, image)?.3.image;
         updated.offset = current.offset;
         Ok(updated)
     }
@@ -199,15 +202,15 @@ impl DocxModifier {
     /// Removes picture `image` of paragraph `paragraph` (and its run when nothing else is left
     /// in it). The media part stays in the package, as Word does until it saves.
     pub fn delete_image(&mut self, paragraph: usize, image: usize) -> Result<(), String> {
-        let mut xml = self.get_file_string("word/document.xml")?;
-        let (p_range, span) = self.paragraph_drawing(&xml, paragraph, image)?;
+        let (part, xml, p_range, span) = self.paragraph_drawing(paragraph, image)?;
         let local = span.alternate.clone().unwrap_or(span.range.clone());
         let remove = match &span.run {
             Some(run) if run_is_empty_without(&xml[p_range.start..p_range.end], run, &local) => run.clone(),
             _ => local,
         };
+        let mut xml = xml;
         xml.replace_range(p_range.start + remove.start..p_range.start + remove.end, "");
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
         Ok(())
     }
 
