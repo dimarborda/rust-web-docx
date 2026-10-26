@@ -4,6 +4,10 @@ Cambios de `@dimarborda/docx-editor`. El formato sigue [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Corregido
+
+- `markers()`, `fillMarker`/`replaceVariables` y `fillTextBox` ya reconocen y rellenan marcadores dentro de un cuadro de texto flotante que está DENTRO de un encabezado o pie de página (membretes institucionales con logos en cuadros de texto del encabezado, típicos de plantillas de VEAD); antes se perdían en silencio, aunque el mismo tipo de cuadro de texto en el cuerpo del documento ya funcionaba. Nuevo valor de `Marker.place`: `"headerFooterTextbox"`.
+
 ### Añadido
 
 - `duplicateTable(table, { at, values })`: inserta una copia de una tabla del documento con su mismo formato (sombreado, bordes, anchos, celdas combinadas) y, opcionalmente, cambia el texto de sus celdas, como un solo paso de deshacer ([#2](https://github.com/dimarborda/rust-web-docx/issues/2)).

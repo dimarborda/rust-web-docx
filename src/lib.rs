@@ -263,7 +263,10 @@ impl DocxSession {
     }
 
     /// Header and footer paragraphs, numbered from `HEADER_FOOTER_BASE`, each with the part it
-    /// belongs to: `[{ ...paragraph, part: "word/header1.xml" }]`
+    /// belongs to: `[{ ...paragraph, part: "word/header1.xml" }]`. `images` is kept (as
+    /// `get_document_elements_json` already does for body paragraphs) so the paragraphs of a
+    /// text box anchored here (`images[].text_box.paragraphs`, numbered from
+    /// `HEADER_FOOTER_TEXTBOX_BASE`) reach the JS the same way the body's do.
     #[wasm_bindgen]
     pub fn header_footer_paragraphs_json(&self) -> Result<String, JsValue> {
         let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
@@ -285,7 +288,6 @@ impl DocxSession {
                 if p.index >= docx_parser::HEADER_FOOTER_BASE && seen.insert(p.index) {
                     let mut value = serde_json::to_value(p).map_err(|e| JsValue::from_str(&e.to_string()))?;
                     if let Some(obj) = value.as_object_mut() {
-                        obj.remove("images");
                         let slot = (p.index - docx_parser::HEADER_FOOTER_BASE) / docx_parser::PART_SLOT;
                         obj.insert("part_slot".into(), slot.into());
                     }

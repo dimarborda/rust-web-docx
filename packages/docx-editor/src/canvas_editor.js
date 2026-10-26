@@ -517,7 +517,11 @@ export function createCanvasEditor(env) {
   function paintTextBoxOutline(zoom) {
     const p = paragraph(focus.paragraph);
     if (!isBox(p)) return;
-    const [, anchorIndex, k] = p.container.split(':').map(Number);
+    // Container is "tb:<anchorIndex>:<k>" for a body/table text box, or
+    // "hf:<slot>:tb:<anchorIndex>:<k>" for one inside a header/footer: the anchor and the
+    // image index are always the last two segments, however many come before them.
+    const segments = p.container.split(':');
+    const [anchorIndex, k] = segments.slice(-2).map(Number);
     for (const { page, overlay } of pages.values()) {
       const shape = page.items?.find(it => it.type === 'shape' && it.paragraph_index === anchorIndex && it.image_index === k);
       if (!shape) continue;

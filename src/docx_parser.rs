@@ -700,9 +700,10 @@ fn header_footer_elements(
         None => HashMap::new(),
     };
     let mut elements = parse_document_elements_with(xml, styles);
-    // Paragraphs get editable numbers of their own (text boxes inside stay read-only)
+    // Top-level paragraphs and the paragraphs of any text box inside them get editable numbers
     if let Some(slot) = header_footer_parts(files).iter().position(|p| p == part) {
         for_each_paragraph_mut(&mut elements, &mut |p| p.index += HEADER_FOOTER_BASE + slot * PART_SLOT);
+        number_text_box_paragraphs(&mut elements, HEADER_FOOTER_TEXTBOX_BASE + slot * PART_SLOT);
     }
     let mut rename = |img: &mut ImageRef| {
         if img.rel_id.is_empty() {
@@ -737,6 +738,10 @@ pub const TEXT_BOX_BASE: usize = 1 << 24;
 pub const HEADER_FOOTER_BASE: usize = 1 << 25;
 pub const PART_SLOT: usize = 1 << 16;
 
+/// Text box paragraphs INSIDE a header/footer part are numbered from here on:
+/// `HEADER_FOOTER_TEXTBOX_BASE + slot × PART_SLOT + m`, same `slot` as `HEADER_FOOTER_BASE`
+pub const HEADER_FOOTER_TEXTBOX_BASE: usize = 1 << 29;
+
 /// Header and footer parts of the package, in a stable order
 pub(crate) fn header_footer_parts(files: &HashMap<String, Vec<u8>>) -> Vec<String> {
     let mut parts: Vec<String> = files
@@ -751,10 +756,10 @@ pub(crate) fn header_footer_parts(files: &HashMap<String, Vec<u8>>) -> Vec<Strin
     parts
 }
 
-/// Gives the paragraphs of the body's text boxes (DrawingML ones, anchored in body or table
-/// paragraphs) indices from `TEXT_BOX_BASE` in document order: the order `paragraph_ranges`
-/// finds them in
-pub(crate) fn number_text_box_paragraphs(elements: &mut [DocumentElement]) {
+/// Gives the paragraphs of a part's text boxes (DrawingML ones, anchored in body/table
+/// paragraphs, or in a header/footer's top-level paragraphs) indices from `base` in document
+/// order: the order `paragraph_ranges` (or the header/footer equivalent) finds them in
+pub(crate) fn number_text_box_paragraphs(elements: &mut [DocumentElement], base: usize) {
     let mut anchors: Vec<&mut ParagraphInfo> = Vec::new();
     for el in elements.iter_mut() {
         match el {
@@ -769,7 +774,7 @@ pub(crate) fn number_text_box_paragraphs(elements: &mut [DocumentElement]) {
         }
     }
     anchors.sort_by_key(|p| p.index);
-    let mut next = TEXT_BOX_BASE;
+    let mut next = base;
     for p in anchors {
         for img in p.images.iter_mut().filter(|img| !img.vml) {
             if let Some(tb) = img.text_box.as_mut() {
@@ -1156,6 +1161,15 @@ impl DocxModifier {
         if index < HEADER_FOOTER_BASE {
             return Ok(("word/document.xml".to_string(), index));
         }
+        if index >= HEADER_FOOTER_TEXTBOX_BASE {
+            let slot = (index - HEADER_FOOTER_TEXTBOX_BASE) / PART_SLOT;
+            let part = header_footer_parts(self.package.parts())
+                .get(slot)
+                .cloned()
+                .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+            let m = (index - HEADER_FOOTER_TEXTBOX_BASE) % PART_SLOT;
+            return Ok((part, TEXT_BOX_BASE + m));
+        }
         let slot = (index - HEADER_FOOTER_BASE) / PART_SLOT;
         let part = header_footer_parts(self.package.parts())
             .get(slot)
@@ -1342,7 +1356,7 @@ impl DocxModifier {
         }
         let doc_xml = self.get_file_string("word/document.xml")?;
         let mut elements = parse_document_elements_with(&doc_xml, &self.styles);
-        number_text_box_paragraphs(&mut elements);
+        number_text_box_paragraphs(&mut elements, TEXT_BOX_BASE);
         // Runs inside a `w:hyperlink` carry its `r:id` in `href`; resolve it to the actual URL
         let rels = self
             .get_file_string("word/_rels/document.xml.rels")

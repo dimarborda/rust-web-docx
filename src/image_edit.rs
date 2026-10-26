@@ -186,7 +186,7 @@ impl DocxModifier {
         let rebuilt = rebuild_drawing(&xml[start..end], &current, &target, next_relative_height(&xml))?;
         xml.replace_range(start..end, &rebuilt);
         if target.anchored {
-            xml = ensure_namespace(&xml, "wp", NS_WP);
+            xml = ensure_namespace(&xml, "wp", NS_WP, "w:document");
         }
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
 

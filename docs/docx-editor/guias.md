@@ -120,7 +120,7 @@ const [first] = editor.markers({ kind: 'pending', section: 'objeto' });
 editor.fillMarker(first, 'Diseño e implementación del módulo de pagos.'); // un paso de deshacer
 ```
 
-`place` es `body`, `table`, `textbox` o `headerFooter`; `section` es la [sección lógica](#secciones-lógicas) más interna que lo contiene. `fillMarker` vuelve a encontrar el marcador aunque se haya escrito texto antes de él desde que se listó, y lanza un `Error` si ya no está. Para analizar un texto suelto (por ejemplo, lo que va a insertar un agente) sin documento: `import { findMarkers } from '@dimarborda/docx-editor'`.
+`place` es `body`, `table`, `textbox`, `headerFooter` o `headerFooterTextbox` (un cuadro de texto flotante dentro de un encabezado o pie, p. ej. un logo de membrete institucional); `section` es la [sección lógica](#secciones-lógicas) más interna que lo contiene — `null` para los últimos tres valores, como ya pasaba con `textbox`. `fillMarker` vuelve a encontrar el marcador aunque se haya escrito texto antes de él desde que se listó, y lanza un `Error` si ya no está. Para analizar un texto suelto (por ejemplo, lo que va a insertar un agente) sin documento: `import { findMarkers } from '@dimarborda/docx-editor'`.
 
 ### Resaltar los pendientes
 

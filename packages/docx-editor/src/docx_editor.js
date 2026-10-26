@@ -384,7 +384,8 @@ export class DocxEditor extends EventTarget {
    * - `pending`: `[ … ]`, content still to be written (`[…]`, `[Completar: alcance]`);
    *   citations (`[1]`, `[2-4]`), checkboxes (`[ ]`, `[x]`) and `[sic]` are not markers
    * `offset` / `length` are in code points, as `selection`; `place` is `body`, `table`,
-   * `textbox` or `headerFooter`; `section` the key of the deepest logical section holding it.
+   * `textbox`, `headerFooter` or `headerFooterTextbox` (a text box inside a header/footer);
+   * `section` the key of the deepest logical section holding it.
    * @param {{kind?: 'field'|'pending', section?: string}} [filter]
    * @returns {Array<{id: string, kind: 'field'|'pending', syntax: 'double'|'single'|'bracket', raw: string, key: string|null, hint: string|null, paragraph: number, offset: number, length: number, place: string, section: string|null}>}
    */
@@ -450,10 +451,11 @@ export class DocxEditor extends EventTarget {
 
   /**
    * Writes content (OOXML already built: paragraphs, tables) inside the text box holding
-   * `marker` (from `markers()`, or its `id`; must have `place: "textbox"`), replacing whatever
-   * it had, as one undo step. Each `{{img:placeholder}}` token in `ooxml` becomes an inline
-   * picture, registered in the package like `insertImage`. Throws when the marker is not in a
-   * text box, no longer exists, or `ooxml` is not valid XML — the document is left unchanged.
+   * `marker` (from `markers()`, or its `id`; must have `place: "textbox"` or
+   * `"headerFooterTextbox"`), replacing whatever it had, as one undo step. Each
+   * `{{img:placeholder}}` token in `ooxml` becomes an inline picture, registered in the package
+   * like `insertImage`. Throws when the marker is not in a text box, no longer exists, or
+   * `ooxml` is not valid XML — the document is left unchanged.
    * @param {Marker|string} marker
    * @param {string} ooxml
    * @param {Array<{placeholder: string, bytes: Uint8Array|ArrayBuffer, format?: 'png'|'jpeg'|'gif'}>} [images]
@@ -461,7 +463,7 @@ export class DocxEditor extends EventTarget {
   fillTextBox(marker, ooxml, images = []) {
     this.#require();
     const ref = typeof marker === 'string' ? this.markers().find(m => m.id === marker) : marker;
-    if (!ref || !Number.isInteger(ref.paragraph) || ref.place !== 'textbox') {
+    if (!ref || !Number.isInteger(ref.paragraph) || (ref.place !== 'textbox' && ref.place !== 'headerFooterTextbox')) {
       throw new Error(`docx-editor: fillTextBox: unknown marker, or not inside a text box: ${typeof marker === 'string' ? marker : JSON.stringify(marker)}`);
     }
     const content = {
@@ -1342,26 +1344,30 @@ export class DocxEditor extends EventTarget {
   #paragraphs() {
     if (this.#paragraphCache.source !== this.#elements) {
       const list = [];
-      // Text box paragraphs (numbered from TEXT_BOX_BASE) belong to "tb:<anchor>:<index>"
-      const addTextBoxes = p => (p.images || []).forEach((img, k) => {
+      // Text box paragraphs (numbered from TEXT_BOX_BASE, or from HEADER_FOOTER_TEXTBOX_BASE
+      // for a box inside a header/footer) belong to "<containerPrefix>:<anchor>:<k>"
+      const addTextBoxes = (p, containerPrefix) => (p.images || []).forEach((img, k) => {
         (img.text_box?.paragraphs || []).forEach(inner => {
-          if (inner.index >= TEXT_BOX_BASE) list.push({ ...inner, container: `tb:${p.index}:${k}` });
+          if (inner.index >= TEXT_BOX_BASE) list.push({ ...inner, container: `${containerPrefix}:${p.index}:${k}` });
         });
       });
       this.#elements.forEach(el => {
         if (el.type === 'paragraph') {
           list.push({ ...el, container: 'body' });
-          addTextBoxes(el);
+          addTextBoxes(el, 'tb');
         } else if (el.type === 'table') {
           (el.rich_rows || []).forEach((row, r) => row.cells.forEach((cell, c) => {
             (cell.paragraphs || []).forEach(p => {
               list.push({ ...p, container: `${el.index}:${r}:${c}` });
-              addTextBoxes(p);
+              addTextBoxes(p, 'tb');
             });
           }));
         }
       });
-      this.#partParagraphs.forEach(p => list.push({ ...p, container: `hf:${p.part_slot}` }));
+      this.#partParagraphs.forEach(p => {
+        list.push({ ...p, container: `hf:${p.part_slot}` });
+        addTextBoxes(p, `hf:${p.part_slot}:tb`);
+      });
       list.sort((a, b) => a.index - b.index);
       this.#paragraphCache = { source: this.#elements, list, byIndex: new Map(list.map(p => [p.index, p])) };
     }

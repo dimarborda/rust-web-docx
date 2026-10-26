@@ -6,9 +6,12 @@
 /** First index of text box paragraphs and of header/footer paragraphs (as in the engine) */
 const TEXT_BOX_BASE = 1 << 24;
 
-/** Where a paragraph lives: 'body', 'table', 'textbox' or 'headerFooter' */
+/** Where a paragraph lives: 'body', 'table', 'textbox', 'headerFooter' or 'headerFooterTextbox' */
 export function paragraphPlace(p) {
   if (p.container === 'body') return 'body';
+  // A text box inside a header/footer: container is "hf:<slot>:tb:<paragraph>:<k>" — checked
+  // before the generic "hf:" case below, which it would otherwise also match.
+  if (/^hf:[^:]+:tb:/.test(p.container)) return 'headerFooterTextbox';
   if (p.container.startsWith('tb:')) return 'textbox';
   if (p.container.startsWith('hf:')) return 'headerFooter';
   return 'table';

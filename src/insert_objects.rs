@@ -211,15 +211,15 @@ impl DocxModifier {
                 // The cell's text width: column minus the 108-twip left and right cell margins
                 let inner = ((widths[c] as f64 - 216.0) / 15.0).max(16.0);
                 let (w, h) = fit_in_cell(px_w, px_h, image.width, image.height, inner);
-                let rel_id = self.add_image_part(&bytes, format)?;
+                let rel_id = self.add_image_part("word/document.xml", &bytes, format)?;
                 pictures.insert((r, c), (rel_id, w, h, image.alt.clone().unwrap_or_default()));
             }
         }
 
         let mut xml = self.get_file_string("word/document.xml")?;
         if !pictures.is_empty() {
-            xml = ensure_namespace(&xml, "wp", NS_WP);
-            xml = ensure_namespace(&xml, "r", NS_R);
+            xml = ensure_namespace(&xml, "wp", NS_WP, "w:document");
+            xml = ensure_namespace(&xml, "r", NS_R, "w:document");
         }
         let first_id = next_doc_pr_id(&xml);
         let range = self.body_paragraph(&xml, target)?;
@@ -296,10 +296,10 @@ impl DocxModifier {
         // A floating picture is anchored to the paragraph at the position, as Word does; the
         // text stays where it was and flows around it
         if let Some(update) = layout {
-            let rel_id = self.add_image_part(bytes, format)?;
+            let rel_id = self.add_image_part("word/document.xml", bytes, format)?;
             let mut xml = self.get_file_string("word/document.xml")?;
-            xml = ensure_namespace(&xml, "wp", NS_WP);
-            xml = ensure_namespace(&xml, "r", NS_R);
+            xml = ensure_namespace(&xml, "wp", NS_WP, "w:document");
+            xml = ensure_namespace(&xml, "r", NS_R, "w:document");
             let doc_pr_id = next_doc_pr_id(&xml);
             let run = drawing_run(&rel_id, doc_pr_id, width, height, image.alt.as_deref().unwrap_or(""));
             let range = self.body_paragraph(&xml, index)?;
@@ -318,10 +318,10 @@ impl DocxModifier {
         }
         let (first, _) = self.insert_paragraphs(index, offset, &paragraphs)?;
 
-        let rel_id = self.add_image_part(bytes, format)?;
+        let rel_id = self.add_image_part("word/document.xml", bytes, format)?;
         let mut xml = self.get_file_string("word/document.xml")?;
-        xml = ensure_namespace(&xml, "wp", NS_WP);
-        xml = ensure_namespace(&xml, "r", NS_R);
+        xml = ensure_namespace(&xml, "wp", NS_WP, "w:document");
+        xml = ensure_namespace(&xml, "r", NS_R, "w:document");
         let doc_pr_id = next_doc_pr_id(&xml);
         let run = drawing_run(&rel_id, doc_pr_id, width, height, image.alt.as_deref().unwrap_or(""));
         let range = self.body_paragraph(&xml, first)?;
@@ -332,8 +332,9 @@ impl DocxModifier {
         Ok((first, (first + 1, 0)))
     }
 
-    /// Stores the picture under word/media and relates it to document.xml; returns the rId
-    fn add_image_part(&mut self, bytes: &[u8], format: ImageFormat) -> Result<String, String> {
+    /// Stores the picture under word/media and relates it to `part` (e.g. `word/document.xml`
+    /// or a header/footer part); returns the rId, valid only within that part's own relationships
+    fn add_image_part(&mut self, part: &str, bytes: &[u8], format: ImageFormat) -> Result<String, String> {
         let ext = format.extension();
         let mut n = 1;
         let media = loop {
@@ -350,8 +351,13 @@ impl DocxModifier {
             self.put_file(content_types::PART.to_string(), types.into_bytes());
         }
 
-        let rels_path = "word/_rels/document.xml.rels";
-        let rels = self.get_file_string(rels_path).unwrap_or_else(|_| {
+        // Each part keeps its own relationships (same pattern as `header_footer_elements`'s
+        // image renaming): a header/footer picture must not be related through document.xml.rels
+        let rels_path = match part.rsplit_once('/') {
+            Some((dir, file)) => format!("{}/_rels/{}.rels", dir, file),
+            None => return Err(format!("No se pudo determinar las relaciones de «{}».", part)),
+        };
+        let rels = self.get_file_string(&rels_path).unwrap_or_else(|_| {
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.to_string()
         });
         let existing = parse_relationships_map(&rels);
@@ -363,23 +369,26 @@ impl DocxModifier {
             }
             i += 1;
         };
+        // The media part sits under word/, and relationship targets are relative to the part's
+        // own directory (also word/ for every header/footer), so this stays correct for both
         let target = media.trim_start_matches("word/");
         let entry = format!(r#"<Relationship Id="{}" Type="{}" Target="{}"/>"#, rel_id, REL_IMAGE, target);
-        self.put_file(rels_path.to_string(), append_child(&rels, "Relationships", &entry)?.into_bytes());
+        self.put_file(rels_path, append_child(&rels, "Relationships", &entry)?.into_bytes());
         Ok(rel_id)
     }
 
     /// Writes `content.ooxml` (paragraphs/tables already in WordprocessingML) inside the text
-    /// box holding marker paragraph `index` (from `markers()`, `place: "textbox"`), replacing
-    /// whatever it had, as one undo step. Each `{{img:placeholder}}` token becomes an inline
-    /// picture, registered in the package like `insertImage` does. The document is left
-    /// untouched when the marker is not in a text box, no longer exists, or the OOXML is
-    /// malformed.
+    /// box holding marker paragraph `index` (from `markers()`, `place: "textbox"` or
+    /// `"headerFooterTextbox"`), replacing whatever it had, as one undo step. Each
+    /// `{{img:placeholder}}` token becomes an inline picture, registered in the package like
+    /// `insertImage` does. The document is left untouched when the marker is not in a text box,
+    /// no longer exists, or the OOXML is malformed.
     pub fn fill_text_box(&mut self, index: usize, content: &TextBoxContent) -> Result<(), String> {
-        let xml = self.get_file_string("word/document.xml")?;
+        let (part, local) = self.locate(index)?;
+        let xml = self.get_file_string(&part)?;
         // Checked once up front: an image with bad bytes or a malformed fragment must leave the
         // document exactly as it was, not half-written.
-        text_box_content_range(&xml, index)?;
+        text_box_content_range(&xml, local)?;
         let mut decoded = Vec::with_capacity(content.images.len());
         for img in &content.images {
             let bytes = decode_image_data(&img.data)?;
@@ -391,8 +400,9 @@ impl DocxModifier {
 
         let mut xml = xml;
         if !decoded.is_empty() {
-            xml = ensure_namespace(&xml, "wp", NS_WP);
-            xml = ensure_namespace(&xml, "r", NS_R);
+            let root_tag = root_tag_of(&part);
+            xml = ensure_namespace(&xml, "wp", NS_WP, root_tag);
+            xml = ensure_namespace(&xml, "r", NS_R, root_tag);
         }
         let mut body = content.ooxml.clone();
         for (placeholder, bytes, format, px_w, px_h) in decoded {
@@ -400,7 +410,7 @@ impl DocxModifier {
             if !body.contains(&token) {
                 continue;
             }
-            let rel_id = self.add_image_part(&bytes, format)?;
+            let rel_id = self.add_image_part(&part, &bytes, format)?;
             let doc_pr_id = next_doc_pr_id(&xml);
             let run = drawing_run(&rel_id, doc_pr_id, px_w as f64, px_h as f64, "");
             body = body.replace(&token, &run);
@@ -408,9 +418,9 @@ impl DocxModifier {
 
         // ensure_namespace above may have shifted every byte offset: locate the range again
         // on the xml as it stands now, right before writing.
-        let range = text_box_content_range(&xml, index)?;
+        let range = text_box_content_range(&xml, local)?;
         xml.replace_range(range, &body);
-        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        self.put_file(part, xml.into_bytes());
         Ok(())
     }
 }
@@ -750,16 +760,32 @@ pub(super) fn next_doc_pr_id(doc: &str) -> u64 {
     re.captures_iter(doc).filter_map(|c| c[1].parse::<u64>().ok()).max().unwrap_or(0) + 1
 }
 
-/// Declares `xmlns:prefix` on the root element when it is missing
-pub(super) fn ensure_namespace(xml: &str, prefix: &str, uri: &str) -> String {
-    let Some(start) = xml.find("<w:document") else { return xml.to_string() };
+/// Declares `xmlns:<prefix>="<uri>"` on the part's root element (`root_tag`, e.g. `w:document`
+/// for `word/document.xml`, `w:hdr`/`w:ftr` for a header/footer) when it is missing. Leaves
+/// `xml` untouched when `root_tag` is not found there (e.g. a malformed part).
+pub(super) fn ensure_namespace(xml: &str, prefix: &str, uri: &str, root_tag: &str) -> String {
+    let open = format!("<{}", root_tag);
+    let Some(start) = xml.find(&open) else { return xml.to_string() };
     let Some(end) = xml[start..].find('>').map(|i| start + i) else { return xml.to_string() };
     if xml[start..end].contains(&format!("xmlns:{}=", prefix)) {
         return xml.to_string();
     }
     let mut out = xml.to_string();
-    out.insert_str(start + "<w:document".len(), &format!(r#" xmlns:{}="{}""#, prefix, uri));
+    out.insert_str(start + open.len(), &format!(r#" xmlns:{}="{}""#, prefix, uri));
     out
+}
+
+/// The root element tag of a document/header/footer part, for `ensure_namespace`: `w:hdr` for
+/// a header, `w:ftr` for a footer, `w:document` for anything else (the body)
+pub(super) fn root_tag_of(part: &str) -> &'static str {
+    let file = part.rsplit('/').next().unwrap_or(part);
+    if file.starts_with("header") {
+        "w:hdr"
+    } else if file.starts_with("footer") {
+        "w:ftr"
+    } else {
+        "w:document"
+    }
 }
 
 #[cfg(test)]
