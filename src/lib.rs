@@ -623,6 +623,26 @@ impl DocxSession {
         to_json(&serde_json::json!({ "paragraph": index, "caret": caret }))
     }
 
+    /// Writes content inside the text box holding marker paragraph `paragraph` (from
+    /// `markers()`, `place: "textbox"`), replacing whatever it had, as one undo step (see
+    /// `DocxModifier::fill_text_box`). `content_json`: `{ "ooxml": "<w:p>...</w:p>",
+    /// "images": [{ "placeholder": "logo1", "data": "data:image/png;base64,..." }] }`; each
+    /// `{{img:placeholder}}` token in `ooxml` becomes that image.
+    #[wasm_bindgen]
+    pub fn fill_text_box(
+        &mut self,
+        paragraph: usize,
+        content_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
+        let content: docx_parser::TextBoxContent = serde_json::from_str(content_json)
+            .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
+        self.modifier.checkpoint(selection_before.clone());
+        self.modifier.fill_text_box(paragraph, &content).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier.set_selection_after(selection_before);
+        Ok(())
+    }
+
     /// Every picture, text box and shape of the body (table cells included) in document order:
     /// `[{ paragraph, index, kind: "picture" | "textbox" | "shape", width, height, wrap,
     /// wrap_side, anchored, behind_text, h_relative, h_offset, h_align, v_relative, v_offset,

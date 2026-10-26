@@ -161,6 +161,24 @@ impl NewImage {
     }
 }
 
+/// An image of a `fillTextBox` call: the token `{{img:placeholder}}` in its `ooxml` becomes an
+/// inline picture once registered in the package.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct TextBoxImage {
+    pub placeholder: String,
+    /// Base64, or a `data:image/...;base64,` URL (same as `CellImage::data`)
+    pub data: String,
+}
+
+/// `fillTextBox(marker, ooxml, images)`'s content: OOXML already built (paragraphs, tables)
+/// plus the images its `{{img:placeholder}}` tokens reference.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TextBoxContent {
+    pub ooxml: String,
+    #[serde(default)]
+    pub images: Vec<TextBoxImage>,
+}
+
 impl DocxModifier {
     /// Inserts `table` at (`index`, `offset`): text before the position stays above the table
     /// and text after it goes below. Returns the index of the first cell's paragraph and the
@@ -350,6 +368,95 @@ impl DocxModifier {
         self.put_file(rels_path.to_string(), append_child(&rels, "Relationships", &entry)?.into_bytes());
         Ok(rel_id)
     }
+
+    /// Writes `content.ooxml` (paragraphs/tables already in WordprocessingML) inside the text
+    /// box holding marker paragraph `index` (from `markers()`, `place: "textbox"`), replacing
+    /// whatever it had, as one undo step. Each `{{img:placeholder}}` token becomes an inline
+    /// picture, registered in the package like `insertImage` does. The document is left
+    /// untouched when the marker is not in a text box, no longer exists, or the OOXML is
+    /// malformed.
+    pub fn fill_text_box(&mut self, index: usize, content: &TextBoxContent) -> Result<(), String> {
+        let xml = self.get_file_string("word/document.xml")?;
+        // Checked once up front: an image with bad bytes or a malformed fragment must leave the
+        // document exactly as it was, not half-written.
+        text_box_content_range(&xml, index)?;
+        let mut decoded = Vec::with_capacity(content.images.len());
+        for img in &content.images {
+            let bytes = decode_image_data(&img.data)?;
+            let (format, px_w, px_h) =
+                image_info(&bytes).ok_or_else(|| format!("La imagen «{}» del cuadro de texto no es PNG, JPEG ni GIF.", img.placeholder))?;
+            decoded.push((img.placeholder.clone(), bytes, format, px_w, px_h));
+        }
+        validate_ooxml_fragment(&content.ooxml)?;
+
+        let mut xml = xml;
+        if !decoded.is_empty() {
+            xml = ensure_namespace(&xml, "wp", NS_WP);
+            xml = ensure_namespace(&xml, "r", NS_R);
+        }
+        let mut body = content.ooxml.clone();
+        for (placeholder, bytes, format, px_w, px_h) in decoded {
+            let token = format!("{{{{img:{}}}}}", placeholder);
+            if !body.contains(&token) {
+                continue;
+            }
+            let rel_id = self.add_image_part(&bytes, format)?;
+            let doc_pr_id = next_doc_pr_id(&xml);
+            let run = drawing_run(&rel_id, doc_pr_id, px_w as f64, px_h as f64, "");
+            body = body.replace(&token, &run);
+        }
+
+        // ensure_namespace above may have shifted every byte offset: locate the range again
+        // on the xml as it stands now, right before writing.
+        let range = text_box_content_range(&xml, index)?;
+        xml.replace_range(range, &body);
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        Ok(())
+    }
+}
+
+/// Byte range of the content of the `w:txbxContent` holding text-box paragraph `index` (from
+/// `TEXT_BOX_BASE`): between its start and end tags, for `fill_text_box` to replace whole.
+fn text_box_content_range(xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
+    if index < TEXT_BOX_BASE {
+        return Err("Ese marcador no está dentro de un cuadro de texto.".to_string());
+    }
+    use crate::paragraph_edit::{element_end, tokenize};
+    let body = body_paragraph_ranges(xml)?;
+    let mut next = TEXT_BOX_BASE;
+    for range in &body {
+        let fragment = &xml[range.clone()];
+        if !fragment.contains("txbxContent") {
+            continue;
+        }
+        for span in image_edit::drawing_spans(fragment)? {
+            if span.image.vml || span.image.text_box.is_none() {
+                continue;
+            }
+            let start = range.start + span.range.start;
+            let drawing = &xml[start..range.start + span.range.end];
+            let count = text_box_paragraph_ranges(drawing)?.len();
+            if index < next + count {
+                let tokens = tokenize(drawing)?;
+                let open = tokens
+                    .iter()
+                    .position(|t| matches!(&t.ev, Event::Start(e) if tag_is(e.name().as_ref(), "txbxContent")))
+                    .ok_or("El cuadro de texto no tiene contenido (txbxContent).")?;
+                let close = element_end(&tokens, open);
+                return Ok(start + tokens[open].span.end..start + tokens[close].span.start);
+            }
+            next += count;
+        }
+    }
+    Err(format!("No existe el párrafo {}.", index))
+}
+
+/// Checks `fragment` is well-formed XML (matching tags) before it is spliced into the document;
+/// a malformed fragment from an upstream HTML→OOXML conversion must not corrupt the document.
+fn validate_ooxml_fragment(fragment: &str) -> Result<(), String> {
+    crate::paragraph_edit::tokenize(&format!("<x>{}</x>", fragment))
+        .map(|_| ())
+        .map_err(|_| "El contenido no es XML válido.".to_string())
 }
 
 /// True when the byte position sits inside a `w:tbl` element

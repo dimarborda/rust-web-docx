@@ -490,6 +490,14 @@ export class DocxEditor extends EventTarget {
    */
   fillMarker(marker: Marker | string, text: string): { paragraph: number; offset: number; end: TextPosition };
   /**
+   * Writes content (OOXML already built: paragraphs, tables) inside the text box holding
+   * `marker` (from `markers()`, or its `id`; must have `place: "textbox"`), replacing whatever
+   * it had, as one undo step. Each `{{img:placeholder}}` token in `ooxml` becomes an inline
+   * picture, registered in the package like `insertImage`. Throws when the marker is not in a
+   * text box, no longer exists, or `ooxml` is not valid XML — the document is left unchanged.
+   */
+  fillTextBox(marker: Marker | string, ooxml: string, images?: Array<{ placeholder: string; bytes: Uint8Array | ArrayBuffer; format?: 'png' | 'jpeg' | 'gif' }>): void;
+  /**
    * Shows where an agent or any code is working (tinted area, margin bar, label and a chip at
    * the top that scrolls there). View only: not saved, the caret and scroll stay put.
    */

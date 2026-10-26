@@ -448,6 +448,30 @@ export class DocxEditor extends EventTarget {
     return { paragraph: ref.paragraph, offset: at.offset, end };
   }
 
+  /**
+   * Writes content (OOXML already built: paragraphs, tables) inside the text box holding
+   * `marker` (from `markers()`, or its `id`; must have `place: "textbox"`), replacing whatever
+   * it had, as one undo step. Each `{{img:placeholder}}` token in `ooxml` becomes an inline
+   * picture, registered in the package like `insertImage`. Throws when the marker is not in a
+   * text box, no longer exists, or `ooxml` is not valid XML — the document is left unchanged.
+   * @param {Marker|string} marker
+   * @param {string} ooxml
+   * @param {Array<{placeholder: string, bytes: Uint8Array|ArrayBuffer, format?: 'png'|'jpeg'|'gif'}>} [images]
+   */
+  fillTextBox(marker, ooxml, images = []) {
+    this.#require();
+    const ref = typeof marker === 'string' ? this.markers().find(m => m.id === marker) : marker;
+    if (!ref || !Number.isInteger(ref.paragraph) || ref.place !== 'textbox') {
+      throw new Error(`docx-editor: fillTextBox: unknown marker, or not inside a text box: ${typeof marker === 'string' ? marker : JSON.stringify(marker)}`);
+    }
+    const content = {
+      ooxml,
+      images: images.map(({ placeholder, bytes }) => ({ placeholder, data: base64(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes) })),
+    };
+    engineCall(() => this.#session.fill_text_box(ref.paragraph, JSON.stringify(content), this.#selectionJSON()));
+    this.#changed();
+  }
+
   // ---------- Activity ----------
 
   /**

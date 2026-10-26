@@ -937,7 +937,7 @@ mod structure_edit;
 mod table_edit;
 pub use table_edit::TableSummary;
 pub use image_edit::ImageUpdate;
-pub use insert_objects::{CellImage, NewCell, NewImage, NewTable};
+pub use insert_objects::{CellImage, NewCell, NewImage, NewTable, TextBoxContent, TextBoxImage};
 
 /// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
 /// whole paragraph (unset properties are inherited) and alignment.

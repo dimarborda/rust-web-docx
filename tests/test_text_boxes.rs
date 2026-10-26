@@ -256,7 +256,7 @@ fn test_shapes_without_text_and_groups() {
 // ---------- Editing the text of a text box ----------
 
 use rust_web_docx::caret::{self, TextPosition};
-use rust_web_docx::docx_parser::{NewTable, RunInfo, TEXT_BOX_BASE};
+use rust_web_docx::docx_parser::{NewTable, RunInfo, TextBoxContent, TextBoxImage, TEXT_BOX_BASE};
 use rust_web_docx::layout_engine::EstimateMeasurer;
 
 fn box_texts(m: &DocxModifier) -> Vec<(usize, String)> {
@@ -362,4 +362,104 @@ fn test_clicks_inside_a_text_box_reach_its_text() {
     assert!(caret::caret_box(&l, pos, &mut EstimateMeasurer).is_some());
     let down = caret::move_vertical(&l, pos, 1, x + 20.0, &mut EstimateMeasurer).unwrap();
     assert_eq!(down.paragraph, TEXT_BOX_BASE + 1);
+}
+
+// ---------- fillTextBox (specs/libreria-editor.md, «fillTextBox») ----------
+
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    b.extend_from_slice(&w.to_be_bytes());
+    b.extend_from_slice(&h.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn document(m: &DocxModifier) -> String {
+    m.get_file_string("word/document.xml").unwrap()
+}
+
+#[test]
+fn test_fill_text_box_replaces_whole_box_content() {
+    let mut m = editable_doc();
+    m.checkpoint(None);
+    let content = TextBoxContent { ooxml: r#"<w:p><w:r><w:t>Nuevo contenido</w:t></w:r></w:p>"#.into(), images: vec![] };
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+
+    assert_eq!(
+        box_texts(&m),
+        vec![(TEXT_BOX_BASE, "Nuevo contenido".to_string()), (TEXT_BOX_BASE + 1, "Otra caja".to_string()), (TEXT_BOX_BASE + 2, "Segunda línea".to_string())],
+        "replaces the whole box (its second paragraph is gone); the other box is untouched"
+    );
+    assert_eq!(paragraphs(&m)[0].text, "Cuerpo uno", "the anchor paragraph keeps its text");
+
+    // One undo step
+    assert!(m.undo().is_some());
+    assert_eq!(box_texts(&m)[0].1, "Primera caja", "undo restores the box");
+
+    // Survives saving and reopening
+    let mut m = editable_doc();
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+    let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
+    assert_eq!(box_texts(&reopened)[0].1, "Nuevo contenido");
+}
+
+#[test]
+fn test_fill_text_box_with_image() {
+    let mut m = editable_doc();
+    let content = TextBoxContent {
+        ooxml: r#"<w:p><w:r><w:t>Antes</w:t></w:r></w:p><w:p>{{img:logo}}</w:p>"#.into(),
+        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(80, 40))) }],
+    };
+    m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
+
+    let doc = document(&m);
+    assert!(doc.contains("xmlns:wp="), "declares the drawing namespaces");
+    assert!(!doc.contains("{{img:logo}}"), "the placeholder is gone");
+    assert!(doc.contains("<a:blip r:embed="), "the image is referenced");
+
+    let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
+    let rels = reopened.get_file_string("word/_rels/document.xml.rels").unwrap();
+    assert_eq!(rels.matches("relationships/image").count(), 1);
+    let types = reopened.get_file_string("[Content_Types].xml").unwrap();
+    assert!(types.contains("image/png"), "the picture's type was registered");
+    assert_eq!(box_texts(&reopened)[0].1, "Antes", "survives saving and reopening");
+}
+
+#[test]
+fn test_fill_text_box_refuses_a_marker_outside_a_text_box() {
+    let mut m = editable_doc();
+    let content = TextBoxContent { ooxml: "<w:p/>".into(), images: vec![] };
+    assert!(m.fill_text_box(0, &content).is_err(), "paragraph 0 is in the body, not a text box");
+    assert_eq!(paragraphs(&m)[0].text, "Cuerpo uno", "nothing changed");
+}
+
+#[test]
+fn test_fill_text_box_refuses_a_marker_that_no_longer_exists() {
+    let mut m = editable_doc();
+    let content = TextBoxContent { ooxml: "<w:p/>".into(), images: vec![] };
+    assert!(m.fill_text_box(TEXT_BOX_BASE + 99, &content).is_err());
+}
+
+#[test]
+fn test_fill_text_box_refuses_malformed_xml_without_changing_the_document() {
+    let mut m = editable_doc();
+    let content = TextBoxContent { ooxml: "<w:p><w:r></w:p>".into(), images: vec![] };
+    assert!(m.fill_text_box(TEXT_BOX_BASE, &content).is_err(), "mismatched tags");
+    assert_eq!(box_texts(&m)[0].1, "Primera caja", "the document was not touched");
+}
+
+#[test]
+fn test_fill_text_box_refuses_an_image_that_is_not_png_jpeg_or_gif() {
+    let mut m = editable_doc();
+    let content = TextBoxContent {
+        ooxml: "<w:p>{{img:logo}}</w:p>".into(),
+        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(b"no es una imagen")) }],
+    };
+    assert!(m.fill_text_box(TEXT_BOX_BASE, &content).is_err());
+    assert_eq!(box_texts(&m)[0].1, "Primera caja", "the document was not touched");
 }
