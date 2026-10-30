@@ -770,6 +770,14 @@ fn number_literal(n: f64) -> String {
     }
 }
 
+/// A sheet name as a formula writes it before `!`: bare when it can be, else between quotes
+pub fn quote_sheet(sheet: &str) -> String {
+    let mut out = String::new();
+    write_sheet(sheet, &mut out);
+    out.pop();
+    out
+}
+
 fn write_sheet(sheet: &str, out: &mut String) {
     let plain = !sheet.is_empty()
         && sheet.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')

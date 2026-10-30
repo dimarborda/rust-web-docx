@@ -582,7 +582,7 @@ impl Workbook {
                 self.package.put(part, xml.into_bytes());
                 Ok(())
             }
-            None => self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml),
+            None => self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml).map(|_| ()),
         }
     }
 

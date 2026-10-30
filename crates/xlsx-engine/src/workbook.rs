@@ -26,7 +26,7 @@ use crate::view::{self, CellView, SheetLayout, StyleSheetView};
 /// Main part of the workbook when the package does not say otherwise
 pub const WORKBOOK_PART: &str = "xl/workbook.xml";
 
-const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+pub(crate) const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const SHARED_STRINGS_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 const STYLES_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 
@@ -91,7 +91,7 @@ pub enum CellInput {
 
 pub struct Workbook {
     pub(crate) package: Package,
-    workbook_part: String,
+    pub(crate) workbook_part: String,
     /// The recalculation set-up has been done (see `prepare_recalculation`)
     recalc_prepared: bool,
 }
@@ -442,13 +442,17 @@ impl Workbook {
             let written = strings.write(&xml)?;
             match strings_part {
                 Some(part) => self.package.put(part, written.into_bytes()),
-                None => self.add_workbook_part("sharedStrings", "sharedStrings.xml", SHARED_STRINGS_TYPE, written)?,
+                None => {
+                    self.add_workbook_part("sharedStrings", "sharedStrings.xml", SHARED_STRINGS_TYPE, written)?;
+                }
             }
         }
         if let (Some(xml), true) = (styles_xml, styles_changed) {
             match styles_part {
                 Some(part) => self.package.put(part, xml.into_bytes()),
-                None => self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml)?,
+                None => {
+                    self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml)?;
+                }
             }
         }
         self.recalculate_after_edit();
@@ -521,8 +525,9 @@ impl Workbook {
         let _ = self.recalculate();
     }
 
-    /// Adds a part related to the workbook: the part, its relationship and its content type
-    pub(crate) fn add_workbook_part(&mut self, rel_name: &str, target: &str, content_type: &str, xml: String) -> Result<(), String> {
+    /// Adds a part related to the workbook: the part, its relationship and its content type.
+    /// Returns the id of the new relationship.
+    pub(crate) fn add_workbook_part(&mut self, rel_name: &str, target: &str, content_type: &str, xml: String) -> Result<String, String> {
         let part = resolve_target(&self.workbook_part, target);
         let rels_part = rels_part_for(&self.workbook_part);
         let rels = self.package.get_string(&rels_part).unwrap_or_else(|_| {
@@ -530,7 +535,7 @@ impl Workbook {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#
                 .to_string()
         });
-        let (rels, _) = with_relationship(&rels, &format!("{}/{}", REL_NS, rel_name), target)?;
+        let (rels, id) = with_relationship(&rels, &format!("{}/{}", REL_NS, rel_name), target)?;
         let types = self.package.get_string(content_types::PART)?;
         let types = content_types::with_override(&types, &part, content_type)?.unwrap_or(types);
         self.package.put(part.clone(), xml.into_bytes());
@@ -538,7 +543,7 @@ impl Workbook {
         self.package.put(rels_part.clone(), rels.into_bytes());
         self.package.keep_in_order(&rels_part);
         self.package.put(content_types::PART.to_string(), types.into_bytes());
-        Ok(())
+        Ok(id)
     }
 
     /// After the first edit: drops the calculation chain (Excel rebuilds it, and a stale one can

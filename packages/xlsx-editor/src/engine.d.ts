@@ -243,6 +243,13 @@ export class Workbook {
    * Replaces `{{FIELD}}` placeholders (also `{{ FIELD }}` and `{{FIELD: hint}}`) in the shared and inline strings of the workbook and
    * returns how many were replaced. Unknown placeholders are left as they are.
    */
+  /** Adds an empty worksheet after the tab `after` (name or position; at the end without it) */
+  addSheet(name: string, after?: string | number): Sheet;
+  /**
+   * Renames a tab and the references to it in formulas, defined names, data validations,
+   * conditional formats and charts; returns how many of those changed
+   */
+  renameSheet(sheet: string | number, name: string): number;
   fillTemplate(values: Record<string, string | number | boolean | null | undefined>): number;
   /**
    * Markers of the standard lexicon (shared with @dimarborda/docx-editor) in the text cells of

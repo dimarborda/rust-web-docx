@@ -242,6 +242,43 @@ export class Workbook {
   }
 
   /**
+   * Adds an empty worksheet after the tab `after` (name or position; at the end without it).
+   * Names follow Excel's rules: 1–31 characters, none of `[ ] : * ? / \`, unique ignoring case.
+   * Returns the new sheet.
+   * @param {string} name
+   * @param {string | number} [after]
+   */
+  addSheet(name, after) {
+    const index = call(() => this._engine.add_sheet(String(name), after === undefined || after === null ? undefined : this.#tabIndex(after)));
+    return this.sheet(index);
+  }
+
+  /**
+   * Renames a tab (name or position) and the references to it in formulas, defined names,
+   * data validations, conditional formats and charts; returns how many of those changed
+   * @param {string | number} sheet
+   * @param {string} name
+   */
+  renameSheet(sheet, name) {
+    return call(() => this._engine.rename_sheet(this.#tabIndex(sheet), String(name)));
+  }
+
+  /** Position of a tab by name (ignoring case) or position */
+  #tabIndex(nameOrIndex) {
+    const all = JSON.parse(this._engine.sheets_json());
+    if (typeof nameOrIndex === 'number') {
+      if (!Number.isInteger(nameOrIndex) || nameOrIndex < 0 || nameOrIndex >= all.length) {
+        throw new RangeError(`El libro tiene ${all.length} hoja(s); no existe la hoja ${nameOrIndex}.`);
+      }
+      return nameOrIndex;
+    }
+    let index = all.findIndex(s => s.name === nameOrIndex);
+    if (index < 0) index = all.findIndex(s => s.name.toLowerCase() === String(nameOrIndex).toLowerCase());
+    if (index < 0) throw new Error(`El libro no tiene ninguna hoja llamada '${nameOrIndex}'.`);
+    return index;
+  }
+
+  /**
    * Replaces `{{FIELD}}` placeholders (also `{{ FIELD }}` and `{{FIELD: hint}}`) in every text
    * of the workbook; returns how many
    * @param {Record<string, string | number | boolean>} values

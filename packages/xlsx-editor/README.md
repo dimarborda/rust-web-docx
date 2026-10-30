@@ -112,6 +112,7 @@ element.addEventListener('ready', async ({ detail: { editor } }) => {
   // Cambiar celdas con la API del motor y volver a dibujar
   editor.workbook.fillTemplate({ CLIENTE: 'Acme' });
   editor.workbook.sheet('Resumen').setValues('B2', [[1200, 0.25]]);
+  editor.workbook.addSheet('Notas');  // reload() también redibuja las pestañas
   editor.reload();
 
   editor.undo();                       // también editor.redo(), editor.canUndo, editor.canRedo
@@ -167,6 +168,8 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `hoja.setValue('B3', valor)` | Escribe texto, número, booleano, `Date` o una fórmula (`{ formula: '=SUM(A1:A3)' }`); `null` borra el valor y deja el formato. Las fórmulas que dependen de la celda se recalculan. |
 | `hoja.setValues('A2', filas)` | Escribe una matriz desde la celda indicada, creando filas y celdas en orden. `undefined` deja la celda como está. |
 | `wb.fillTemplate(valores)` | Sustituye `{{CAMPO}}` (se admiten espacios y una pista: `{{ CAMPO }}`, `{{CAMPO: pista}}`) en las cadenas compartidas y en las cadenas en línea; devuelve cuántas sustituyó. Las variables sin valor se quedan como están. |
+| `wb.addSheet(nombre, después?)` | Agrega una hoja vacía detrás de la pestaña `después` (nombre o posición; al final sin ella) y la devuelve. El nombre sigue las reglas de Excel: de 1 a 31 caracteres, sin `[ ] : * ? / \`, sin apóstrofo al principio ni al final, distinto de `History` y de las demás hojas (sin distinguir mayúsculas). |
+| `wb.renameSheet(hoja, nombre)` | Renombra una pestaña (nombre o posición) y las referencias a ella en fórmulas, nombres definidos, validaciones de datos, formato condicional y gráficos; devuelve cuántas cambió. Las referencias dentro de textos (`INDIRECT("Hoja1!A1")`) y a otros libros se quedan como están, igual que en Excel. |
 | `wb.markers({ kind })` | Marcadores del léxico estándar (el mismo de `@dimarborda/docx-editor`) en las celdas de texto de todas las hojas: `field` para `{{CLAVE}}` / `{clave}`, `pending` para `[…]` (contenido por completar). Cada uno con `sheet`, `sheetName`, `ref` (`B3`), `row`, `col`, `raw`, `key`, `hint`, `offset` y `length`. |
 | `wb.checkpoint(selección?)` | Abre un paso de deshacer: los cambios hasta el siguiente `checkpoint` se deshacen juntos. `selección` es un texto libre que `undo()` devuelve. `wb.setSelectionAfter(selección)` guarda la de después, que devuelve `redo()`. |
 | `wb.undo()` / `wb.redo()` | Deshace o rehace un paso: `{ selection, parts }`, o `null` si no hay nada. `wb.canUndo` / `wb.canRedo` dicen si se puede. |

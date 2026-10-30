@@ -11,6 +11,7 @@ pub mod cell_ref;
 pub mod dates;
 pub mod shared_strings;
 pub mod sheet;
+pub mod sheets;
 pub mod styles;
 pub mod numfmt;
 pub mod recalc;
@@ -256,6 +257,17 @@ impl XlsxWorkbook {
     /// Splits merged cells overlapping a range; returns how many
     pub fn unmerge_cells(&mut self, sheet: usize, range: &str) -> Result<usize, JsValue> {
         self.workbook.unmerge_cells(sheet, range).map_err(js_err)
+    }
+
+    /// Adds an empty worksheet after the tab at `after` (at the end without it); returns its
+    /// tab position
+    pub fn add_sheet(&mut self, name: &str, after: Option<usize>) -> Result<usize, JsValue> {
+        self.workbook.add_sheet(name, after).map_err(js_err)
+    }
+
+    /// Renames the tab at `sheet` and the references to it; returns how many formulas changed
+    pub fn rename_sheet(&mut self, sheet: usize, name: &str) -> Result<usize, JsValue> {
+        self.workbook.rename_sheet(sheet, name).map_err(js_err)
     }
 
     /// Recalculates the formulas of the workbook; returns how many cells got a new value

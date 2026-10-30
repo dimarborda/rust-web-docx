@@ -242,7 +242,15 @@ export class XlsxEditor extends EventTarget {
   reload() {
     if (!this.#workbook || this.#sheetIndex < 0) return;
     this.#styles = this.#workbook.styleView();
-    this.#loadSheet(this.#sheetIndex, { keepScroll: true });
+    // Sheets added or renamed through `workbook` show up in the tabs
+    this.#renderTabs();
+    this.#loadSheet(this.#validSheet(this.#sheetIndex), { keepScroll: true });
+  }
+
+  /** `index` if it is still a worksheet (after undoing an added sheet), else the first one */
+  #validSheet(index) {
+    const tabs = this.#workbook.tabs;
+    return tabs[index]?.kind === 'worksheet' ? index : tabs.findIndex(t => t.kind === 'worksheet');
   }
 
   /** @param {number} zoom 0.25–4 */
@@ -996,11 +1004,14 @@ export class XlsxEditor extends EventTarget {
     this.#clip = null;
     this.#styles = this.#workbook.styleView();
     const tabs = this.#workbook.tabs;
+    this.#renderTabs();
     if (token && token.sheet !== this.#sheetIndex && tabs[token.sheet]?.kind === 'worksheet') {
       this.#loadSheet(token.sheet);
       this.dispatchEvent(new CustomEvent('sheetchange', { detail: { index: token.sheet, name: tabs[token.sheet].name } }));
     } else {
-      this.#loadSheet(this.#sheetIndex, { keepScroll: true });
+      const index = this.#validSheet(this.#sheetIndex);
+      this.#loadSheet(index, { keepScroll: index === this.#sheetIndex });
+      if (index !== token?.sheet && tabs[index]) this.dispatchEvent(new CustomEvent('sheetchange', { detail: { index, name: tabs[index].name } }));
     }
     if (token?.range) {
       const range = parseRange(token.range);
