@@ -1,5 +1,6 @@
-//! Document structure from code: Word heading styles and replacing whole ranges of blocks
-//! (`replaceParagraphs`), each as one undo step.
+//! Document structure from code: Word heading styles and replacing, deleting or moving whole
+//! ranges of blocks (`replaceParagraphs`, `deleteParagraphs`, `moveParagraphs`), each as one
+//! undo step.
 //!
 //! Child module of `docx_parser` so it can work on the package parts directly.
 
@@ -136,4 +137,118 @@ impl DocxModifier {
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
         self.insert_paragraphs(from, 0, items)
     }
+
+    /// Byte range of the blocks from paragraph `from` to `to` (both included), checked like
+    /// `replace_paragraphs`: it must not cut a table or a content control, nor hold a section
+    /// break. A range that ends in the last cell of a table it opened takes the whole table.
+    fn whole_block_range(xml: &str, ranges: &[std::ops::Range<usize>], from: usize, to: usize) -> Result<std::ops::Range<usize>, String> {
+        let (start, mut end) = match (ranges.get(from), ranges.get(to)) {
+            (Some(a), Some(b)) if from <= to => (a.start, b.end),
+            _ => return Err(format!("El rango {}–{} no existe en el documento.", from, to)),
+        };
+        // Solo si `to` es el último párrafo de la tabla: ampliar no puede sumar otros párrafos
+        if !inside_table(xml, start) {
+            let mut wider = end;
+            while inside_table(xml, wider) && !is_balanced(&xml[start..wider]) {
+                let Some(close) = xml[wider..].find("</w:tbl>") else { break };
+                wider += close + "</w:tbl>".len();
+            }
+            if ranges.get(to + 1).is_none_or(|next| next.start >= wider) {
+                end = wider;
+            }
+        }
+        if !is_balanced(&xml[start..end]) {
+            return Err("El rango corta una tabla o un control de contenido; amplíalo para incluirlos completos.".to_string());
+        }
+        if xml[start..end].contains("<w:sectPr") {
+            return Err("El rango incluye un salto de sección; no se puede mover ni borrar de una vez.".to_string());
+        }
+        Ok(start..end)
+    }
+
+    /// Deletes every block from paragraph `from` to paragraph `to` (both included, with the
+    /// tables between them). Returns how many paragraphs were removed. The body keeps at least
+    /// one paragraph, and one after a final table (Word needs it).
+    pub fn delete_paragraphs(&mut self, from: usize, to: usize) -> Result<usize, String> {
+        let mut xml = self.get_file_string("word/document.xml")?;
+        let ranges = body_paragraph_ranges(&xml)?;
+        let range = Self::whole_block_range(&xml, &ranges, from, to)?;
+        xml.replace_range(range, "");
+        let xml = with_final_paragraph(xml)?;
+        self.put_file("word/document.xml".to_string(), xml.into_bytes());
+        Ok(to - from + 1)
+    }
+
+    /// Moves the blocks from paragraph `from` to `to` (both included) in front of paragraph
+    /// `before` (numbered before the move; the paragraph count moves them to the end), keeping
+    /// their XML as is: formatting, pictures, links, notes and fields. Returns the index of the
+    /// first moved paragraph in its new place. `before` cannot fall inside the range or a table.
+    pub fn move_paragraphs(&mut self, from: usize, to: usize, before: usize) -> Result<usize, String> {
+        let xml = self.get_file_string("word/document.xml")?;
+        let ranges = body_paragraph_ranges(&xml)?;
+        let range = Self::whole_block_range(&xml, &ranges, from, to)?;
+        let count = to - from + 1;
+        if before > from && before <= to {
+            return Err(format!("El destino ({}) queda dentro del rango {}–{} que se mueve.", before, from, to));
+        }
+        let at = match ranges.get(before) {
+            Some(r) => r.start,
+            None if before == ranges.len() => end_of_last_block(&xml, &ranges)?,
+            None => return Err(format!("El destino {} no existe en el documento (tiene {} párrafos).", before, ranges.len())),
+        };
+        if inside_table(&xml, at) {
+            return Err(format!("El destino {} está dentro de una tabla; elige un párrafo fuera de ella.", before));
+        }
+        if at == range.start || at == range.end {
+            return Ok(from); // ya está ahí
+        }
+        let moved = xml[range.clone()].to_string();
+        let (new_xml, first) = if at < range.start {
+            (format!("{}{}{}{}", &xml[..at], moved, &xml[at..range.start], &xml[range.end..]), before)
+        } else {
+            (format!("{}{}{}{}", &xml[..range.start], &xml[range.end..at], moved, &xml[at..]), before - count)
+        };
+        let new_xml = with_final_paragraph(new_xml)?;
+        self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
+        Ok(first)
+    }
 }
+
+/// Whether byte `at` of document.xml falls inside a table (more `<w:tbl>` opened than closed)
+fn inside_table(xml: &str, at: usize) -> bool {
+    let before = &xml[..at];
+    let opened = before.matches("<w:tbl>").count() + before.matches("<w:tbl ").count();
+    opened > before.matches("</w:tbl>").count()
+}
+
+/// End of the last top-level block of the body: after the last paragraph, or after the table
+/// that holds it
+fn end_of_last_block(xml: &str, ranges: &[std::ops::Range<usize>]) -> Result<usize, String> {
+    let last = ranges.last().ok_or("El documento no tiene párrafos.")?;
+    let mut at = last.end;
+    while inside_table(xml, at) {
+        let close = xml[at..].find("</w:tbl>").ok_or("Una tabla del documento no está cerrada.")?;
+        at += close + "</w:tbl>".len();
+    }
+    Ok(at)
+}
+
+/// The body must keep a paragraph, and Word needs one after a table that ends it: adds an empty
+/// paragraph when the body has none or its last block (before the section properties) is a table
+fn with_final_paragraph(mut xml: String) -> Result<String, String> {
+    let body_end = xml.rfind("</w:body>").ok_or("El documento no tiene cuerpo.")?;
+    let mut end = body_end;
+    if let Some(sect) = xml[..body_end].rfind("<w:sectPr") {
+        // Solo si son las propiedades del cuerpo (no las de un párrafo con salto de sección)
+        let tail = &xml[sect..body_end];
+        if tail.trim_end().ends_with("</w:sectPr>") && !tail.contains("</w:p>") {
+            end = sect;
+        }
+    }
+    let ends_with_table = xml[..end].trim_end().ends_with("</w:tbl>");
+    if ends_with_table || body_paragraph_ranges(&xml)?.is_empty() {
+        xml.insert_str(end, "<w:p/>");
+    }
+    Ok(xml)
+}
+
