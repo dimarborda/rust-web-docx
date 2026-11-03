@@ -22,6 +22,10 @@ const LABELS = {
     nothingToUndo: 'No hay nada para deshacer.',
     nothingToRedo: 'No hay nada para rehacer.',
     clickToFormat: 'Haz clic en el texto para aplicar formato.',
+    styleNames: {
+      normal: 'Normal', title: 'Título', subtitle: 'Subtítulo', quote: 'Cita', 'intense quote': 'Cita destacada',
+      'list paragraph': 'Párrafo de lista', 'no spacing': 'Sin espaciado', heading: n => `Título ${n}`,
+    },
     untitled: 'documento.docx',
     header: 'Encabezado',
     footer: 'Pie de página',
@@ -46,6 +50,10 @@ const LABELS = {
     nothingToUndo: 'Nothing to undo.',
     nothingToRedo: 'Nothing to redo.',
     clickToFormat: 'Click in the text to apply formatting.',
+    styleNames: {
+      normal: 'Normal', title: 'Title', subtitle: 'Subtitle', quote: 'Quote', 'intense quote': 'Intense Quote',
+      'list paragraph': 'List Paragraph', 'no spacing': 'No Spacing', heading: n => `Heading ${n}`,
+    },
     untitled: 'document.docx',
     header: 'Header',
     footer: 'Footer',
@@ -166,6 +174,7 @@ export class DocxEditor extends EventTarget {
       imageDeleted: ref => this.#userImageEdit(ref, null),
       readOnly: () => this.#readOnly,
       editBlocked: (start, end) => this.#lockedMessage(start.paragraph, end.paragraph),
+      listKey: (key, shift) => this.#listKey(key, shift),
     });
     this.root.classList.toggle('read-only', this.#readOnly);
     this.#canvasEditor.readOnlyChanged();
@@ -215,13 +224,14 @@ export class DocxEditor extends EventTarget {
     });
     if (this.options.highlightPending) this.#markerLayer.setOption(this.options.highlightPending);
 
-    // Formatting shortcuts while the caret is in this editor
+    // Formatting shortcuts while the caret is in this editor (Word's, plus Google Docs' for
+    // what Word binds to keys browsers keep for themselves)
     this.#onKeyDown = e => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || !this.#session || this.#readOnly) return;
-      const action = { b: 'toggleBold', i: 'toggleItalic', u: 'toggleUnderline' }[e.key.toLowerCase()];
-      if (action && !e.shiftKey) {
+      if (!(e.metaKey || e.ctrlKey) || !this.#session || this.#readOnly) return;
+      const action = shortcutAction(e);
+      if (action) {
         e.preventDefault();
-        this[action]();
+        action(this);
       }
     };
     this.root.addEventListener('keydown', this.#onKeyDown);
@@ -578,6 +588,137 @@ export class DocxEditor extends EventTarget {
 
   toggleUnderline() {
     this.#toggleRunFlag('underline');
+  }
+
+  toggleStrikethrough() {
+    this.#toggleRunFlag('strike');
+  }
+
+  /** Superscript on or off (back to the baseline) */
+  toggleSuperscript() {
+    this.#toggleVertAlign('superscript');
+  }
+
+  /** Subscript on or off (back to the baseline) */
+  toggleSubscript() {
+    this.#toggleVertAlign('subscript');
+  }
+
+  /** Font of the selection (or of the paragraph at the caret), e.g. "Arial" */
+  setFontFamily(family, { refocus = true } = {}) {
+    const name = String(family || '').trim();
+    if (!name) return;
+    this.#applyRunFormat(range => range.forEach(c => { c.font_family = name; }), refocus);
+  }
+
+  /** Font names for a font menu: those the document uses, then common Office fonts */
+  fontFamilies() {
+    const used = new Set();
+    this.#paragraphs().list.forEach(p => {
+      if (p.font_family) used.add(p.font_family);
+      (p.runs || []).forEach(r => r.font_family && used.add(r.font_family));
+    });
+    const all = [...[...used].sort((a, b) => a.localeCompare(b)), ...COMMON_FONTS];
+    return all.filter((f, i) => all.findIndex(g => g.toLowerCase() === f.toLowerCase()) === i);
+  }
+
+  /** Font size in points (1–1638) of the selection, or of the paragraph at the caret */
+  setFontSize(points, { refocus = true } = {}) {
+    const size = Math.round(Number(points) * 2) / 2;
+    if (!(size >= 1 && size <= 1638)) return;
+    this.#applyRunFormat(range => range.forEach(c => { c.font_size = size; }), refocus);
+  }
+
+  /** Each character to the next (`step` > 0) or previous size of Word's size list */
+  changeFontSize(step) {
+    const p = this.#paragraphs().byIndex.get(this.#canvasEditor.selection()?.start.paragraph);
+    this.#applyRunFormat(range => range.forEach(c => {
+      c.font_size = nextFontSize(c.font_size || p?.font_size || 11, step);
+    }));
+  }
+
+  /**
+   * Highlight color of the selection: one of Word's highlight colors (other colors use the
+   * closest one, e.g. "#FFFF00" is yellow), or null to remove it
+   */
+  setHighlight(color, { refocus = true } = {}) {
+    const clean = color ? String(color).replace('#', '').toUpperCase() : null;
+    this.#applyRunFormat(range => range.forEach(c => { c.highlight = clean; }), refocus);
+  }
+
+  /**
+   * Removes the direct character formatting of the selection (or of the paragraph at the
+   * caret): font, size, bold, italic, underline, strikethrough, superscript/subscript, color
+   * and highlight; the paragraph style's formatting shows again
+   */
+  clearFormatting() {
+    const items = this.#selectedRanges();
+    if (!items) return this.#emit('message', { message: this.labels.clickToFormat, error: false });
+    const first = items[0];
+    const last = items[items.length - 1];
+    this.#paragraphCommand(items, () => this.#session.clear_formatting(first.p.index, first.start, last.p.index, last.end));
+  }
+
+  /**
+   * Paragraph styles for a style menu, default style first: `{ id, name }` where `name` is
+   * shown in the editor's language for Word's built-in styles. Title and Heading 1–3 are
+   * always offered and are added to the document the first time they are applied.
+   * @returns {Array<{id: string, name: string}>}
+   */
+  paragraphStyles() {
+    if (!this.#session) return [];
+    const names = this.labels.styleNames || {};
+    return JSON.parse(this.#session.paragraph_styles_json()).map(s => {
+      const heading = /^heading (\d)$/.exec(s.builtin || '');
+      const localized = heading ? names.heading?.(heading[1]) : names[s.builtin];
+      return { id: s.id, name: localized || s.name || s.id };
+    });
+  }
+
+  /** Applies a paragraph style (an id from `paragraphStyles()`) to the selected paragraphs */
+  setParagraphStyle(id) {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.set_paragraph_style(indices, String(id)));
+  }
+
+  /** Line spacing as a multiple of single spacing: 1, 1.15, 1.5, 2… */
+  setLineSpacing(multiple) {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.set_line_spacing(indices, Number(multiple)));
+  }
+
+  /** Space before and/or after the selected paragraphs, in points */
+  setParagraphSpacing({ before, after } = {}) {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.set_paragraph_spacing(
+      indices, before == null ? undefined : Number(before), after == null ? undefined : Number(after),
+    ));
+  }
+
+  /** Increase indent: list items go one level down, other paragraphs move 0.5" right */
+  indent() {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.change_indent(indices, 1));
+  }
+
+  /** Decrease indent: list items go one level up, other paragraphs move 0.5" left */
+  outdent() {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.change_indent(indices, -1));
+  }
+
+  /**
+   * Makes the selected paragraphs a bulleted (`'bullet'`) or numbered (`'number'`) list, or
+   * takes them out of it (`'none'`). Right after a list of the same kind they continue it.
+   * @param {'bullet'|'number'|'none'} kind
+   */
+  setList(kind) {
+    this.#paragraphCommand(this.#selectedRanges(), indices => this.#session.set_list(indices, kind));
+  }
+
+  /** Bullets on or off, as Word's button */
+  toggleBulletList() {
+    this.#toggleList('bullet');
+  }
+
+  /** Numbering on or off, as Word's button */
+  toggleNumberedList() {
+    this.#toggleList('number');
   }
 
   /** Text color of the selection (or of the paragraph at the caret), e.g. "#1E3A8A" */
@@ -1570,6 +1711,60 @@ export class DocxEditor extends EventTarget {
     });
   }
 
+  #toggleVertAlign(value) {
+    this.#applyRunFormat(range => {
+      const on = !range.every(c => c.vert_align === value);
+      range.forEach(c => { c.vert_align = on ? value : null; });
+    });
+  }
+
+  #toggleList(kind) {
+    const items = this.#selectedRanges();
+    const on = !items?.length || !items.every(it => it.p.list_kind === kind);
+    this.setList(on ? kind : 'none');
+  }
+
+  /** Runs `command(indicesJSON)` on the selected paragraphs as one undo step */
+  #paragraphCommand(items, command) {
+    if (!items?.length) return this.#emit('message', { message: this.labels.clickToFormat, error: false });
+    const indices = items.map(it => it.p.index);
+    const blocked = this.#lockedMessage(Math.min(...indices), Math.max(...indices), { deleting: false });
+    if (blocked) return this.#emit('message', { message: blocked, error: false });
+    try {
+      command(JSON.stringify(indices));
+    } catch (err) {
+      this.#emit('message', { message: String(err), error: true });
+      return;
+    }
+    this.#changed();
+    this.#canvasEditor.focus();
+  }
+
+  /**
+   * Word's list keys: Tab / Shift+Tab at the start of a list item (or over several paragraphs)
+   * change its level; Enter on an empty item and Backspace at its start end the list there.
+   * Returns true when the key was handled.
+   */
+  #listKey(key, shift) {
+    const sel = this.#canvasEditor.selection();
+    if (!sel || this.#readOnly) return false;
+    const p = this.#paragraphs().byIndex.get(sel.start.paragraph);
+    if (!p?.list_kind) return false;
+    const atStart = sel.collapsed && sel.start.offset === 0;
+    if (key === 'Tab' && (atStart || sel.start.paragraph !== sel.end.paragraph)) {
+      if (shift) this.outdent();
+      else this.indent();
+      return true;
+    }
+    if ((key === 'Enter' && !shift && sel.collapsed && !p.text) || (key === 'Backspace' && atStart)) {
+      // An empty item of a nested level goes up one level first, as in Word
+      if (key === 'Enter' && p.list_level > 0) this.outdent();
+      else this.setList('none');
+      return true;
+    }
+    return false;
+  }
+
   /** Formatting at the caret (the character before it) or of the selection's start */
   #formatAt(sel) {
     if (!sel) return null;
@@ -1580,13 +1775,26 @@ export class DocxEditor extends EventTarget {
       ? chars.slice(Math.max(0, sel.start.offset - 1), Math.max(1, sel.start.offset))
       : chars.slice(sel.start.offset, sel.start.paragraph === sel.end.paragraph ? sel.end.offset : chars.length);
     const all = flag => range.length > 0 && range.every(c => c[flag]);
+    const same = key => (range.length > 0 && range.every(c => c[key] === range[0][key]) ? range[0][key] : null);
     const color = (range[0]?.color || p.color || '').replace('#', '');
+    const highlight = range.length > 0 ? same('highlight') : null;
     return {
       bold: all('bold'),
       italic: all('italic'),
       underline: all('underline'),
+      strike: all('strike'),
+      superscript: range.length > 0 && range.every(c => c.vert_align === 'superscript'),
+      subscript: range.length > 0 && range.every(c => c.vert_align === 'subscript'),
       color: /^[0-9a-fA-F]{6}$/.test(color) ? `#${color.toUpperCase()}` : null,
+      highlight: highlight ? `#${highlight.toUpperCase()}` : null,
+      // null when the selection mixes several
+      fontFamily: (range.length ? same('font_family') : p.font_family) || null,
+      fontSize: (range.length ? same('font_size') : p.font_size) || null,
       align: p.align === 'justify' ? 'both' : p.align || 'left',
+      style: p.style || null,
+      list: p.list_kind || null,
+      listLevel: p.list_level ?? null,
+      lineSpacing: p.line_spacing ?? null,
     };
   }
 }
@@ -1599,7 +1807,63 @@ function paragraphChars(p) {
 }
 
 const sameFormat = (a, b) => a.bold === b.bold && a.italic === b.italic && a.underline === b.underline
-  && (a.color || '') === (b.color || '') && a.font_size === b.font_size && a.font_family === b.font_family;
+  && (a.color || '') === (b.color || '') && a.font_size === b.font_size && a.font_family === b.font_family
+  && !!a.strike === !!b.strike && (a.vert_align || null) === (b.vert_align || null)
+  && (a.highlight || null) === (b.highlight || null);
+
+/** Fonts every font menu offers (the optional font package draws the Office ones) */
+const COMMON_FONTS = ['Aptos', 'Arial', 'Calibri', 'Cambria', 'Courier New', 'Georgia', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana'];
+
+/** Word's font size list, used by changeFontSize (Ctrl+Shift+> / <) */
+const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+
+function nextFontSize(size, step) {
+  if (step > 0) return FONT_SIZES.find(s => s > size + 0.01) ?? Math.min(1638, Math.round(size + 10));
+  return [...FONT_SIZES].reverse().find(s => s < size - 0.01) ?? Math.max(1, size - 1);
+}
+
+/**
+ * Editor method for a formatting shortcut (Ctrl/⌘ held), or null. Keys the browser keeps
+ * (Ctrl+= zooms) are left alone: superscript and subscript use Ctrl+. and Ctrl+, as in
+ * Google Docs.
+ */
+function shortcutAction(e) {
+  const key = e.key.toLowerCase();
+  const code = e.code;
+  if (e.altKey) {
+    // Ctrl+Alt+0–3: Normal, Heading 1–3 (Google Docs). On
+    // Windows AltGr arrives as Ctrl+Alt and types characters (AltGr+2 = "@" on Spanish
+    // keyboards): only a key that still reads as the digit is a shortcut
+    const digit = /^Digit([0-3])$/.exec(code)?.[1];
+    if (digit && !e.shiftKey && (e.metaKey || e.key === digit)) {
+      return editor => {
+        const styles = editor.paragraphStyles();
+        editor.setParagraphStyle(digit === '0' ? styles[0]?.id : `Heading${digit}`);
+      };
+    }
+    return null;
+  }
+  if (e.shiftKey) {
+    if (code === 'Digit7') return editor => editor.toggleNumberedList();
+    if (code === 'Digit8') return editor => editor.toggleBulletList();
+    if (key === 'x') return editor => editor.toggleStrikethrough();
+    if (key === '>' || code === 'Period') return editor => editor.changeFontSize(1);
+    if (key === '<' || code === 'Comma') return editor => editor.changeFontSize(-1);
+    return null;
+  }
+  switch (key) {
+    case 'b': return editor => editor.toggleBold();
+    case 'i': return editor => editor.toggleItalic();
+    case 'u': return editor => editor.toggleUnderline();
+    case '.': return editor => editor.toggleSuperscript();
+    case ',': return editor => editor.toggleSubscript();
+    case '\\': return editor => editor.clearFormatting();
+    case ' ': return editor => editor.clearFormatting();
+    case ']': return editor => editor.indent();
+    case '[': return editor => editor.outdent();
+    default: return null;
+  }
+}
 
 function mergeRuns(chars) {
   const runs = [];

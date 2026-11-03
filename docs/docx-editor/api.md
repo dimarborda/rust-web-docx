@@ -8,7 +8,7 @@ Métodos, opciones y eventos de `DocxEditor`. Los tipos completos están en `src
 
 Atributos de `<docx-editor>`: `src` (URL del .docx), `sample` (abre el contrato de ejemplo), `blank` (documento nuevo vacío, con `page-size="a4|letter|legal"` y `autofocus` opcionales), `locale` (`es` o `en`), `zoom`, `gridlines="false"`, `page-labels="false"`, `readonly` (solo lectura; sin el atributo es editable) y `wasm-url`.
 
-`<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items="undo redo | bold italic underline color | left center right both | imageWrap | zoom"`. `imageWrap` es un selector del ajuste de texto que se activa al seleccionar una imagen; con una imagen seleccionada, los botones de alineación alinean la imagen.
+`<docx-toolbar>` es opcional. Acepta `for="id-del-editor"` e `items` con los controles separados por espacios y `|` como separador; por defecto muestra todos: `undo redo | style font fontSize | bold italic underline strike superscript subscript color highlight clearFormat | left center right both lineSpacing | bulletList numberedList outdent indent | imageWrap | zoom`. `style` es la lista de estilos de párrafo, `font` y `fontSize` aceptan cualquier nombre o tamaño escrito, `highlight` aplica el último color de resaltado (la flecha abre los colores de Word) y `imageWrap` es un selector del ajuste de texto que se activa al seleccionar una imagen; con una imagen seleccionada, los botones de alineación alinean la imagen.
 
 ## DocxEditor
 
@@ -66,7 +66,14 @@ editor.addEventListener('selectionchange', e => console.log(e.detail.format));
 | `images()` / `selectedImage` / `selectImage(ref)` | Imágenes del documento y la seleccionada (ver [Imágenes](guias.md#imágenes)) |
 | `updateImage(ref, changes)` / `resizeImage` / `moveImage` / `setImageWrap` / `alignImage` / `deleteImage` | Tamaño, posición y ajuste del texto de una imagen, cada cambio como un paso de deshacer |
 | `undo()` / `redo()` / `canUndo` / `canRedo` | Historial |
-| `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `setColor(hex)` / `setAlignment(align)` | Formato de la selección |
+| `toggleBold()` / `toggleItalic()` / `toggleUnderline()` / `toggleStrikethrough()` / `toggleSuperscript()` / `toggleSubscript()` / `setColor(hex)` | Formato de la selección (o del párrafo del cursor) |
+| `setFontFamily(name)` / `setFontSize(pt)` / `changeFontSize(±1)` / `fontFamilies()` | Fuente y tamaño. `changeFontSize` pasa al tamaño siguiente o anterior de la lista de Word; `fontFamilies()` da las fuentes del documento y las habituales de Office |
+| `setHighlight(color \| null)` | Resaltado con uno de los colores de Word (otro color usa el más cercano); `null` lo quita |
+| `clearFormatting()` | Quita el formato directo de carácter (fuente, tamaño, negrita, cursiva, subrayado, tachado, superíndice, color y resaltado) para que se vea el del estilo del párrafo |
+| `paragraphStyles()` / `setParagraphStyle(id)` | Estilos de párrafo del documento para un menú (`{ id, name }`, con los nombres de Word en el idioma del editor) y aplicarlos. Título y Título 1–3 siempre aparecen y se añaden al documento la primera vez que se usan |
+| `setAlignment(align)` / `setLineSpacing(n)` / `setParagraphSpacing({ before, after })` | Alineación, interlineado (múltiplo: 1, 1.15, 1.5, 2) y espacio antes y después en puntos |
+| `toggleBulletList()` / `toggleNumberedList()` / `setList('bullet' \| 'number' \| 'none')` | Listas con viñetas o numeradas. Justo después de una lista del mismo tipo la continúan; si no, la numeración empieza en 1. Si el documento no tenía numeración, se crea |
+| `indent()` / `outdent()` | Aumentar o disminuir sangría: en una lista cambian el nivel; en otro párrafo mueven la sangría 1,27 cm (0,5") |
 | `setBackgroundColor(hex)` / `setWatermark(text, { opacity })` | Apariencia. `insertTable(rows, cols, headers)` de versiones anteriores sigue funcionando (tabla vacía al final) |
 | `select(anchor, focus)` | Coloca el cursor o una selección (`{ paragraph, offset }`) |
 | `setZoom(z)` / `focus()` / `destroy()` | Vista y ciclo de vida. Sin cursor previo, `focus()` lo pone al inicio del documento |
@@ -78,7 +85,7 @@ El editor crea su propio elemento (`editor.root`, clase `docx-editor`) dentro de
 | :--- | :--- |
 | `load` | `{ fileName }` |
 | `change` | `{}` |
-| `selectionchange` | `{ selection, format: { bold, italic, underline, color, align } }` |
+| `selectionchange` | `{ selection, format: { bold, italic, underline, strike, superscript, subscript, color, highlight, fontFamily, fontSize, align, style, list, listLevel, lineSpacing } }` (`fontFamily` y `fontSize` son `null` si la selección mezcla varios) |
 | `imageselect` | `{ image }`: la imagen seleccionada con el ratón o `selectImage()`, o cambiada mientras está seleccionada (`null` al deseleccionar) |
 | `readonlychange` | `{ readOnly }`: `setReadOnly()` cambió el modo |
 | `message` | `{ message, error }`: avisos para mostrar al usuario |

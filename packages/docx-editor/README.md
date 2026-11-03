@@ -53,6 +53,7 @@ The container needs a height (for example `height: 80vh`). TypeScript types incl
 - **Text boxes**: `fillTextBox(marker, ooxml, images?)` writes content (paragraphs, tables, images) inside a text box that already exists in the document, located by its marker — replacing whatever it had, as one undo step.
 - **Logical sections and existing tables**: read and replace parts of the document by key, and write cells or rows copying their formatting. [Guides](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md)
 - **Export**: lossless `.docx` and vector PDF — `exportPdf()`/`exportPdfBlob()`/`downloadPdf()` keep Word hyperlinks as real PDF `/Link` annotations (URI action), at the exact position of the linked text, the same way LibreOffice or Word's own PDF export do.
+- **Formatting**: paragraph styles (Normal, Title, Heading 1–3 and the document's own), font and size, bold, italic, underline, strikethrough, superscript/subscript, color, Word highlight colors, clear formatting, alignment, line spacing, indent and bulleted or numbered lists with levels (Tab / Shift+Tab), written the way Word does.
 - **View**: read-only mode, zoom, watermark and an optional toolbar.
 
 Every method, option and event is in the [API reference](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/api.md). For React, Next.js, Tauri, fonts, styles and bundlers, see the [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/integraciones.md).

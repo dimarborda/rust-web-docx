@@ -22,6 +22,11 @@ pub struct RunProps {
     /// Points
     pub font_size: Option<f64>,
     pub font_family: Option<String>,
+    pub strike: Option<bool>,
+    /// "superscript", "subscript" or "baseline"
+    pub vert_align: Option<String>,
+    /// Hex color without '#' of `w:highlight`; `Some("")` is an explicit `none`
+    pub highlight: Option<String>,
 }
 
 impl RunProps {
@@ -43,6 +48,15 @@ impl RunProps {
         }
         if over.font_family.is_some() {
             self.font_family = over.font_family.clone();
+        }
+        if over.strike.is_some() {
+            self.strike = over.strike;
+        }
+        if over.vert_align.is_some() {
+            self.vert_align = over.vert_align.clone();
+        }
+        if over.highlight.is_some() {
+            self.highlight = over.highlight.clone();
         }
     }
 
@@ -156,6 +170,12 @@ pub struct Style {
     pub rpr: RunProps,
     /// `w:tblPr/w:tblBorders` of a table style
     pub table_borders: TableBorders,
+    /// Shown in Word's style gallery (`w:qFormat`)
+    pub quick: bool,
+    /// `w:semiHidden` or `w:hidden`: kept out of the gallery
+    pub hidden: bool,
+    /// `w:uiPriority`: order in the gallery (lower first)
+    pub ui_priority: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -346,6 +366,9 @@ impl StyleSheet {
                         "name" => style.name = get_attr_value(&e, "val").unwrap_or_default(),
                         "basedOn" => style.based_on = get_attr_value(&e, "val"),
                         "next" => style.next = get_attr_value(&e, "val"),
+                        "qFormat" => style.quick = is_bool_element_true(&e),
+                        "semiHidden" | "hidden" => style.hidden = is_bool_element_true(&e),
+                        "uiPriority" => style.ui_priority = get_attr_value(&e, "val").and_then(|v| v.parse().ok()),
                         _ => {}
                     }
                 } else if path.iter().any(|p| p == "tblStylePr") {
@@ -420,6 +443,14 @@ pub fn apply_rpr_element(rpr: &mut RunProps, e: &BytesStart, theme: &ThemeFonts)
         rpr.italic = Some(is_bool_element_true(e));
     } else if tag_is(n, "u") {
         rpr.underline = Some(is_bool_element_true(e));
+    } else if tag_is(n, "strike") || tag_is(n, "dstrike") {
+        rpr.strike = Some(is_bool_element_true(e));
+    } else if tag_is(n, "vertAlign") {
+        rpr.vert_align = get_attr_value(e, "val");
+    } else if tag_is(n, "highlight") {
+        if let Some(val) = get_attr_value(e, "val") {
+            rpr.highlight = Some(highlight_hex(&val).unwrap_or_default().to_string());
+        }
     } else if tag_is(n, "color") {
         if let Some(val) = get_attr_value(e, "val") {
             rpr.color = Some(if val.eq_ignore_ascii_case("auto") { String::new() } else { val.to_uppercase() });
@@ -666,6 +697,34 @@ fn parse_numbering(xml: &str, theme: &ThemeFonts) -> Numbering {
         buf.clear();
     }
     numbering
+}
+
+/// Word's highlight colors (`ST_HighlightColor`) and their RGB values
+pub const HIGHLIGHT_COLORS: &[(&str, &str)] = &[
+    ("yellow", "FFFF00"), ("green", "00FF00"), ("cyan", "00FFFF"), ("magenta", "FF00FF"),
+    ("blue", "0000FF"), ("red", "FF0000"), ("darkBlue", "000080"), ("darkCyan", "008080"),
+    ("darkGreen", "008000"), ("darkMagenta", "800080"), ("darkRed", "800000"), ("darkYellow", "808000"),
+    ("darkGray", "808080"), ("lightGray", "C0C0C0"), ("black", "000000"), ("white", "FFFFFF"),
+];
+
+/// RGB of a `w:highlight` value; `None` for `none` or an unknown name
+pub fn highlight_hex(name: &str) -> Option<&'static str> {
+    HIGHLIGHT_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, hex)| *hex)
+}
+
+/// The highlight color closest to `hex` (Word only accepts its named colors)
+pub fn highlight_name(hex: &str) -> &'static str {
+    let rgb = |h: &str| -> [i64; 3] {
+        let h = h.trim_start_matches('#');
+        let c = |i: usize| h.get(i..i + 2).and_then(|v| i64::from_str_radix(v, 16).ok()).unwrap_or(0);
+        [c(0), c(2), c(4)]
+    };
+    let target = rgb(hex);
+    HIGHLIGHT_COLORS
+        .iter()
+        .min_by_key(|(_, h)| rgb(h).iter().zip(target).map(|(a, b)| (a - b) * (a - b)).sum::<i64>())
+        .map(|(n, _)| *n)
+        .unwrap_or("yellow")
 }
 
 /// Running list counters while walking the document in order

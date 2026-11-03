@@ -383,6 +383,15 @@ body {
   overflow-x: auto;
 }
 
+/* With room to spare, the ribbon wraps onto a second row instead of hiding its end */
+@media (min-width: 900px) {
+  .formatting-ribbon {
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+    overflow-x: visible;
+  }
+}
+
 .ribbon-group {
   display: flex;
   align-items: center;
@@ -493,19 +502,63 @@ body {
   color: #0f172a;
 }
 
+/* Style, font and size fields (the browser suggests from their datalists) */
+.ribbon-field input.ribbon-font,
+.ribbon-field input.ribbon-size {
+  height: 28px;
+  padding: 0 0.45rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font: inherit;
+}
+
+.ribbon-field select.ribbon-style {
+  width: 8.5rem;
+}
+
+.ribbon-field input.ribbon-font {
+  width: 8.5rem;
+}
+
+.ribbon-field input.ribbon-size {
+  width: 3.4rem;
+  text-align: center;
+}
+
+.highlight-icon-label {
+  display: inline-flex;
+  color: #FDE047;
+}
+
+.highlight-swatch-dot {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.highlight-swatch-dot:hover {
+  transform: scale(1.2);
+}
+
+.highlight-swatch-dot.active {
+  border-color: #A5B4FC;
+  box-shadow: 0 0 0 1.5px rgba(165, 180, 252, 0.6);
+}
+
+/* "No highlight": a crossed-out swatch */
+.highlight-swatch-dot.none {
+  background: linear-gradient(to top right, transparent 45%, #F87171 45%, #F87171 55%, transparent 55%), rgba(255, 255, 255, 0.06);
+}
+
 .ribbon-field input[type="number"] {
   width: 4.6rem;
 }
 
-.ribbon-hint-pill {
-  margin-left: auto;
-  font-size: 0.76rem;
-  color: var(--text-dim);
-  background: rgba(255, 255, 255, 0.04);
-  padding: 3px 10px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
 
 /* ================= Multi-Page High-Fidelity Canvas View ================= */
 .canvas-viewport-container {

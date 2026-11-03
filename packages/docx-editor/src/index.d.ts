@@ -21,9 +21,33 @@ export interface Format {
   bold: boolean;
   italic: boolean;
   underline: boolean;
+  strike: boolean;
+  superscript: boolean;
+  subscript: boolean;
   /** "#RRGGBB" or null when the text uses the automatic color */
   color: string | null;
+  /** "#RRGGBB" of the highlight, or null without one (or a mix) */
+  highlight: string | null;
+  /** Null when the selection mixes several */
+  fontFamily: string | null;
+  /** Points; null when the selection mixes several */
+  fontSize: number | null;
   align: Alignment;
+  /** Paragraph style id of the paragraph at the caret (as in `paragraphStyles()`) */
+  style: string | null;
+  list: ListKind | null;
+  /** 0–8 while the paragraph is in a list */
+  listLevel: number | null;
+  /** Multiple of single spacing, or null when the paragraph uses an exact height */
+  lineSpacing: number | null;
+}
+
+export type ListKind = 'bullet' | 'number';
+
+export interface ParagraphStyle {
+  id: string;
+  /** In the editor's language for Word's built-in styles */
+  name: string;
 }
 
 export interface ReplaceResult {
@@ -54,6 +78,10 @@ export interface DocxEditorLabels {
   nothingToUndo: string;
   nothingToRedo: string;
   clickToFormat: string;
+  /** Names of Word's built-in paragraph styles in the style menu */
+  styleNames: Partial<Record<'normal' | 'title' | 'subtitle' | 'quote' | 'intense quote' | 'list paragraph' | 'no spacing', string>> & {
+    heading?: (level: string) => string;
+  };
   /** Default file name for `openBlank()` */
   untitled: string;
   /** Labels shown on the header and footer while editing them */
@@ -520,8 +548,44 @@ export class DocxEditor extends EventTarget {
   toggleBold(): void;
   toggleItalic(): void;
   toggleUnderline(): void;
+  toggleStrikethrough(): void;
+  /** Superscript on or off (back to the baseline) */
+  toggleSuperscript(): void;
+  /** Subscript on or off (back to the baseline) */
+  toggleSubscript(): void;
   setColor(hex: string, options?: { refocus?: boolean }): void;
+  /** Font of the selection (or of the paragraph at the caret), e.g. "Arial" */
+  setFontFamily(family: string, options?: { refocus?: boolean }): void;
+  /** Font size in points (1–1638) */
+  setFontSize(points: number, options?: { refocus?: boolean }): void;
+  /** Each character to the next (`step` > 0) or previous size of Word's size list */
+  changeFontSize(step: number): void;
+  /** Fonts the document uses, then common Office fonts */
+  fontFamilies(): string[];
+  /** One of Word's highlight colors ("#FFFF00"; other colors use the closest), or null to remove it */
+  setHighlight(color: string | null, options?: { refocus?: boolean }): void;
+  /**
+   * Removes direct character formatting (font, size, bold, italic, underline, strikethrough,
+   * superscript/subscript, color, highlight) so the paragraph style shows again
+   */
+  clearFormatting(): void;
   setAlignment(align: Alignment): void;
+  /** Paragraph styles for a style menu, default style first; Title and Heading 1–3 are always offered */
+  paragraphStyles(): ParagraphStyle[];
+  /** Applies a paragraph style (an id from `paragraphStyles()`) to the selected paragraphs */
+  setParagraphStyle(id: string): void;
+  /** Line spacing as a multiple of single spacing: 1, 1.15, 1.5, 2… */
+  setLineSpacing(multiple: number): void;
+  /** Space before and/or after the selected paragraphs, in points */
+  setParagraphSpacing(spacing: { before?: number; after?: number }): void;
+  /** List items go one level down; other paragraphs move 0.5" right */
+  indent(): void;
+  /** List items go one level up; other paragraphs move 0.5" left */
+  outdent(): void;
+  /** Bulleted or numbered list, or `'none'` to take the paragraphs out of it */
+  setList(kind: ListKind | 'none'): void;
+  toggleBulletList(): void;
+  toggleNumberedList(): void;
   /**
    * Inserts paragraphs as one undo step and leaves the caret after them. Existing text before
    * and after the insertion point keeps its own paragraphs.
@@ -714,8 +778,10 @@ export class DocxEditor extends EventTarget {
 }
 
 export type ToolbarItem =
-  | 'undo' | 'redo' | 'bold' | 'italic' | 'underline' | 'color'
-  | 'left' | 'center' | 'right' | 'both' | 'imageWrap' | 'zoom' | '|';
+  | 'undo' | 'redo' | 'style' | 'font' | 'fontSize'
+  | 'bold' | 'italic' | 'underline' | 'strike' | 'superscript' | 'subscript' | 'color' | 'highlight' | 'clearFormat'
+  | 'left' | 'center' | 'right' | 'both' | 'lineSpacing'
+  | 'bulletList' | 'numberedList' | 'outdent' | 'indent' | 'imageWrap' | 'zoom' | '|';
 
 export const DEFAULT_TOOLBAR_ITEMS: ToolbarItem[];
 

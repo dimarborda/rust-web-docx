@@ -43,7 +43,7 @@ impl DocxModifier {
 
     /// Id of the document's style for `kind` (Title, Heading1–3): the one Word already defines
     /// under its built-in name (e.g. "Ttulo1" in Spanish documents) or a new one added here
-    fn ensure_heading_style(&mut self, kind: &str) -> Result<String, String> {
+    pub(super) fn ensure_heading_style(&mut self, kind: &str) -> Result<String, String> {
         let (id, name, definition) = HEADING_STYLES
             .iter()
             .find(|(id, _, _)| *id == kind)

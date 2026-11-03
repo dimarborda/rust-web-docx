@@ -52,6 +52,14 @@ pub struct RunInfo {
     pub color: String,
     pub font_size: Option<f64>,
     pub font_family: Option<String>,
+    #[serde(default)]
+    pub strike: bool,
+    /// "superscript" or "subscript"; `None` on the baseline
+    #[serde(default)]
+    pub vert_align: Option<String>,
+    /// Highlight color, hex without '#' (one of Word's highlight colors); `None` without one
+    #[serde(default)]
+    pub highlight: Option<String>,
     /// Target of the `w:hyperlink` this run is inside, resolved from its `r:id` against the
     /// part's relationships; `None` outside a hyperlink or when the relationship is missing
     #[serde(default)]
@@ -86,6 +94,15 @@ pub struct ParagraphInfo {
     /// Rendered list number/bullet ("1.", "a)", "•") with its formatting
     #[serde(default)]
     pub list_label: Option<RunInfo>,
+    /// `w:numId` of the list the paragraph belongs to (direct or from its style)
+    #[serde(default)]
+    pub num_id: Option<String>,
+    /// List level (0–8) while the paragraph is in a list
+    #[serde(default)]
+    pub list_level: Option<u32>,
+    /// "bullet" or "number" while the paragraph is in a list
+    #[serde(default)]
+    pub list_kind: Option<String>,
     /// Fixed line height in points (lineRule exact)
     #[serde(default)]
     pub line_exact: Option<f64>,
@@ -938,6 +955,9 @@ mod section_schema;
 pub use section_schema::{SchemaSection, SectionSchema, SECTION_SCHEMA_NS};
 #[path = "structure_edit.rs"]
 mod structure_edit;
+#[path = "paragraph_format.rs"]
+mod paragraph_format;
+pub use paragraph_format::StyleEntry;
 #[path = "table_edit.rs"]
 mod table_edit;
 pub use table_edit::TableSummary;
@@ -1115,7 +1135,7 @@ impl DocxModifier {
     fn after_step(&mut self, parts: &[String]) {
         self.revision += 1;
         self.parts_revision += 1;
-        if parts.iter().any(|name| name == "word/styles.xml") {
+        if parts.iter().any(|name| name == "word/styles.xml" || name == "word/numbering.xml") {
             self.reload_styles();
         }
     }
@@ -2521,6 +2541,9 @@ fn to_run_info(text: String, p: &RunProps) -> RunInfo {
         color: p.color.clone().unwrap_or_default(),
         font_size: p.font_size,
         font_family: p.font_family.clone(),
+        strike: p.strike.unwrap_or(false),
+        vert_align: p.vert_align.clone().filter(|v| v == "superscript" || v == "subscript"),
+        highlight: p.highlight.clone().filter(|h| !h.is_empty()),
         href: None,
     }
 }
@@ -2628,6 +2651,12 @@ fn resolve_paragraph(
         borders: ppr.borders.clone(),
         runs,
         list_label,
+        list_kind: num_id
+            .as_deref()
+            .and_then(|id| styles.numbering.level(id, ilvl))
+            .map(|l| if l.fmt == "bullet" { "bullet" } else { "number" }.to_string()),
+        list_level: num_id.as_ref().map(|_| ilvl),
+        num_id,
         line_exact: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("exact")),
         line_at_least: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("atLeast")),
         keep_next: ppr.keep_next.unwrap_or(false),

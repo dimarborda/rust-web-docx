@@ -900,6 +900,62 @@ impl DocxSession {
         Ok(true)
     }
 
+    /// Paragraph styles for a style gallery: `[{ "id", "name", "builtin" }]`, default style first
+    #[wasm_bindgen]
+    pub fn paragraph_styles_json(&self) -> String {
+        serde_json::to_string(&self.modifier.paragraph_styles()).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Applies a paragraph style (an id from `paragraph_styles_json`) to the paragraphs
+    /// `indices_json` (`[3, 4]`) as one undo step
+    #[wasm_bindgen]
+    pub fn set_paragraph_style(&mut self, indices_json: &str, style_id: &str) -> Result<(), JsValue> {
+        let indices = parse_indices(indices_json)?;
+        self.modifier.checkpoint(None);
+        self.modifier.set_paragraph_style(&indices, style_id).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Line spacing as a multiple of single spacing (1, 1.15, 1.5, 2) as one undo step
+    #[wasm_bindgen]
+    pub fn set_line_spacing(&mut self, indices_json: &str, multiple: f64) -> Result<(), JsValue> {
+        let indices = parse_indices(indices_json)?;
+        self.modifier.checkpoint(None);
+        self.modifier.set_line_spacing(&indices, multiple).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Space before and after the paragraphs in points (undefined keeps it) as one undo step
+    #[wasm_bindgen]
+    pub fn set_paragraph_spacing(&mut self, indices_json: &str, before: Option<f64>, after: Option<f64>) -> Result<(), JsValue> {
+        let indices = parse_indices(indices_json)?;
+        self.modifier.checkpoint(None);
+        self.modifier.set_paragraph_spacing(&indices, before, after).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Increase (`steps` > 0) or decrease indent: list items change level, other paragraphs
+    /// move by 0.5"; one undo step
+    #[wasm_bindgen]
+    pub fn change_indent(&mut self, indices_json: &str, steps: i32) -> Result<(), JsValue> {
+        let indices = parse_indices(indices_json)?;
+        self.modifier.checkpoint(None);
+        self.modifier.change_indent(&indices, steps).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Removes direct character formatting from (`p1`, `o1`) to (`p2`, `o2`) as one undo step
+    #[wasm_bindgen]
+    pub fn clear_formatting(&mut self, p1: usize, o1: usize, p2: usize, o2: usize) -> Result<(), JsValue> {
+        self.modifier.checkpoint(None);
+        self.modifier.clear_formatting(p1, o1, p2, o2).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Makes the paragraphs a "bullet" or "number" list, or takes them out of it ("none");
+    /// one undo step
+    #[wasm_bindgen]
+    pub fn set_list(&mut self, indices_json: &str, kind: &str) -> Result<(), JsValue> {
+        let indices = parse_indices(indices_json)?;
+        self.modifier.checkpoint(None);
+        self.modifier.set_list(&indices, kind).map_err(|e| JsValue::from_str(&e))
+    }
+
     /// Updates paragraph with full rich formatting (alignment, color, bold, italic, text)
     #[wasm_bindgen]
     pub fn update_paragraph_rich(
@@ -1055,4 +1111,8 @@ impl DocxSession {
         let bytes = self.modifier.to_bytes().map_err(|e| JsValue::from_str(&e))?;
         Ok(js_sys::Uint8Array::from(&bytes[..]))
     }
+}
+
+fn parse_indices(json: &str) -> Result<Vec<usize>, JsValue> {
+    serde_json::from_str(json).map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))
 }

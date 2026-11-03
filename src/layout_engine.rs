@@ -54,6 +54,18 @@ pub struct TextRun {
     /// link annotation at this run's position)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strike: bool,
+    /// Highlight color (hex without '#') drawn behind the run
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<String>,
+    /// Vertical shift of the baseline in px (negative raises superscript, positive lowers subscript)
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub baseline_shift: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1761,7 +1773,7 @@ fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize,
                     width: geo.label_width,
                     x: b.left + geo.label_offset + b.label_shift,
                     start: 0,
-                    href: None,
+                    ..Default::default()
                 }],
                 line: None,
             });
@@ -2032,6 +2044,9 @@ struct LayoutSegment {
     font_family: Option<String>,
     /// Target of the `w:hyperlink` this segment is inside, if any
     href: Option<String>,
+    strike: bool,
+    highlight: Option<String>,
+    baseline_shift: f64,
 }
 
 enum AtomicUnit {
@@ -2044,6 +2059,9 @@ enum AtomicUnit {
     Image(usize),
 }
 
+/// Size of superscript and subscript text relative to the run's size
+const SCRIPT_SCALE: f64 = 2.0 / 3.0;
+
 /// Splits runs into words, spaces and breaks, remembering where each piece starts in the text
 fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> Vec<LayoutSegment> {
     let mut segments = Vec::new();
@@ -2051,6 +2069,14 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
 
     for r in runs {
         let color = css_color(&r.color, default_color);
+        // Word draws superscript and subscript at 2/3 of the size, raised by 1/3 of the full
+        // size or lowered by about 1/7 (measured on Word's output)
+        let full_fs = r.font_size.unwrap_or(default_fs);
+        let (fs, shift) = match r.vert_align.as_deref() {
+            Some("superscript") => (full_fs * SCRIPT_SCALE, -full_fs / 3.0),
+            Some("subscript") => (full_fs * SCRIPT_SCALE, full_fs * 0.14),
+            _ => (full_fs, 0.0),
+        };
         let seg = |kind: SegmentKind, start: usize| LayoutSegment {
             kind,
             start,
@@ -2058,9 +2084,12 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
             italic: r.italic,
             underline: r.underline,
             color: color.clone(),
-            font_size: r.font_size.unwrap_or(default_fs),
+            font_size: fs,
             font_family: r.font_family.clone(),
             href: r.href.clone(),
+            strike: r.strike,
+            highlight: r.highlight.clone(),
+            baseline_shift: shift,
         };
         let mut text = String::new();
         let mut text_start = pos;
@@ -2164,6 +2193,9 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
             && last.font_size == Some(seg.font_size)
             && last.font_family == seg.font_family
             && last.href == seg.href
+            && last.strike == seg.strike
+            && last.highlight == seg.highlight
+            && last.baseline_shift == seg.baseline_shift
             && last.text != "\t"
             && last.start + last.text.chars().count() == seg.start
         {
@@ -2184,6 +2216,9 @@ fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegme
         x: 0.0,
         start: seg.start,
         href: seg.href.clone(),
+        strike: seg.strike,
+        highlight: seg.highlight.clone(),
+        baseline_shift: seg.baseline_shift,
     });
 }
 
@@ -2310,7 +2345,7 @@ fn layout_paragraph_lines(
             color: if !p.color.is_empty() { p.color.clone() } else { default_color.to_string() },
             font_size: p.font_size.map(|pt| pt * PX_PER_PT),
             font_family: p.font_family.clone(),
-            href: None,
+            ..Default::default()
         }]
     };
     let total_chars = source_runs.iter().map(|r| r.text.chars().count()).sum::<usize>();
@@ -2394,7 +2429,7 @@ fn layout_paragraph_lines(
                     width: tab_w,
                     x: 0.0,
                     start: at,
-                    href: None,
+                    ..Default::default()
                 });
                 line_w += tab_w;
                 just_wrapped = false;

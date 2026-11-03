@@ -26,6 +26,8 @@ const TYPING_GROUP_MS = 1500;
  * @param {Function} env.measure             text measurer passed to Rust
  * @param {() => void} env.documentChanged   re-render after an edit
  * @param {(sel) => void} env.selectionChanged
+ * @param {(key: 'Tab'|'Enter'|'Backspace', shift: boolean) => boolean} [env.listKey]  handles
+ *        the key in a list item (level change, end of the list); true when it did
  * @param {(msg: string) => void} env.hint
  * @param {HTMLElement} env.root             element that hosts the hidden input
  * @param {object} env.labels                { editor, nothingToUndo, nothingToRedo }
@@ -714,6 +716,13 @@ export function createCanvasEditor(env) {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     let handled = true;
     let moved = true; // caret moved without editing: start a new undo group
+
+    // List items: Tab changes the level, Enter on an empty item ends the list
+    if ((key === 'Tab' || key === 'Enter' || key === 'Backspace') && !mod && !e.altKey && env.listKey?.(key, e.shiftKey)) {
+      e.preventDefault();
+      goalX = null;
+      return;
+    }
 
     switch (key) {
       case 'ArrowLeft':

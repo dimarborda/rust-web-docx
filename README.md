@@ -29,6 +29,7 @@ Abre un `.docx`, edítalo directamente sobre la página, rellena variables de pl
 - **Celdas combinadas.** Celdas que ocupan varias columnas (`gridSpan`) o varias filas (`vMerge`), dibujadas como una sola y sin partirse entre páginas cuando caben.
 - **Imágenes editables.** Se seleccionan con un clic, se redimensionan con las asas, las flotantes se arrastran y cambian de ajuste, y todo está disponible desde código (`resizeImage`, `moveImage`, `setImageWrap`, `updateImage`).
 - **Valores por defecto de Word.** Lo que el documento no especifica se dibuja como lo haría Word (Times New Roman 10 pt, sin bordes inventados), en lugar de "mejorarlo".
+- **Formato de un procesador de texto.** Estilos de párrafo (Normal, Título, Título 1–3 y los del documento), fuente y tamaño, tachado, superíndice y subíndice, resaltado con los colores de Word, borrar formato, interlineado, sangría y listas con viñetas o numeradas en varios niveles. Se escriben como lo haría Word, creando la numeración si el documento no la tenía.
 - **Buscar y reemplazar** con mayúsculas/minúsculas y expresiones regulares.
 - **Exportar a PDF** vectorial, con texto seleccionable y las fuentes incrustadas, tal como se ve en el editor.
 - **Privado por diseño.** Lectura del ZIP, análisis XML, maquetación, edición y reempaquetado ocurren en la memoria del navegador.
@@ -148,6 +149,15 @@ npm run release -- minor
 | `⌘Z` / `Ctrl+Z` | Deshacer |
 | `⌘⇧Z` / `Ctrl+Y` | Rehacer |
 | `⌘B` `⌘I` `⌘U` | Negrita, cursiva, subrayado |
+| `⌘⇧X` | Tachado |
+| `⌘.` / `⌘,` | Superíndice / subíndice |
+| `⌘⇧>` / `⌘⇧<` | Aumentar / reducir el tamaño de fuente |
+| `⌘\` / `Ctrl+Espacio` | Borrar formato |
+| `⌘⌥1`–`3` / `⌘⌥0` | Título 1–3 / Normal |
+| `⌘⇧8` / `⌘⇧7` | Viñetas / numeración |
+| `Tab` / `Shift+Tab` al inicio de un elemento de lista | Bajar / subir de nivel |
+| `Enter` en un elemento de lista vacío | Terminar la lista |
+| `⌘]` / `⌘[` | Aumentar / disminuir sangría |
 | `⌘F` / `Ctrl+F` | Buscar y reemplazar |
 | `⌘S` / `Ctrl+S` | Descargar el `.docx` |
 | Clic en una imagen | Seleccionarla (asas para cambiar el tamaño; las esquinas mantienen la proporción, `Shift` la libera) |

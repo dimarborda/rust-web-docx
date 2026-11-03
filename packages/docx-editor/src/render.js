@@ -237,34 +237,48 @@ function drawText(ctx, item) {
         return;
       }
       const color = cssColor(run.color || item.color);
-      ctx.font = canvasFont(run.bold ? '700' : '400', run.italic ? 'italic' : 'normal',
-        run.font_size || item.font_size || 14.66, run.font_family || item.font_family);
-      ctx.fillStyle = color;
+      const size = run.font_size || item.font_size || 14.66;
+      ctx.font = canvasFont(run.bold ? '700' : '400', run.italic ? 'italic' : 'normal', size, run.font_family || item.font_family);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
+      // Superscript and subscript sit above or below the line's baseline
+      const y = item.y + (run.baseline_shift || 0);
 
+      // Where each word goes (justified lines widen their spaces)
+      const pieces = [];
       let curX = startX;
       if (extra > 0 && run.text.includes(' ')) {
         run.text.split(' ').forEach((word, i) => {
           if (i > 0) curX += ctx.measureText(' ').width + extra;
           if (word) {
-            ctx.fillText(word, curX, item.y);
+            pieces.push([word, curX]);
             curX += ctx.measureText(word).width;
           }
         });
       } else {
-        ctx.fillText(run.text, curX, item.y);
+        pieces.push([run.text, curX]);
         curX += ctx.measureText(run.text).width;
       }
 
-      if (run.underline) {
+      if (run.highlight) {
+        // Behind the glyphs, from the ascent to the descent of the run's full-size font
+        const full = run.baseline_shift ? size * 1.5 : size;
+        ctx.fillStyle = cssColor(run.highlight);
+        ctx.fillRect(startX, item.y - full * 0.92, curX - startX, full * 1.17);
+      }
+      ctx.fillStyle = color;
+      pieces.forEach(([text, x]) => ctx.fillText(text, x, y));
+
+      const rule = offset => {
         ctx.beginPath();
-        ctx.moveTo(startX, item.y + 2);
-        ctx.lineTo(curX, item.y + 2);
+        ctx.moveTo(startX, y + offset);
+        ctx.lineTo(curX, y + offset);
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.stroke();
-      }
+      };
+      if (run.underline) rule(2);
+      if (run.strike) rule(-size * 0.3);
       nextX = curX;
     });
   } else if (item.text) {

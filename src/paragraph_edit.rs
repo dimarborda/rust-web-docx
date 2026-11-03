@@ -1,14 +1,14 @@
 //! Lossless paragraph editing.
 //!
 //! The editor only models text plus a handful of run properties (bold, italic,
-//! underline, color, size, font). Instead of regenerating a paragraph from that
+//! underline, strikethrough, superscript/subscript, highlight, color, size, font). Instead of regenerating a paragraph from that
 //! reduced model, an edit is applied as a minimal diff on the original XML:
 //! untouched runs are copied byte-for-byte, changed runs keep their full `w:rPr`
 //! (highlight, rStyle, lang, ...), and everything that is not text — hyperlinks,
 //! fields, bookmarks, comments, drawings — stays exactly where it was.
 
 use crate::docx_parser::{break_char, general_ref_text, parse_paragraph_with, tag_is, unescaped, ParagraphInfo, RunInfo, PAGE_BREAK};
-use crate::styles::StyleSheet;
+use crate::styles::{highlight_name, StyleSheet};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::ops::Range;
@@ -22,6 +22,14 @@ pub struct FormatTarget {
     pub color: Option<String>,
     pub font_size: Option<f64>,
     pub font_family: Option<String>,
+    pub strike: Option<bool>,
+    /// "superscript", "subscript" or "" (baseline)
+    pub vert_align: Option<String>,
+    /// Hex color, or "" for no highlight
+    pub highlight: Option<String>,
+    /// Removes the run's direct formatting of every property above (clear formatting), so
+    /// the paragraph and character styles show through; the other fields are ignored
+    pub clear: bool,
 }
 
 impl FormatTarget {
@@ -33,11 +41,18 @@ impl FormatTarget {
             color: Some(run.color.clone()),
             font_size: run.font_size,
             font_family: run.font_family.clone(),
+            strike: Some(run.strike),
+            vert_align: Some(run.vert_align.clone().unwrap_or_default()),
+            highlight: Some(run.highlight.clone().unwrap_or_default()),
+            clear: false,
         }
     }
 
     /// Keeps only the properties that differ from `base`; `None` when nothing changes
     fn diff_against(&self, base: &RunInfo) -> Option<FormatTarget> {
+        if self.clear {
+            return Some(FormatTarget { clear: true, ..Default::default() });
+        }
         let mut d = FormatTarget::default();
         if self.bold.is_some_and(|b| b != base.bold) {
             d.bold = self.bold;
@@ -63,6 +78,20 @@ impl FormatTarget {
                 d.font_family = Some(fam.clone());
             }
         }
+        if self.strike.is_some_and(|s| s != base.strike) {
+            d.strike = self.strike;
+        }
+        if let Some(v) = &self.vert_align {
+            let v = normalize_vert_align(v);
+            if v != base.vert_align.as_deref().map_or("", normalize_vert_align) {
+                d.vert_align = Some(v.to_string());
+            }
+        }
+        if let Some(h) = &self.highlight {
+            if normalize_color(h) != normalize_color(base.highlight.as_deref().unwrap_or("")) {
+                d.highlight = Some(normalize_color(h));
+            }
+        }
         if d == FormatTarget::default() {
             None
         } else {
@@ -77,6 +106,14 @@ fn normalize_color(c: &str) -> String {
         String::new()
     } else {
         c
+    }
+}
+
+fn normalize_vert_align(v: &str) -> &'static str {
+    match v {
+        "superscript" => "superscript",
+        "subscript" => "subscript",
+        _ => "",
     }
 }
 
@@ -96,6 +133,12 @@ const RPR_ORDER: &[&str] = &[
     "color", "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect",
     "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
     "specVanish", "oMath", "rPrChange",
+];
+
+/// Direct run formatting removed by "clear formatting": what the editor models (character
+/// styles such as a hyperlink's stay)
+const CLEARED_RPR: &[&str] = &[
+    "rFonts", "b", "bCs", "i", "iCs", "strike", "dstrike", "color", "sz", "szCs", "highlight", "u", "vertAlign",
 ];
 
 /// Canonical child order of `w:pPr` (CT_PPr)
@@ -454,6 +497,44 @@ pub fn set_paragraph_property(p_xml: &str, local: &str, element: Option<&str>) -
         format!("<w:pPr>{}</w:pPr>", kids.into_iter().map(|(_, x)| x).collect::<String>())
     };
     Ok(format!("{}{}{}{}", parts.start, ppr, parts.content, parts.end))
+}
+
+/// Sets or removes (`None`) attributes of one empty child of `w:pPr` (`spacing`, `ind`),
+/// keeping its other attributes; the child is created when missing and dropped when it
+/// ends up without attributes. Names are local (`"line"` → `w:line`).
+pub fn set_paragraph_attrs(p_xml: &str, local: &str, changes: &[(&str, Option<String>)]) -> Result<String, String> {
+    let tokens = tokenize(p_xml)?;
+    let parts = paragraph_parts(&tokens, p_xml)?;
+    let mut attrs: Vec<(String, String)> = Vec::new();
+    if !parts.ppr.is_empty() {
+        let ppr_tokens = tokenize(&parts.ppr)?;
+        if let Some((_, kid)) = children(&ppr_tokens, &parts.ppr, 0, ppr_tokens.len() - 1)
+            .into_iter()
+            .find(|(n, _)| n == local)
+        {
+            let kid_tokens = tokenize(&kid)?;
+            if let Some(Event::Start(e) | Event::Empty(e)) = kid_tokens.first().map(|t| &t.ev) {
+                for a in e.attributes().flatten() {
+                    let key = a.key.as_ref().to_string();
+                    let value = a.value.to_string();
+                    attrs.push((key, value));
+                }
+            }
+        }
+    }
+    for (name, value) in changes {
+        attrs.retain(|(k, _)| local_name_of(k) != *name);
+        if let Some(v) = value {
+            attrs.push((format!("w:{}", name), escape_attr(v)));
+        }
+    }
+    let element = if attrs.is_empty() {
+        None
+    } else {
+        let list: String = attrs.iter().map(|(k, v)| format!(" {}=\"{}\"", k, v)).collect();
+        Some(format!("<w:{}{}/>", local, list))
+    };
+    set_paragraph_property(p_xml, local, element.as_deref())
 }
 
 /// Removes markers whose ids must stay unique in the document (bookmarks, comment ranges,
@@ -913,7 +994,7 @@ fn paragraph_base_format(info: &ParagraphInfo) -> RunInfo {
         color: info.color.clone(),
         font_size: info.font_size,
         font_family: info.font_family.clone(),
-        href: None,
+        ..Default::default()
     }
 }
 
@@ -1002,6 +1083,9 @@ fn patch_rpr(kids: &mut Vec<(String, String)>, prefix: &str, diff: &FormatTarget
         }
     };
 
+    if diff.clear {
+        kids.retain(|(n, _)| !CLEARED_RPR.contains(&n.as_str()));
+    }
     if let Some(b) = diff.bold {
         set(kids, "b", Some(if b { el("b", "") } else { el("b", &val("0")) }));
     }
@@ -1025,6 +1109,16 @@ fn patch_rpr(kids: &mut Vec<(String, String)>, prefix: &str, diff: &FormatTarget
             qualified(prefix, "hAnsi")
         );
         set(kids, "rFonts", Some(el("rFonts", &attrs)));
+    }
+    if let Some(on) = diff.strike {
+        kids.retain(|(n, _)| n != "dstrike");
+        set(kids, "strike", Some(if on { el("strike", "") } else { el("strike", &val("0")) }));
+    }
+    if let Some(v) = &diff.vert_align {
+        set(kids, "vertAlign", if v.is_empty() { None } else { Some(el("vertAlign", &val(v))) });
+    }
+    if let Some(h) = &diff.highlight {
+        set(kids, "highlight", if h.is_empty() { None } else { Some(el("highlight", &val(highlight_name(h)))) });
     }
     sort_children(kids, RPR_ORDER);
 }
@@ -1216,6 +1310,53 @@ mod tests {
         let info = parse_paragraph_fragment(&out, &StyleSheet::default());
         let bold: Vec<(&str, bool)> = info.runs.iter().map(|r| (r.text.as_str(), r.bold)).collect();
         assert_eq!(bold, vec![("uno ", false), ("dos", true), (" tres", false)]);
+    }
+
+    #[test]
+    fn test_strike_script_and_highlight_round_trip() {
+        let p = r#"<w:p><w:r><w:rPr><w:lang w:val="es-ES"/></w:rPr><w:t>H2O y E=mc2</w:t></w:r></w:p>"#;
+        let styles = StyleSheet::default();
+        let info = parse_paragraph_fragment(p, &styles);
+        let mut runs = vec![info.runs[0].clone(); 3];
+        runs[0].text = "H".into();
+        runs[1].text = "2".into();
+        runs[1].vert_align = Some("subscript".into());
+        runs[2].text = "O y E=mc2".into();
+        runs[2].strike = true;
+        runs[2].highlight = Some("FFF200".into()); // closest Word color: yellow
+        let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+        let formats: Vec<FormatTarget> = runs
+            .iter()
+            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .collect();
+        let out = edit_paragraph(p, &styles, &text, Some(&formats), None).unwrap();
+        // Schema order: vertAlign goes before lang
+        assert!(out.contains(r#"<w:rPr><w:vertAlign w:val="subscript"/><w:lang w:val="es-ES"/></w:rPr>"#), "{}", out);
+        assert!(out.contains(r#"<w:strike/>"#) && out.contains(r#"<w:highlight w:val="yellow"/>"#), "{}", out);
+
+        let back = parse_paragraph_fragment(&out, &styles);
+        let got: Vec<(&str, bool, Option<&str>, Option<&str>)> = back
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), r.strike, r.vert_align.as_deref(), r.highlight.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("H", false, None, None), ("2", false, Some("subscript"), None), ("O y E=mc2", true, None, Some("FFFF00"))]
+        );
+
+        // Clearing them removes the elements (strike is switched off explicitly, as Word does)
+        let cleared: Vec<FormatTarget> = back
+            .runs
+            .iter()
+            .flat_map(|r| {
+                let plain = RunInfo { strike: false, vert_align: None, highlight: None, ..r.clone() };
+                std::iter::repeat(FormatTarget::from_run(&plain)).take(r.text.chars().count())
+            })
+            .collect();
+        let out = edit_paragraph(&out, &styles, &text, Some(&cleared), None).unwrap();
+        assert!(!out.contains("vertAlign") && !out.contains("highlight"), "{}", out);
+        assert!(parse_paragraph_fragment(&out, &styles).runs.iter().all(|r| !r.strike));
     }
 
     #[test]

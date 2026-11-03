@@ -50,6 +50,17 @@ const btnFmtBold = $('btn-fmt-bold');
 const btnFmtItalic = $('btn-fmt-italic');
 const btnFmtUnderline = $('btn-fmt-underline');
 const textColorInput = $('text-color-input');
+const fmtToggles = {
+  strike: $('btn-fmt-strike'),
+  superscript: $('btn-fmt-superscript'),
+  subscript: $('btn-fmt-subscript'),
+};
+const styleSelect = $('fmt-style');
+const fontInput = $('fmt-font');
+const sizeInput = $('fmt-size');
+const lineSpacingSelect = $('fmt-line-spacing');
+const listButtons = { bullet: $('btn-list-bullet'), number: $('btn-list-number') };
+const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 const alignButtons = {
   left: $('btn-align-left'),
   center: $('btn-align-center'),
@@ -225,6 +236,33 @@ function updateRibbon(format) {
   btnFmtUnderline?.classList.toggle('active', format.underline);
   Object.entries(alignButtons).forEach(([align, btn]) => btn?.classList.toggle('active', align === format.align));
   if (format.color) textColorInput.value = format.color;
+  Object.entries(fmtToggles).forEach(([flag, btn]) => btn.classList.toggle('active', !!format[flag]));
+  Object.entries(listButtons).forEach(([kind, btn]) => btn.classList.toggle('active', format.list === kind));
+  document.querySelectorAll('.highlight-swatch-dot').forEach(dot => {
+    dot.classList.toggle('active', (dot.dataset.highlight || null) === format.highlight);
+  });
+  // Fields being edited keep what the user is typing
+  if (document.activeElement !== fontInput) fontInput.value = format.fontFamily || '';
+  if (document.activeElement !== sizeInput) sizeInput.value = format.fontSize ? String(format.fontSize).replace('.', ',') : '';
+  showParagraphStyle(format.style);
+  const spacing = [...lineSpacingSelect.options].find(o => Math.abs(Number(o.value) - (format.lineSpacing ?? 1)) < 0.01);
+  lineSpacingSelect.value = spacing ? spacing.value : '';
+}
+
+/** Fills the style menu again (applying Heading 1 the first time adds it to the document) */
+function refreshParagraphStyles() {
+  if (!editor?.hasDocument) return;
+  const current = styleSelect.value;
+  styleSelect.replaceChildren(...editor.paragraphStyles().map(s => new Option(s.name, s.id)));
+  styleSelect.value = current;
+  if (styleSelect.selectedIndex < 0) styleSelect.selectedIndex = 0;
+}
+
+function showParagraphStyle(id) {
+  const has = value => [...styleSelect.options].some(o => o.value === value);
+  if (id && !has(id)) refreshParagraphStyles();
+  // A paragraph in the default style may carry no id
+  styleSelect.value = has(id) ? id : styleSelect.options[0]?.value ?? '';
 }
 
 // ---------- Selected picture ----------
@@ -457,6 +495,7 @@ function setupEventListeners() {
   editor.addEventListener('load', onDocumentLoaded);
   editor.addEventListener('change', onDocumentChanged);
   editor.addEventListener('selectionchange', e => updateRibbon(e.detail.format));
+  editor.addEventListener('load', refreshParagraphStyles);
   editor.addEventListener('imageselect', e => updateImageTools(e.detail.image));
   editor.addEventListener('message', e => showToast(e.detail.message, e.detail.error));
 
@@ -523,6 +562,39 @@ function setupEventListeners() {
     textColorInput.value = dot.dataset.color;
     editor.setColor(dot.dataset.color);
   }));
+  document.querySelectorAll('.highlight-swatch-dot').forEach(dot => dot.addEventListener('click', () => {
+    editor.setHighlight(dot.dataset.highlight || null);
+  }));
+  $('btn-fmt-strike').addEventListener('click', () => editor.toggleStrikethrough());
+  $('btn-fmt-superscript').addEventListener('click', () => editor.toggleSuperscript());
+  $('btn-fmt-subscript').addEventListener('click', () => editor.toggleSubscript());
+  $('btn-fmt-clear').addEventListener('click', () => editor.clearFormatting());
+  listButtons.bullet.addEventListener('click', () => editor.toggleBulletList());
+  listButtons.number.addEventListener('click', () => editor.toggleNumberedList());
+  $('btn-outdent').addEventListener('click', () => editor.outdent());
+  $('btn-indent').addEventListener('click', () => editor.indent());
+
+  // Style, font, size and line spacing: fields and menus take the focus, so the document
+  // gets it back once the value is applied
+  styleSelect.addEventListener('mousedown', refreshParagraphStyles);
+  styleSelect.addEventListener('change', () => editor.setParagraphStyle(styleSelect.value));
+  $('fmt-size-list').replaceChildren(...FONT_SIZES.map(v => new Option(String(v).replace('.', ','))));
+  fontInput.addEventListener('focus', () => {
+    $('fmt-font-list').replaceChildren(...editor.fontFamilies().map(f => new Option(f)));
+    fontInput.select();
+  });
+  sizeInput.addEventListener('focus', () => sizeInput.select());
+  fontInput.addEventListener('change', () => {
+    if (fontInput.value.trim()) editor.setFontFamily(fontInput.value);
+  });
+  sizeInput.addEventListener('change', () => {
+    const size = parseFloat(sizeInput.value.replace(',', '.'));
+    if (size > 0) editor.setFontSize(size);
+  });
+  [fontInput, sizeInput].forEach(input => input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') editor.focus();
+  }));
+  lineSpacingSelect.addEventListener('change', () => editor.setLineSpacing(Number(lineSpacingSelect.value)));
 
   // Table
   $('btn-insert-table').addEventListener('click', () => show(tableModal));

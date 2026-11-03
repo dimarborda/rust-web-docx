@@ -139,6 +139,23 @@
 
     <!-- Secondary Rich Formatting Ribbon (Word/Docs Style) -->
     <nav class="formatting-ribbon" id="formatting-ribbon" style="display: none;">
+      <!-- Paragraph style, font and size -->
+      <div class="ribbon-group">
+        <label class="ribbon-field" title="Estilo de párrafo (Ctrl/Cmd + Alt + 1–3 títulos, 0 normal)">
+          <select id="fmt-style" class="ribbon-style"></select>
+        </label>
+        <label class="ribbon-field" title="Fuente">
+          <input id="fmt-font" class="ribbon-font" list="fmt-font-list" autocomplete="off" placeholder="Fuente" />
+          <datalist id="fmt-font-list"></datalist>
+        </label>
+        <label class="ribbon-field" title="Tamaño de fuente (Ctrl/Cmd + Shift + &gt; / &lt;)">
+          <input id="fmt-size" class="ribbon-size" list="fmt-size-list" autocomplete="off" inputmode="decimal" />
+          <datalist id="fmt-size-list"></datalist>
+        </label>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
       <div class="ribbon-group">
         <button id="btn-fmt-bold" class="ribbon-btn" title="Negrita (Ctrl/Cmd + B)">
           <strong>B</strong>
@@ -148,6 +165,18 @@
         </button>
         <button id="btn-fmt-underline" class="ribbon-btn" title="Subrayado (Ctrl/Cmd + U)">
           <u>U</u>
+        </button>
+        <button id="btn-fmt-strike" class="ribbon-btn" title="Tachado (Ctrl/Cmd + Shift + X)">
+          <s>S</s>
+        </button>
+        <button id="btn-fmt-superscript" class="ribbon-btn" title="Superíndice (Ctrl/Cmd + .)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 19 8-8"/><path d="m12 19-8-8"/><path d="M20 12h-4c0-1.5.44-2 1.5-2.5S20 8.33 20 7c0-.47-.17-.93-.48-1.29a2.11 2.11 0 0 0-2.62-.44c-.42.24-.74.62-.9 1.07"/></svg>
+        </button>
+        <button id="btn-fmt-subscript" class="ribbon-btn" title="Subíndice (Ctrl/Cmd + ,)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 5 8 8"/><path d="m12 5-8 8"/><path d="M20 19h-4c0-1.5.44-2 1.5-2.5S20 15.33 20 14c0-.47-.17-.93-.48-1.29a2.11 2.11 0 0 0-2.62-.44c-.42.24-.74.62-.9 1.07"/></svg>
+        </button>
+        <button id="btn-fmt-clear" class="ribbon-btn" title="Borrar formato (Ctrl/Cmd + \)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M5 20h6"/><path d="M13 4 8 20"/><path d="m15 15 5 5"/><path d="m20 15-5 5"/></svg>
         </button>
       </div>
 
@@ -164,6 +193,20 @@
             <button class="color-swatch-dot" data-color="#0284C7" style="background: #0284C7;" title="Cian"></button>
             <button class="color-swatch-dot" data-color="#059669" style="background: #059669;" title="Verde"></button>
             <button class="color-swatch-dot" data-color="#DC2626" style="background: #DC2626;" title="Rojo"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ribbon-group">
+        <div class="color-picker-wrapper" title="Color de resaltado (colores de Word)">
+          <span class="highlight-icon-label"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg></span>
+          <div class="color-swatches">
+            <button class="highlight-swatch-dot" data-highlight="#FFFF00" style="background: #FFFF00;" title="Amarillo"></button>
+            <button class="highlight-swatch-dot" data-highlight="#00FF00" style="background: #00FF00;" title="Verde brillante"></button>
+            <button class="highlight-swatch-dot" data-highlight="#00FFFF" style="background: #00FFFF;" title="Turquesa"></button>
+            <button class="highlight-swatch-dot" data-highlight="#FF00FF" style="background: #FF00FF;" title="Rosa"></button>
+            <button class="highlight-swatch-dot" data-highlight="#C0C0C0" style="background: #C0C0C0;" title="Gris claro"></button>
+            <button class="highlight-swatch-dot none" data-highlight="" title="Sin resaltado"></button>
           </div>
         </div>
       </div>
@@ -203,6 +246,34 @@
             <line x1="21" y1="14" x2="3" y2="14"></line>
             <line x1="21" y1="18" x2="3" y2="18"></line>
           </svg>
+        </button>
+        <label class="ribbon-field" title="Interlineado">
+          <select id="fmt-line-spacing">
+            <option value="1">1,0</option>
+            <option value="1.15">1,15</option>
+            <option value="1.5">1,5</option>
+            <option value="2">2,0</option>
+            <option value="2.5">2,5</option>
+            <option value="3">3,0</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="ribbon-divider"></div>
+
+      <!-- Lists and indent -->
+      <div class="ribbon-group">
+        <button id="btn-list-bullet" class="ribbon-btn" title="Viñetas (Ctrl/Cmd + Shift + 8)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/></svg>
+        </button>
+        <button id="btn-list-number" class="ribbon-btn" title="Numeración (Ctrl/Cmd + Shift + 7)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 12h11"/><path d="M10 18h11"/><path d="M10 6h11"/><path d="M4 10h2"/><path d="M4 6h1v4"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
+        </button>
+        <button id="btn-outdent" class="ribbon-btn" title="Disminuir sangría (Shift + Tab en listas)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H11"/><path d="M21 18H11"/><path d="M21 6H11"/><path d="m7 8-4 4 4 4"/></svg>
+        </button>
+        <button id="btn-indent" class="ribbon-btn" title="Aumentar sangría (Tab en listas)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H11"/><path d="M21 18H11"/><path d="M21 6H11"/><path d="m3 8 4 4-4 4"/></svg>
         </button>
       </div>
 
@@ -279,11 +350,6 @@
           </svg>
           <span>Fondo / Marca de Agua</span>
         </button>
-      </div>
-
-      <div class="ribbon-divider"></div>
-      <div class="ribbon-hint-pill">
-        <span>💡 Haz clic en cualquier párrafo o celda para editarlo directamente</span>
       </div>
     </nav>
 

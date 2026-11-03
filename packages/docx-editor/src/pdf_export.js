@@ -88,19 +88,29 @@ async function drawRuns(ctx, item) {
     const scale = natural > 0 && run.width > 0 ? Math.min(1.5, Math.max(0.67, run.width / natural)) : 1;
     const squeeze = Math.abs(scale - 1) > 0.005;
     if (squeeze) ctx.page.pushOperators(ctx.lib.pushGraphicsState(), ctx.lib.setCharacterSqueeze(scale * 100));
-    let x = run.x;
+    // Superscript and subscript sit above or below the line's baseline
+    const y = item.y + (run.baseline_shift || 0);
     const words = run.text.split(' ');
+    const spans = [];
+    let x = run.x;
     words.forEach((word, i) => {
       if (i > 0) x += face.width(' ', size) * scale + extra;
       if (word) {
-        face.draw(ctx, word, x, item.y, size, color);
+        spans.push([word, x]);
         x += face.width(word, size) * scale;
       }
     });
+    if (run.highlight) {
+      // Behind the glyphs, from the ascent to the descent of the run's full-size font
+      const full = run.baseline_shift ? size * 1.5 : size;
+      const fill = parseColor(run.highlight, ctx.lib);
+      const corner = px(ctx, run.x, item.y + full * 0.25);
+      if (fill) ctx.page.drawRectangle({ x: corner.x, y: corner.y, width: (x - run.x) * PT, height: full * 1.17 * PT, color: fill });
+    }
+    spans.forEach(([word, wx]) => face.draw(ctx, word, wx, y, size, color));
     if (squeeze) ctx.page.pushOperators(ctx.lib.popGraphicsState());
-    if (run.underline) line(ctx, run.x, item.y + 2, x, item.y + 2, run.color || item.color || '#000000', 1);
-    // A run inside a Word hyperlink becomes a real PDF /Link annotation, so tools that read
-    // the exported PDF (VEAD's signature anchors, e.g. http://anchor/Firmante1) find it
+    if (run.underline) line(ctx, run.x, y + 2, x, y + 2, run.color || item.color || '#000000', 1);
+    if (run.strike) line(ctx, run.x, y - size * 0.3, x, y - size * 0.3, run.color || item.color || '#000000', 1);
     if (run.href) addLinkAnnotation(ctx, run.href, run.x, item.y - size, x - run.x, size * 1.2);
   }
 }

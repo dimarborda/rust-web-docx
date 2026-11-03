@@ -276,9 +276,114 @@ docx-toolbar {
   cursor: pointer;
 }
 
-.docx-toolbar-select:disabled {
+.docx-toolbar-select:disabled,
+.docx-toolbar-input:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.docx-toolbar-style {
+  width: 9.5em;
+}
+
+.docx-toolbar-lineSpacing {
+  width: 4.6em;
+}
+
+.docx-toolbar-input {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--docx-toolbar-border, #e2e8f0);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: 500 0.78rem system-ui, sans-serif;
+}
+
+.docx-toolbar-font {
+  width: 9em;
+}
+
+.docx-toolbar-fontSize {
+  width: 3.6em;
+  text-align: center;
+}
+
+/* Highlight: the button applies the color under the icon, the arrow opens the palette */
+.docx-toolbar-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.docx-toolbar-group .docx-toolbar-button {
+  position: relative;
+}
+
+.docx-toolbar-swatch {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  bottom: 4px;
+  height: 3px;
+  border-radius: 1px;
+}
+
+.docx-toolbar-button.docx-toolbar-more {
+  width: 16px;
+}
+
+.docx-toolbar-more svg {
+  width: 12px;
+  height: 12px;
+}
+
+.docx-toolbar-palette {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 4px;
+  padding: 8px;
+  background: var(--docx-toolbar-bg, #ffffff);
+  border: 1px solid var(--docx-toolbar-border, #e2e8f0);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12);
+}
+
+.docx-toolbar-palette[hidden] {
+  display: none;
+}
+
+.docx-toolbar-palette-color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.docx-toolbar-palette-none {
+  grid-column: 1 / -1;
+  height: 26px;
+  border: 1px solid var(--docx-toolbar-border, #e2e8f0);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: 500 0.75rem system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.docx-toolbar-palette-none:hover {
+  background: var(--docx-toolbar-hover, #f1f5f9);
+}
+
+.docx-toolbar-palette-color:hover {
+  filter: brightness(0.9);
 }
 
 /* Activity marks (markActivity, and the highlight of changes made from code): a tinted area,
