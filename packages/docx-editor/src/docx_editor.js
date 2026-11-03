@@ -981,6 +981,38 @@ export class DocxEditor extends EventTarget {
     return { first: result.first, count: result.count };
   }
 
+  /**
+   * Deletes the blocks from paragraph `from` to `to` (both included, tables between them too)
+   * as one undo step. Throws when the range cuts a table or a content control, or holds a
+   * section break. The body keeps at least one paragraph.
+   * @returns {{count: number}}
+   */
+  deleteParagraphs({ from, to }) {
+    this.#require();
+    checkIndex('deleteParagraphs', { from, to });
+    const result = JSON.parse(engineCall(() => this.#session.delete_paragraphs(from, to, this.#selectionJSON())));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    return { count: result.count };
+  }
+
+  /**
+   * Moves the blocks from paragraph `from` to `to` (both included) in front of paragraph
+   * `before` (numbered before the move; the paragraph count moves them to the end), as one
+   * undo step and without rewriting them: formatting, pictures, links, notes and fields stay.
+   * Throws like `deleteParagraphs`, and when `before` falls inside the range or a table.
+   * @returns {{first: number, count: number}} where the moved paragraphs start now
+   */
+  moveParagraphs({ from, to }, before) {
+    this.#require();
+    checkIndex('moveParagraphs', { from, to, before });
+    const result = JSON.parse(engineCall(() => this.#session.move_paragraphs(from, to, before, this.#selectionJSON())));
+    this.#changed();
+    this.#canvasEditor.select(result.caret);
+    this.#flash(result);
+    return { first: result.first, count: result.count };
+  }
+
   // ---------- Logical sections ----------
 
   /**

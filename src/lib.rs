@@ -411,6 +411,30 @@ impl DocxSession {
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
 
+    /// Deletes the blocks from paragraph `from` to `to` (included) as one undo step (see
+    /// `DocxModifier::delete_paragraphs`). Returns `{ "count", "caret" }`.
+    #[wasm_bindgen]
+    pub fn delete_paragraphs(&mut self, from: usize, to: usize, selection_before: Option<String>) -> Result<String, JsValue> {
+        self.modifier.checkpoint(selection_before);
+        let count = self.modifier.delete_paragraphs(from, to).map_err(|e| JsValue::from_str(&e))?;
+        let left = self.modifier.extract_paragraphs().map(|p| p.len()).unwrap_or(1);
+        let caret = TextPosition { paragraph: from.min(left.saturating_sub(1)), offset: 0 };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "count": count, "caret": caret }))
+    }
+
+    /// Moves the blocks from paragraph `from` to `to` (included) in front of paragraph `before`
+    /// as one undo step, keeping their XML (see `DocxModifier::move_paragraphs`). Returns
+    /// `{ "first", "count", "caret" }`.
+    #[wasm_bindgen]
+    pub fn move_paragraphs(&mut self, from: usize, to: usize, before: usize, selection_before: Option<String>) -> Result<String, JsValue> {
+        self.modifier.checkpoint(selection_before);
+        let first = self.modifier.move_paragraphs(from, to, before).map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition { paragraph: first, offset: 0 };
+        self.modifier.set_selection_after(Some(to_json(&caret)?));
+        to_json(&serde_json::json!({ "first": first, "count": to - from + 1, "caret": caret }))
+    }
+
     /// Logical sections: `[{ "key", "title", "first", "last", "depth", "parent", "locked" }]`
     /// (see `DocxModifier::sections`)
     #[wasm_bindgen]

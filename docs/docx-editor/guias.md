@@ -142,7 +142,7 @@ Es solo de vista: no se guarda en el `.docx`, no se imprime ni sale en `download
 
 Cuando un agente modifica el documento por API, la persona que lo está leyendo debe poder ubicarse. Hay dos niveles, ambos solo de vista (no se guarda nada en el `.docx`, no mueven el cursor ni el scroll del usuario, y no cuestan nada si no se usan):
 
-- **Destello automático**: toda edición hecha desde código (`insertParagraphs`, `replaceParagraphs`, `replaceSection`, `setTableCell`, `insertTableRows`, `replaceVariables`, `fillMarker`) resalta lo que cambió durante un momento. Duración con la opción `flash` (ms, predeterminado `1800`; `false` lo desactiva).
+- **Destello automático**: toda edición hecha desde código (`insertParagraphs`, `replaceParagraphs`, `moveParagraphs`, `replaceSection`, `setTableCell`, `insertTableRows`, `replaceVariables`, `fillMarker`) resalta lo que cambió durante un momento. Duración con la opción `flash` (ms, predeterminado `1800`; `false` lo desactiva).
 - **Marca de trabajo**: `markActivity()` deja un área tintada con una barra y una etiqueta en el margen, más un chip fijo arriba del editor que indica dónde está (↑ / ↓ cuando queda fuera de la vista) y lleva hasta allí con un clic.
 
 ```js

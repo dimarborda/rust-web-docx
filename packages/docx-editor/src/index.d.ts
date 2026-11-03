@@ -627,6 +627,19 @@ export class DocxEditor extends EventTarget {
    */
   replaceParagraphs(range: { from: number; to: number }, paragraphs: string | Array<string | NewParagraph>): { first: number; count: number };
   /**
+   * Deletes the blocks from paragraph `from` to `to` (included, with the tables between them)
+   * as one undo step. Throws when the range cuts a table or a content control, or holds a
+   * section break. The body keeps at least one paragraph.
+   */
+  deleteParagraphs(range: { from: number; to: number }): { count: number };
+  /**
+   * Moves the blocks from paragraph `from` to `to` (included) in front of paragraph `before`
+   * (numbered before the move; the paragraph count moves them to the end) as one undo step,
+   * keeping their formatting, pictures, links and notes. Throws like `deleteParagraphs`, and
+   * when `before` falls inside the range or a table. `first` is where they start now.
+   */
+  moveParagraphs(range: { from: number; to: number }, before: number): { first: number; count: number };
+  /**
    * Logical sections in document order (outer before inner). Documents edited in Word keep
    * them: they are content controls tagged `section:<key>`.
    */
