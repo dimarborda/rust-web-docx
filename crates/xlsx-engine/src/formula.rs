@@ -144,7 +144,7 @@ enum Tok {
     BraceClose,
 }
 
-fn is_word_char(c: char) -> bool {
+pub(crate) fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\\' | '?')
 }
 
@@ -359,7 +359,7 @@ fn sheet_range_ahead(rest: &[char]) -> bool {
 }
 
 /// `$B$3` → corner; `None` when the word is not a cell reference
-fn parse_pos(word: &str) -> Option<Pos> {
+pub(crate) fn parse_pos(word: &str) -> Option<Pos> {
     let bytes = word.as_bytes();
     let mut i = 0;
     let col_abs = bytes.first() == Some(&b'$');
@@ -388,7 +388,7 @@ fn parse_pos(word: &str) -> Option<Pos> {
 }
 
 /// `$C` → (column, absolute); `None` when the word is not a column
-fn parse_col(word: &str) -> Option<(u32, bool)> {
+pub(crate) fn parse_col(word: &str) -> Option<(u32, bool)> {
     let (abs, letters) = match word.strip_prefix('$') {
         Some(rest) => (true, rest),
         None => (false, word),

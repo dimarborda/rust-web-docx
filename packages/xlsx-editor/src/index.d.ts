@@ -11,6 +11,8 @@ export interface XlsxEditorOptions {
   tabs?: boolean;
   /** Bar above the grid with the selected cell and its content; default true */
   formulaBar?: boolean;
+  /** Bar below the tabs with the count, sum and average of the selection; default true */
+  statusBar?: boolean;
   /** A viewer: cells are selected and copied but not edited; default false */
   readOnly?: boolean;
   /** Where `xlsx_engine_bg.wasm` is served from, when the bundler does not serve it */
@@ -30,6 +32,41 @@ export interface Selection {
   active: CellPosition;
   /** Text the active cell shows */
   text: string;
+  /** Whole rows, whole columns or the whole sheet selected from the headers */
+  whole: 'row' | 'col' | 'all' | null;
+}
+
+/** What the status bar says about the selection */
+export interface SelectionStats {
+  /** Cells that have something */
+  count: number;
+  /** Of them, numbers (dates count, as serial numbers) */
+  numbers: number;
+  /** `null` without numbers, or when an error is selected */
+  sum: number | null;
+  average: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface FindOptions {
+  matchCase?: boolean;
+  /** Only cells whose whole text matches */
+  wholeCell?: boolean;
+  /** The active sheet (default) or every worksheet */
+  scope?: 'sheet' | 'workbook';
+  /** Look in the formula of formula cells instead of the text they show */
+  inFormulas?: boolean;
+}
+
+export interface FindHit {
+  sheet: number;
+  sheetName: string;
+  ref: string;
+  row: number;
+  col: number;
+  /** The text that matched */
+  text: string;
 }
 
 /** Cells changed from the grid (typing, deleting, pasting, cutting) or by undo and redo */
@@ -39,9 +76,9 @@ export interface ChangeDetail {
   index: number;
   /** Range changed, e.g. `B3` or `A1:C4` */
   range: string;
-  /** Every cell of `range` with its new value (`null` when empty) */
+  /** Every cell of `range` with its new value (`null` when empty); empty above 200 000 cells */
   cells: { ref: string; value: CellValue }[];
-  source: 'edit' | 'clear' | 'paste' | 'cut' | 'undo' | 'redo';
+  source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'fill' | 'replace' | 'undo' | 'redo';
 }
 
 export interface XlsxEditorEventMap {
@@ -49,7 +86,7 @@ export interface XlsxEditorEventMap {
   sheetchange: CustomEvent<{ index: number; name: string }>;
   selectionchange: CustomEvent<Selection>;
   change: CustomEvent<ChangeDetail>;
-  /** A change the engine refused (e.g. overwriting the source of a shared formula) */
+  /** A change the engine refused (e.g. moving a row through merged cells) */
   error: CustomEvent<{ error: Error }>;
 }
 
@@ -65,10 +102,51 @@ export class XlsxEditor extends EventTarget {
   readonly sheetIndex: number;
   readonly sheetName: string | null;
   readonly selection: Selection | null;
+  /** Count, sum, average, smallest and largest of the selected cells; `null` when they are empty */
+  readonly selectionStats: SelectionStats | null;
   /** Without editing from the grid (selecting and copying still work) */
   readOnly: boolean;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /**
+   * Moves `count` whole rows from `first` before the row `before` (numbered as they are now), as
+   * one undo step, and selects them. False when nothing changed: it stays where it is, it is
+   * read-only, or the engine refused (an `error` event says why).
+   */
+  moveRows(first: number, count: number, before: number): boolean;
+  /** Moves whole columns, by number (see `moveRows`) */
+  moveColumns(first: number, count: number, before: number): boolean;
+  /** Inserts rows before the row `before`, as one undo step, and selects them; false if refused */
+  insertRows(before: number, count?: number): boolean;
+  /** Inserts columns, by number (see `insertRows`) */
+  insertColumns(before: number, count?: number): boolean;
+  /** Deletes rows from `first`, as one undo step; false if refused */
+  deleteRows(first: number, count?: number): boolean;
+  /** Deletes columns, by number (see `deleteRows`) */
+  deleteColumns(first: number, count?: number): boolean;
+  /** Hides `count` rows from `first`, as one undo step */
+  hideRows(first: number, count?: number): boolean;
+  /** Shows hidden rows among the `count` from `first` */
+  showRows(first: number, count?: number): boolean;
+  /** Hides columns, by number */
+  hideColumns(first: number, count?: number): boolean;
+  /** Shows hidden columns, by number */
+  showColumns(first: number, count?: number): boolean;
+  /**
+   * Fills `target` (`A1:A20`) from the selected cells, which must be at one of its ends, as one
+   * undo step, and selects it. False if refused.
+   */
+  fill(target: string, options?: { series?: boolean }): boolean;
+  /** Where a text is, row by row: `*` is any text, `?` one character and `~` takes them literally */
+  find(query: string, options?: FindOptions): FindHit[];
+  /**
+   * Replaces a text in cells with text and in formulas (never in numbers or dates), as one undo
+   * step; returns how many cells changed. Formatted runs of a rich text become plain.
+   */
+  replaceAll(query: string, replacement: string, options?: Omit<FindOptions, 'inFormulas'>): number;
+  /** Opens the search panel, with the row to replace when asked */
+  openFind(options?: { replace?: boolean }): void;
+  closeFind(): void;
   /** Undoes the last change; false when there is nothing to undo */
   undo(): boolean;
   /** Redoes the last undone change */
@@ -105,7 +183,7 @@ export class XlsxEditor extends EventTarget {
   addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void;
 }
 
-/** `<xlsx-editor src="…" locale zoom sheet tabs formula-bar readonly wasm-url blank quiet>` */
+/** `<xlsx-editor src="…" locale zoom sheet tabs formula-bar status-bar readonly wasm-url blank quiet>` */
 export class XlsxEditorElement extends HTMLElement {
   /** The editor, once the `ready` event fired */
   editor: XlsxEditor | null;

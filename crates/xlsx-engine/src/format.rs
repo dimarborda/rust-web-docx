@@ -658,6 +658,42 @@ impl Workbook {
         if !(0.0..=255.0).contains(&width) {
             return Err("El ancho de columna debe estar entre 0 y 255 caracteres.".to_string());
         }
+        let width_text = format!("{}", (width * 256.0).round() / 256.0);
+        let change = |el: &str| Some(set_attr(&set_attr(el, "width", &width_text), "customWidth", "1"));
+        let missing = format!(r#"width="{}" customWidth="1""#, width_text);
+        self.edit_columns(sheet, first, last, &change, Some(&missing))
+    }
+
+    /// Hides or shows the columns `first..=last`; their width comes back when shown. Columns made
+    /// hidden by a width of 0 go back to the default width.
+    pub fn set_columns_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), String> {
+        if hidden {
+            return self.edit_columns(sheet, first, last, &|el: &str| Some(set_attr(el, "hidden", "1")), Some(r#"width="0" hidden="1" customWidth="1""#));
+        }
+        let show = |el: &str| -> Option<String> {
+            let shown = remove_attr(el, "hidden");
+            let (zero, styled) = {
+                let mut reader = Reader::from_str(el);
+                match reader.read_event() {
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                        (get_attr_value(&e, "width").and_then(|w| w.parse::<f64>().ok()) == Some(0.0), get_attr_value(&e, "style").is_some())
+                    }
+                    _ => (false, false),
+                }
+            };
+            match (zero, styled) {
+                (false, _) => Some(shown),
+                (true, false) => None,
+                (true, true) => Some(set_attr(&remove_attr(&shown, "customWidth"), "width", "9.140625")),
+            }
+        };
+        self.edit_columns(sheet, first, last, &show, None)
+    }
+
+    /// Changes the `<col>` elements of the columns `first..=last`, splitting those that reach
+    /// beyond them: `change` gets each piece (`None` removes it), and columns no element describes
+    /// get one with the attributes `missing`, when given.
+    fn edit_columns(&mut self, sheet: usize, first: u32, last: u32, change: &dyn Fn(&str) -> Option<String>, missing: Option<&str>) -> Result<(), String> {
         let (first, last) = (first.min(last), first.max(last));
         if first == 0 || last > crate::cell_ref::MAX_COL {
             return Err("Columna fuera de la hoja.".to_string());
@@ -683,10 +719,8 @@ impl Workbook {
                 _ => (0, 0),
             }
         };
-        let width_text = format!("{}", (width * 256.0).round() / 256.0);
-        let sized = |el: &str, a: u32, b: u32| -> String {
-            let el = set_attr(&set_attr(el, "min", &a.to_string()), "max", &b.to_string());
-            set_attr(&set_attr(&el, "width", &width_text), "customWidth", "1")
+        let sized = |el: &str, a: u32, b: u32| -> Option<String> {
+            change(&set_attr(&set_attr(el, "min", &a.to_string()), "max", &b.to_string()))
         };
         let mut cols: Vec<(u32, String)> = Vec::new();
         let mut covered: Vec<(u32, u32)> = Vec::new();
@@ -700,7 +734,9 @@ impl Workbook {
                 cols.push((a, set_attr(&set_attr(el, "min", &a.to_string()), "max", &(first - 1).to_string())));
             }
             let (from, to) = (a.max(first), b.min(last));
-            cols.push((from, sized(el, from, to)));
+            if let Some(piece) = sized(el, from, to) {
+                cols.push((from, piece));
+            }
             covered.push((from, to));
             if b > last {
                 cols.push((last + 1, set_attr(&set_attr(el, "min", &(last + 1).to_string()), "max", &b.to_string())));
@@ -710,14 +746,17 @@ impl Workbook {
         covered.sort();
         let mut next = first;
         for (from, to) in covered.iter().copied().chain(std::iter::once((last + 1, last + 1))) {
-            if from > next {
-                cols.push((next, format!(r#"<{}col min="{}" max="{}" width="{}" customWidth="1"/>"#, prefix, next, from - 1, width_text)));
+            if let (true, Some(attrs)) = (from > next, missing) {
+                cols.push((next, format!(r#"<{}col min="{}" max="{}" {}/>"#, prefix, next, from - 1, attrs)));
             }
             next = next.max(to + 1);
         }
         cols.sort_by_key(|(min, _)| *min);
         let body: String = cols.into_iter().map(|(_, el)| el).collect();
         let new_xml = match cols_range {
+            // A list without elements is not valid
+            Some(r) if body.is_empty() => format!("{}{}", &xml[..r.start], &xml[r.end..]),
+            None if body.is_empty() => return Ok(()),
             Some(r) => {
                 let text = &xml[r.clone()];
                 let tag_end = text.find('>').map(|i| i + 1).unwrap_or(text.len());
@@ -730,6 +769,125 @@ impl Workbook {
             }
         };
         self.package.put(part, new_xml.into_bytes());
+        Ok(())
+    }
+
+    /// Height in points of the rows `first..=last`; `None` goes back to the automatic height
+    pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), String> {
+        if height.is_some_and(|h| !(0.0..=409.5).contains(&h)) {
+            return Err("El alto de fila debe estar entre 0 y 409,5 puntos.".to_string());
+        }
+        let text = height.map(|h| format!("{}", (h * 100.0).round() / 100.0));
+        let change = |tag: &str| -> String {
+            let tag = match &text {
+                Some(text) => set_attr(&set_attr(tag, "ht", text), "customHeight", "1"),
+                None => remove_attr(&remove_attr(tag, "ht"), "customHeight"),
+            };
+            if height.is_some_and(|h| h > 0.0) {
+                remove_attr(&tag, "hidden")
+            } else {
+                tag
+            }
+        };
+        let missing = text.as_ref().map(|t| format!(r#"ht="{}" customHeight="1""#, t));
+        self.edit_rows(sheet, first, last, &change, missing.as_deref())
+    }
+
+    /// Hides or shows the rows `first..=last`; their height comes back when shown. Rows made hidden
+    /// by a height of 0 go back to the automatic height.
+    pub fn set_rows_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), String> {
+        if hidden {
+            return self.edit_rows(sheet, first, last, &|tag: &str| set_attr(tag, "hidden", "1"), Some(r#"hidden="1""#));
+        }
+        let show = |tag: &str| -> String {
+            let zero = {
+                let mut reader = Reader::from_str(tag);
+                match reader.read_event() {
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, "ht").and_then(|h| h.parse::<f64>().ok()) == Some(0.0),
+                    _ => false,
+                }
+            };
+            let shown = remove_attr(tag, "hidden");
+            if zero {
+                remove_attr(&remove_attr(&shown, "ht"), "customHeight")
+            } else {
+                shown
+            }
+        };
+        self.edit_rows(sheet, first, last, &show, None)
+    }
+
+    /// Changes the start tag of the rows `first..=last`: `change` gets each one, and rows the sheet
+    /// does not have get an empty element with the attributes `missing`, when given.
+    fn edit_rows(&mut self, sheet: usize, first: u32, last: u32, change: &dyn Fn(&str) -> String, missing: Option<&str>) -> Result<(), String> {
+        let (first, last) = (first.min(last), first.max(last));
+        if first == 0 || last > crate::cell_ref::MAX_ROW {
+            return Err("Fila fuera de la hoja.".to_string());
+        }
+        let part = self.worksheet_part(sheet)?;
+        let xml = self.package.get_string(&part)?;
+        let parsed = SheetXml::parse(&xml)?;
+        let prefix = parsed.prefix();
+        let new_rows = |from: u32, to: u32, out: &mut String| {
+            if let Some(attrs) = missing {
+                for number in from..=to {
+                    out.push_str(&format!(r#"<{}row r="{}" {}/>"#, prefix, number, attrs));
+                }
+            }
+        };
+        let mut body = String::new();
+        let mut next = first;
+        let (inner, closing) = match parsed.data_inner() {
+            Some(inner) => (inner, false),
+            None => {
+                let end = parsed.data_end();
+                (end..end, true)
+            }
+        };
+        let mut cursor = inner.start;
+        for row in &parsed.rows {
+            let in_range = row.number >= first && row.number <= last;
+            if next <= last && row.number > next {
+                body.push_str(&xml[cursor..row.range.start]);
+                cursor = row.range.start;
+                new_rows(next, row.number.min(last + 1) - 1, &mut body);
+                next = row.number.min(last + 1);
+            }
+            if in_range {
+                next = row.number + 1;
+            }
+            if !in_range && row.has_ref {
+                continue;
+            }
+            let mut tag = xml[row.start_tag.clone()].to_string();
+            if !row.has_ref {
+                tag = set_attr(&tag, "r", &row.number.to_string());
+            }
+            if in_range {
+                tag = change(&tag);
+            }
+            body.push_str(&xml[cursor..row.start_tag.start]);
+            body.push_str(&tag);
+            cursor = row.start_tag.end;
+        }
+        let tail_at = parsed.rows.last().map(|r| r.range.end.max(cursor)).unwrap_or(inner.start);
+        body.push_str(&xml[cursor..tail_at]);
+        if next <= last {
+            new_rows(next, last, &mut body);
+        }
+        let written = if closing {
+            if body.is_empty() {
+                return Ok(());
+            }
+            // <sheetData/> opens up to hold the rows
+            let end = parsed.data_end();
+            let start = xml[..end].rfind('<').unwrap_or(end);
+            format!("{}<{p}sheetData>{}</{p}sheetData>{}", &xml[..start], body, &xml[end..], p = prefix)
+        } else {
+            format!("{}{}{}", &xml[..inner.start], body, &xml[tail_at.max(inner.start)..])
+        };
+        drop(parsed);
+        self.package.put(part, written.into_bytes());
         Ok(())
     }
 
@@ -916,6 +1074,60 @@ mod tests {
         wb.set_column_width(0, 3, 6, 8.5).unwrap();
         let layout = SheetLayout::parse(&sheet_xml(&wb)).unwrap();
         assert_eq!(layout.cols, vec![(2, 2, Some(20.0), false), (3, 4, Some(8.5), false), (5, 6, Some(8.5), false)]);
+    }
+
+    #[test]
+    fn sets_row_heights_on_existing_and_new_rows() {
+        let mut wb = blank();
+        wb.set_row_height(0, 2, 3, Some(30.0)).unwrap();
+        assert!(sheet_xml(&wb).contains(r#"<row r="2" ht="30" customHeight="1"/><row r="3" ht="30" customHeight="1"/>"#), "{}", sheet_xml(&wb));
+        wb.set_value(0, "A5", crate::workbook::CellInput::Number(1.0)).unwrap();
+        wb.set_value(0, "A1", crate::workbook::CellInput::Number(2.0)).unwrap();
+        wb.set_row_height(0, 1, 6, Some(18.5)).unwrap();
+        let rows = wb.sheet_layout(0).unwrap().rows;
+        assert_eq!(rows.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), (1..=6).map(|r| (r, Some(18.5))).collect::<Vec<_>>());
+        assert_eq!(wb.cell(0, "A5").unwrap().value, crate::workbook::CellValue::Number(1.0));
+        assert_eq!(wb.cell(0, "A1").unwrap().value, crate::workbook::CellValue::Number(2.0));
+
+        wb.set_row_height(0, 2, 5, None).unwrap();
+        let rows = wb.sheet_layout(0).unwrap().rows;
+        assert_eq!(rows.iter().map(|r| r.0).collect::<Vec<_>>(), [1, 6]);
+        assert!(wb.set_row_height(0, 1, 1, Some(500.0)).is_err());
+        assert!(wb.set_row_height(0, 0, 1, Some(10.0)).is_err());
+    }
+
+    #[test]
+    fn hides_and_shows_rows_keeping_their_height() {
+        let mut wb = blank();
+        wb.set_value(0, "A2", crate::workbook::CellInput::Number(1.0)).unwrap();
+        wb.set_row_height(0, 2, 2, Some(30.0)).unwrap();
+        wb.set_rows_hidden(0, 2, 3, true).unwrap();
+        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), true), (3, None, true)]);
+        assert_eq!(wb.cell(0, "A2").unwrap().value, crate::workbook::CellValue::Number(1.0));
+        wb.set_rows_hidden(0, 1, 5, false).unwrap();
+        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), false)]);
+
+        wb.set_row_height(0, 4, 4, Some(0.0)).unwrap();
+        wb.set_rows_hidden(0, 4, 4, false).unwrap();
+        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), false)]);
+    }
+
+    #[test]
+    fn hides_and_shows_columns_keeping_their_width() {
+        let mut wb = blank();
+        wb.set_column_width(0, 2, 16_384, 20.0).unwrap();
+        wb.set_columns_hidden(0, 1, 3, true).unwrap();
+        let cols = wb.sheet_layout(0).unwrap().cols;
+        assert_eq!(cols, vec![(1, 1, Some(0.0), true), (2, 3, Some(20.0), true), (4, 16_384, Some(20.0), false)]);
+        wb.set_columns_hidden(0, 3, 3, false).unwrap();
+        let cols = wb.sheet_layout(0).unwrap().cols;
+        assert_eq!(cols, vec![(1, 1, Some(0.0), true), (2, 2, Some(20.0), true), (3, 3, Some(20.0), false), (4, 16_384, Some(20.0), false)]);
+        // Hidden where nothing described it: back to the default, without a list left empty
+        let mut wb = blank();
+        wb.set_columns_hidden(0, 2, 2, true).unwrap();
+        wb.set_columns_hidden(0, 2, 2, false).unwrap();
+        assert!(wb.sheet_layout(0).unwrap().cols.is_empty());
+        assert!(!sheet_xml(&wb).contains("<cols"), "{}", sheet_xml(&wb));
     }
 
     #[test]

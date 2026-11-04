@@ -12,6 +12,11 @@ export function colWidthToPx(width, mdw) {
   return Math.trunc(((256 * width + Math.trunc(128 / mdw)) / 256) * mdw);
 }
 
+/** Pixels to the width in characters `colWidthToPx` turns back into those pixels */
+export function pxToColWidth(px, mdw) {
+  return Math.round((px / mdw) * 256) / 256;
+}
+
 /**
  * Default column width in pixels: `defaultColWidth` when the sheet sets it, otherwise
  * `baseColWidth` characters (8 by default) plus 5 pixels of padding, rounded up to a multiple
@@ -146,4 +151,88 @@ export function sheetAxes(layout, used, mdw, defaultRowPt = 15) {
   const rows = Math.min(MAX_ROWS, Math.max(lastRow + 100, 200));
   const cols = Math.min(MAX_COLS, Math.max(lastCol, used.maxCol) + 12);
   return { rows: new Axis(rows, rowPx, rowSizes), cols: new Axis(Math.max(cols, 26), colPx, colSizes) };
+}
+
+/**
+ * What Excel's status bar says about the cells of a range: how many have something and the sum,
+ * average, smallest and largest of the numbers. Hidden rows and columns do not count, and any
+ * error leaves only the count (as Excel does). `style` is the format of the first number. `null`
+ * when the range is empty.
+ * @param {Map<number, {kind: string, style: number, number?: number}>} cells by `row * 16385 + col`
+ * @param {{first: {row: number, col: number}, last: {row: number, col: number}}} range
+ * @param {{rows?: Axis, cols?: Axis}} [axes]
+ */
+export function rangeStats(cells, { first, last }, { rows, cols } = {}) {
+  let count = 0;
+  let numbers = 0;
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  let error = false;
+  let style = 0;
+  let firstAt = Infinity;
+  const visit = (cell, row, col) => {
+    if (!cell || !cell.kind || rows?.size(row) === 0 || cols?.size(col) === 0) return;
+    count++;
+    if (cell.kind === 'e') error = true;
+    if (cell.number === undefined) return;
+    numbers++;
+    sum += cell.number;
+    min = Math.min(min, cell.number);
+    max = Math.max(max, cell.number);
+    const at = row * 16_385 + col;
+    if (at < firstAt) {
+      firstAt = at;
+      style = cell.style;
+    }
+  };
+  // Whichever is smaller: the cells of the range or those of the sheet
+  if ((last.row - first.row + 1) * (last.col - first.col + 1) <= cells.size) {
+    for (let r = first.row; r <= last.row; r++) {
+      for (let c = first.col; c <= last.col; c++) visit(cells.get(r * 16_385 + c), r, c);
+    }
+  } else {
+    for (const [at, cell] of cells) {
+      const r = Math.floor(at / 16_385);
+      const c = at - r * 16_385;
+      if (r >= first.row && r <= last.row && c >= first.col && c <= last.col) visit(cell, r, c);
+    }
+  }
+  if (!count) return null;
+  if (error || !numbers) return { count, numbers: error ? 0 : numbers, sum: null, average: null, min: null, max: null, style };
+  return { count, numbers, sum, average: sum / numbers, min, max, style };
+}
+
+/**
+ * Where Ctrl+arrow lands from the line `from`, as Excel does: to the end of the block of filled
+ * cells it is in, else to the next filled cell, else to the end of the sheet
+ * @param {(line: number) => boolean} filled
+ * @param {number} from
+ * @param {1 | -1} step
+ * @param {number} limit last line of the sheet
+ */
+export function dataEdge(filled, from, step, limit) {
+  const inside = i => i >= 1 && i <= limit;
+  if (!inside(from + step)) return from;
+  let i = from;
+  if (filled(from) && filled(from + step)) {
+    while (inside(i + step) && filled(i + step)) i += step;
+    return i;
+  }
+  for (i = from + step; inside(i); i += step) if (filled(i)) return i;
+  return step < 0 ? 1 : limit;
+}
+
+/**
+ * The far end of the run of numbers next to the line `from`, going by `step`; null when the next
+ * line has none. Autosum takes that run.
+ * @param {(line: number) => boolean} isNumber
+ * @param {number} from
+ * @param {1 | -1} step
+ * @param {number} limit last line of the sheet
+ */
+export function numberRun(isNumber, from, step, limit) {
+  let end = null;
+  for (let i = from + step; i >= 1 && i <= limit && isNumber(i); i += step) end = i;
+  return end;
 }

@@ -26,7 +26,7 @@ export function canvasFont(font, zoom = 1) {
 }
 
 const GRIDLINE = '#d9d9d9';
-const PAD = 3; // horizontal text padding, px at zoom 1
+export const PAD = 3; // horizontal text padding, px at zoom 1
 
 /** Line width and dash of an Excel border style, at zoom 1 */
 function borderLook(style) {
@@ -341,8 +341,13 @@ export function drawHeaders(ctx, { rows, cols, colSegs, rowSegs, rowHeaderW, col
     ctx.clip();
     for (let c = seg.from; c <= seg.to; c++) {
       const size = cols.size(c) * zoom;
-      if (size === 0) continue;
       const x = seg.start + (cols.offset(c) - cols.offset(seg.from)) * zoom;
+      if (size === 0) {
+        // Where hidden columns are: a thicker line, as Excel draws it
+        ctx.fillStyle = HEADER_TEXT;
+        ctx.fillRect(Math.round(x) - 2, 0, 2, colHeaderH);
+        continue;
+      }
       const active = selection && inSel(c, selection.first.col, selection.last.col);
       if (active) {
         ctx.fillStyle = ACTIVE_BG;
@@ -364,8 +369,12 @@ export function drawHeaders(ctx, { rows, cols, colSegs, rowSegs, rowHeaderW, col
     ctx.clip();
     for (let r = seg.from; r <= seg.to; r++) {
       const size = rows.size(r) * zoom;
-      if (size === 0) continue;
       const y = seg.start + (rows.offset(r) - rows.offset(seg.from)) * zoom;
+      if (size === 0) {
+        ctx.fillStyle = HEADER_TEXT;
+        ctx.fillRect(0, Math.round(y) - 2, rowHeaderW, 2);
+        continue;
+      }
       const active = selection && inSel(r, selection.first.row, selection.last.row);
       if (active) {
         ctx.fillStyle = ACTIVE_BG;

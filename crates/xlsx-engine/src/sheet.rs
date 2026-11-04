@@ -252,6 +252,22 @@ impl<'a> SheetXml<'a> {
         &self.prefix
     }
 
+    /// Range of the text between `<sheetData>` and `</sheetData>`; `None` for `<sheetData/>`
+    pub fn data_inner(&self) -> Option<Range<usize>> {
+        match &self.data {
+            DataSpan::Open(inner) => Some(inner.clone()),
+            DataSpan::Empty(_) => None,
+        }
+    }
+
+    /// Where the worksheet goes on after its data
+    pub fn data_end(&self) -> usize {
+        match &self.data {
+            DataSpan::Open(inner) => inner.end,
+            DataSpan::Empty(whole) => whole.end,
+        }
+    }
+
     /// The sheet with the given cells replaced: each entry is the new `<c>` element, or `None`
     /// to remove the cell. Missing rows and cells are created in order; the rest of the text is
     /// copied as it was.

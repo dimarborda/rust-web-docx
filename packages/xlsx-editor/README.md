@@ -38,7 +38,18 @@ Aún no se dibujan gráficos, imágenes, formato condicional ni comentarios, y e
 | Cancelar | **Escape**. |
 | Borrar | **Supr** o **Retroceso** vacían el rango seleccionado; el formato de las celdas se queda. |
 | Copiar, cortar y pegar | **Ctrl/Cmd+C**, **X** y **V**, como texto separado por tabulaciones (TSV), el mismo que intercambian Excel y Google Sheets. Al copiar se copian los textos que muestran las celdas; si se pega en el mismo editor lo que se acaba de copiar, se pegan los valores exactos. Un bloque que cabe un número entero de veces en la selección se repite. Cortar vacía las celdas al momento (no al pegar, como hace Excel). |
-| Deshacer y rehacer | **Ctrl/Cmd+Z**, y **Ctrl/Cmd+Y** o **Cmd+Mayús+Z**. Cada edición, borrado o pegado es un paso; deshacer vuelve a la hoja y a la selección de entonces. |
+| Seleccionar filas y columnas | Clic en su encabezado (**Mayús+clic** o arrastrar para varias); clic en la esquina o **Ctrl/Cmd+A** para toda la hoja. **Ctrl+Espacio** selecciona las columnas de la selección y **Mayús+Espacio** sus filas. Al copiar o borrar solo cuentan hasta donde la hoja tiene celdas. |
+| Mover filas y columnas | Selecciónalas y arrastra su encabezado hasta el lugar que indica la línea verde (**Escape** cancela), o usa **Alt+↑ ↓** para las filas y **Alt+← →** para las columnas de la selección. Ver [Mover filas y columnas](#mover-filas-y-columnas). |
+| Insertar y eliminar filas y columnas | Clic derecho en una celda o un encabezado (también **Mayús+F10** o la tecla de menú). Con filas o columnas enteras seleccionadas, **Ctrl/Cmd+Mayús++** inserta y **Ctrl/Cmd+-** elimina. Ver [Insertar y eliminar](#insertar-y-eliminar). |
+| Cambiar ancho y alto | Arrastra el borde derecho de un encabezado de columna o el inferior de uno de fila (**Escape** cancela); doble clic en ese borde lo ajusta al contenido. Con varias seleccionadas, se aplica a todas. El menú contextual también ofrece el autoajuste. |
+| Ocultar y mostrar | Clic derecho en encabezados, o **Ctrl+9** (filas) y **Ctrl+0** (columnas); con **Mayús** se muestran. Para mostrar, selecciona las líneas de alrededor. Una línea más gruesa en el encabezado señala dónde hay ocultas. Conservan sus celdas y su tamaño. |
+| Rellenar | Arrastra el cuadrito de la esquina de la selección. Doble clic en él rellena hacia abajo hasta donde lleguen los datos de la columna vecina. **Ctrl/Cmd+D** copia hacia abajo y **Ctrl+R** hacia la derecha. Ver [Relleno](#relleno). |
+| Autosuma | **Alt+=** o el menú contextual. En una celda propone `=SUM(…)` con los números de arriba o, si no hay, de la izquierda, para confirmar con **Enter**. Con un rango seleccionado escribe la suma debajo de cada columna (o a la derecha de una sola fila), en su última línea si está vacía o en la siguiente, sin sobrescribir datos. |
+| Buscar y reemplazar | **Ctrl/Cmd+F** busca y **Ctrl+H** reemplaza; **Enter** y **Mayús+Enter** recorren los resultados. Ver [Buscar y reemplazar](#buscar-y-reemplazar). |
+| Moverse | **Ctrl/Cmd+flechas** va al borde de los datos, **Inicio** al principio de la fila, **Ctrl/Cmd+Inicio** y **Ctrl/Cmd+Fin** a las esquinas de los datos, **RePág** y **AvPág** una pantalla (con **Alt**, hacia los lados). Con **Mayús** extienden la selección. |
+| Deshacer y rehacer | **Ctrl/Cmd+Z**, y **Ctrl/Cmd+Y** o **Cmd+Mayús+Z**. Cada edición, borrado, pegado o movimiento es un paso; deshacer vuelve a la hoja y a la selección de entonces. |
+
+Con más de una celda seleccionada, la **barra de estado** muestra el promedio, el recuento y la suma, como Excel: los números con el formato del primero de ellos, sin contar filas y columnas ocultas, y solo el recuento si hay un error en la selección. `editor.selectionStats` da esos datos (y el mínimo y el máximo) desde código, y `status-bar="false"` oculta la barra. Ahí mismo aparece también el motivo de un cambio rechazado.
 
 ### Qué se guarda al escribir
 
@@ -64,7 +75,6 @@ Los valores se escriben con `sheet.setValues` del motor, que conserva el formato
 
 - **Fórmulas:** lo que empieza por `=` se guarda como fórmula y se calcula, igual que las fórmulas que dependen de ella. Se escriben en la sintaxis en inglés (`=SUM(A1:A3)`, `,` o `;` entre argumentos) en cualquier idioma del editor. Las funciones admitidas están en el [motor](#fórmulas); con otras, la celda muestra el último valor guardado y Excel la calcula al abrir el archivo (`fullCalcOnLoad`).
 - **Formato:** escribir no cambia el formato de número (salvo en fechas), y las columnas no se ensanchan solas: una fecha en una columna estrecha se ve como `####`, como en Excel.
-- No se puede sobrescribir la celda de origen de una fórmula compartida (la que usan otras celdas); el editor emite `error` y deja el libro como estaba.
 
 ### Áreas y contexto para agentes
 
@@ -84,6 +94,7 @@ Para dar formato desde código se usa `editor.workbook.sheet(…).setFormat(…)
 | `zoom` | 0.25–4 |
 | `tabs="false"` | Oculta las pestañas |
 | `formula-bar="false"` | Oculta la barra de celda |
+| `status-bar="false"` | Oculta la barra de estado |
 | `readonly` | Modo visor: se selecciona y se copia, pero no se edita (se puede quitar y poner en cualquier momento) |
 | `quiet` | No escribe los errores en la consola |
 | `wasm-url` | Dónde se sirve `xlsx_engine_bg.wasm`, si el bundler no lo hace |
@@ -180,6 +191,13 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `hoja.setFormat('A1:C3', formato)` / `hoja.clearFormat(rango)` | Da formato (ver [Formato](#formato)) o lo quita. |
 | `hoja.setColumnWidth('B:D', 14)` | Ancho de columnas en caracteres. |
 | `hoja.mergeCells('A1:H1')` / `hoja.unmergeCells(rango)` | Combina o separa celdas; al combinar, solo la primera puede tener valor. |
+| `hoja.moveRows(primera, cantidad, antesDe)` / `hoja.moveColumns('B', cantidad, 'E')` | Mueve filas o columnas enteras delante de otra, numerada como está ahora (ver [Mover filas y columnas](#mover-filas-y-columnas)), y devuelve dónde queda la primera. `editor.moveRows` y `editor.moveColumns` hacen lo mismo en un paso de deshacer y seleccionan el resultado. |
+| `hoja.insertRows(antesDe, cantidad?)` / `hoja.insertColumns('C', cantidad?)` | Inserta filas o columnas vacías, con el formato de la anterior (ver [Insertar y eliminar](#insertar-y-eliminar)). También `editor.insertRows` y `editor.insertColumns`, en un paso de deshacer. |
+| `hoja.deleteRows(primera, cantidad?)` / `hoja.deleteColumns('C', cantidad?)` | Elimina filas o columnas. También `editor.deleteRows` y `editor.deleteColumns`. |
+| `hoja.setRowHeight('3:5', 30)` | Alto de filas en puntos; `null` vuelve al alto automático. |
+| `hoja.setRowsHidden('3:5', true)` / `hoja.setColumnsHidden('B:D', true)` | Oculta o muestra líneas. También `editor.hideRows`, `showRows`, `hideColumns` y `showColumns`. |
+| `hoja.fill('A1:A2', 'A1:A20', { series })` | Rellena un rango desde las celdas de uno de sus extremos (ver [Relleno](#relleno)). `editor.fill('A1:A20')` lo hace desde la selección, en un paso de deshacer. |
+| `hoja.getCells('A1:C3')` | Las celdas de un rango con su tipo, valor y fórmula. |
 | `wb.toBytes()` | El libro como `.xlsx`. |
 | `wb.close()` | Libera la memoria del motor. |
 
@@ -231,6 +249,57 @@ Cada área es `{ kind, name, sheet, sheetName, ref, address, title, headerRow, t
 
 Los formatos nuevos se añaden a `xl/styles.xml` y se reutilizan los iguales que ya existan; nada de lo que ya estaba se reescribe.
 
+#### Mover filas y columnas
+
+Mover funciona como "cortar e insertar" en Excel. Van con la fila o columna sus celdas, formatos, alto o ancho, celdas combinadas, comentarios e imágenes ancladas, y se actualizan las fórmulas de todo el libro, los nombres definidos, los gráficos, las tablas, los filtros, las validaciones de datos, el formato condicional y los hipervínculos. Las fórmulas se reescriben como texto, así que también siguen el movimiento las que este motor no evalúa; solo cambian las referencias afectadas.
+
+- Una referencia a una celda sigue a esa celda.
+- Un rango conserva sus filas: mover dentro de `SUM(B2:B10)`, también a sus extremos, no lo cambia. Si una fila sale del rango, este se encoge; si entra, crece. Un rango contenido en lo que se mueve se va con ello.
+- Las referencias a otros libros (`[1]Hoja!A1`), las 3D (`Hoja1:Hoja3!A1`) y las que están dentro de textos (`INDIRECT("A1")`) se quedan como están.
+- Las fórmulas compartidas que cambian pasan a tener cada celda su propia fórmula.
+
+Se rechaza, sin cambiar nada, lo que rompería algo que debe seguir entero:
+
+- **Celdas combinadas** cortadas por el movimiento. Sí se puede reordenar por debajo de una combinada sin tocar su primera línea, que es la que guarda el valor (por ejemplo, columnas bajo un título).
+- **Fórmulas matriciales** de varias celdas cortadas por el movimiento.
+- **Tablas y filtros**, salvo que se muevan enteros o que se reordenen dentro de ellos: sus filas de datos, sin encabezado ni totales, o sus columnas.
+- **Hojas con tablas dinámicas**.
+
+Una regla de formato condicional o de validación sigue a sus celdas, aunque quede repartida en varios rangos. Sus referencias relativas conservan la distancia a cada celda, y las absolutas siguen a su destino.
+
+#### Insertar y eliminar
+
+Insertar y eliminar actualizan lo mismo que mover, en todo el libro.
+
+**Al insertar**, las líneas nuevas toman el alto o ancho y el formato de la anterior, sin sus valores. Los rangos, las celdas combinadas y las reglas en cuyo interior caen crecen, igual que las tablas si son filas de datos. Si se insertan dentro de la zona inmovilizada, esta crece. Se rechaza si las últimas líneas de la hoja tienen datos, porque se saldrían.
+
+**Al eliminar**, lo que apuntaba solo a esas líneas pasa a `#REF!`, también en otras hojas, nombres y gráficos, como en Excel. Los rangos y las celdas combinadas se encogen. Desaparecen con sus celdas los comentarios, los hipervínculos y las reglas que no aplican a nada más. Las imágenes ancladas en ellas no se borran: pasan a la línea que ocupa su lugar.
+
+Se rechaza, sin cambiar nada:
+
+- Insertar o eliminar **columnas dentro de una tabla**, eliminar **una tabla entera**, su encabezado, sus totales o todas sus filas de datos.
+- Insertar o eliminar cortando una **fórmula matricial** de varias celdas.
+- Eliminar una columna con un **filtro aplicado**.
+- Cualquiera de estas operaciones en una **hoja con tablas dinámicas**.
+
+#### Relleno
+
+A lo largo de cada fila o columna rellenada se repiten las celdas de origen con su formato, y:
+
+- Las **fórmulas** se reescriben para cada celda: las referencias relativas se desplazan y las absolutas no.
+- Dos o más **números** siguen su tendencia (la recta que mejor se ajusta, como Excel). Un número solo se copia. Una **fecha** sola avanza de día en día.
+- Un **texto que acaba en número** sigue contando (`Lote 9`, `Lote 10`; `L08`, `L09`).
+- Los **meses y días**, completos o abreviados, en español o inglés, siguen su orden y respetan las mayúsculas.
+- Lo demás se copia tal cual, y una celda de origen vacía vacía su destino.
+
+Con `{ series: false }`, y con **Ctrl/Cmd+D** y **Ctrl+R**, solo se copia (las fórmulas siguen desplazándose). No se puede rellenar sobre celdas combinadas. Reducir la selección con el cuadrito no borra nada, a diferencia de Excel.
+
+#### Buscar y reemplazar
+
+`*` es cualquier texto, `?` un carácter y `~` los toma literalmente. Por defecto se busca en el texto que muestran las celdas de la hoja activa; el panel y las opciones permiten distinguir mayúsculas, exigir la celda completa, mirar las fórmulas o abarcar todo el libro (sin las hojas ocultas). Desde código: `editor.find(texto, opciones)` y `editor.replaceAll(texto, nuevo, opciones)`.
+
+Reemplazar actúa sobre las celdas de texto y sobre el texto de las fórmulas, nunca sobre números ni fechas. El resultado se interpreta como lo escrito a mano, así que `12` queda como número, y "Todos" es un solo paso de deshacer. El texto con varios formatos dentro de una celda queda con un solo formato.
+
 #### Fechas
 
 Excel guarda las fechas como números de serie (días desde 1900, o desde 1904 en libros con ese sistema) que se ven como fecha por el formato de la celda. Al leer, una celda numérica con formato de fecha se devuelve como `Date`; al escribir un `Date`, la celda recibe un formato de fecha basado en el que tenía (misma fuente, relleno y bordes), salvo que ya mostrara fechas.
@@ -241,13 +310,14 @@ Las fechas de Excel no tienen zona horaria: la hora que muestra Excel se represe
 
 Solo se reescriben las partes del archivo que cambian (la hoja editada, las cadenas compartidas y, si hace falta, los estilos), y dentro de ellas solo las celdas escritas: gráficos, imágenes, formatos condicionales, validaciones, nombres definidos y todo lo demás se guarda byte a byte tal como estaba.
 
+Si se escribe sobre la celda de origen de una fórmula compartida (la que Excel guarda para todo un grupo de celdas rellenadas), las demás celdas del grupo pasan a tener cada una su propia fórmula, con el mismo resultado.
+
 Cuando un libro cambia, se elimina `xl/calcChain.xml` (Excel lo reconstruye) y se marca `fullCalcOnLoad="1"` para que Excel recalcule las fórmulas al abrirlo: así quedan bien también las que este motor no calcula.
 
 Limitaciones actuales:
 
 - Las fórmulas fuera de lo admitido (ver [Fórmulas](#fórmulas)) no se recalculan: `getValue` devuelve su último resultado guardado.
 - Las fórmulas se escriben en la sintaxis en inglés (`SUM`, no `SUMA`); los nombres de función en español no se traducen.
-- Escribir en la celda de origen de una fórmula compartida (la que usan otras celdas) da error, para no romper esas celdas.
 - Una variable `{{CAMPO}}` partida entre fragmentos de texto con formatos distintos no se reconoce.
 
 ## Content Security Policy

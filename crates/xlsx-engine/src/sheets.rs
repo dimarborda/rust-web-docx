@@ -18,7 +18,7 @@ const WORKSHEET_TYPE: &str = "application/vnd.openxmlformats-officedocument.spre
 pub const MAX_SHEET_NAME: usize = 31;
 
 /// Elements whose text is a formula, in worksheets (`f` also in charts, as `c:f`)
-const FORMULA_ELEMENTS: &[&str] = &["f", "formula", "formula1", "formula2"];
+pub(crate) const FORMULA_ELEMENTS: &[&str] = &["f", "formula", "formula1", "formula2"];
 
 /// Checks a sheet name as Excel does: 1–31 characters, none of `[ ] : * ? / \`, not starting or
 /// ending with an apostrophe, not `History`, and not the name of another sheet (ignoring case).
@@ -185,7 +185,7 @@ fn shift_index_attr(xml: &str, local_name: &str, attr: &str, from: usize) -> Res
 
 /// `xml` with the text of the elements named in `names` passed through `transform`, and how many
 /// texts changed. Those elements hold only text.
-fn rewrite_texts(xml: &str, names: &[&str], transform: &dyn Fn(&str) -> String) -> Result<(String, usize), String> {
+pub(crate) fn rewrite_texts(xml: &str, names: &[&str], transform: &dyn Fn(&str) -> String) -> Result<(String, usize), String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut contents = Vec::new();

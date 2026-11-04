@@ -426,6 +426,8 @@ pub struct CellView {
     pub kind: &'static str,
     /// Color from the number format (`[Red]`)
     pub color: Option<String>,
+    /// The number behind the text (dates as serial numbers), for `n` cells
+    pub number: Option<f64>,
 }
 
 /// The cells of a worksheet that show something: a value or a format other than the default
@@ -466,21 +468,34 @@ fn cell_view(node: &CellNode, strings: &SharedStrings, styles: &StyleSheetView, 
     };
     let xf = styles.xfs.get(node.style as usize);
     let Some(value) = value else {
-        return (node.style != 0).then(|| CellView { row: node.at.row, col: node.at.col, style: node.style, text: String::new(), kind: "", color: None });
+        return (node.style != 0).then(|| CellView { row: node.at.row, col: node.at.col, style: node.style, text: String::new(), kind: "", color: None, number: None });
+    };
+    let number = match value {
+        FmtValue::Number(n) => Some(n),
+        _ => None,
     };
     let code = styles.format_code(xf.map(|x| x.num_fmt).unwrap_or(0), locale);
     let formatted = format(value, code, locale, date1904);
-    Some(CellView { row: node.at.row, col: node.at.col, style: node.style, text: formatted.text, kind, color: formatted.color })
+    Some(CellView { row: node.at.row, col: node.at.col, style: node.style, text: formatted.text, kind, color: formatted.color, number })
 }
 
-/// Cells as compact JSON rows: `[row, col, style, text, kind, color?]`
+/// Numbers as the cell format `style` shows them
+pub fn format_numbers(values: &[f64], style: u32, styles: &StyleSheetView, locale: &Locale, date1904: bool) -> Vec<String> {
+    let id = styles.xfs.get(style as usize).map(|x| x.num_fmt).unwrap_or(0);
+    let code = styles.format_code(id, locale);
+    values.iter().map(|n| format(FmtValue::Number(*n), code, locale, date1904).text).collect()
+}
+
+/// Cells as compact JSON rows: `[row, col, style, text, kind, color, number]`; a row ends where
+/// there is nothing more to say (numbers carry `number`, with `color` null when they have none)
 pub fn cells_json(cells: &[CellView]) -> Value {
     Value::Array(
         cells
             .iter()
-            .map(|c| match &c.color {
-                Some(color) => json!([c.row, c.col, c.style, c.text, c.kind, color]),
-                None => json!([c.row, c.col, c.style, c.text, c.kind]),
+            .map(|c| match (&c.color, c.number) {
+                (color, Some(number)) => json!([c.row, c.col, c.style, c.text, c.kind, color, number]),
+                (Some(color), None) => json!([c.row, c.col, c.style, c.text, c.kind, color]),
+                (None, None) => json!([c.row, c.col, c.style, c.text, c.kind]),
             })
             .collect(),
     )

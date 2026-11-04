@@ -150,6 +150,46 @@ export class Sheet {
    * language `locale` (`es`, `en-US`…; default `en`)
    */
   cellViews(locale?: string): CellViewRow[];
+  /**
+   * Moves `count` whole rows from `first` before the row `before` (numbered as they are now), as
+   * Excel's "cut and insert": formats, heights, formulas of the whole workbook, names, charts,
+   * tables, validations, conditional formats, images and comments follow. Throws, and changes
+   * nothing, when it would tear merged cells, an array formula, a table or a filter. Returns
+   * where the first row ends up.
+   */
+  moveRows(first: number, count: number, before: number): number;
+  /** Moves whole columns (see `moveRows`); columns as letters (`'B'`) or numbers */
+  moveColumns(first: string | number, count: number, before: string | number): number;
+  /**
+   * Inserts `count` empty rows before the row `before`, with the height and format of the one
+   * above: formulas, names, charts and the rest are updated, and ranges, merged cells and tables
+   * that the new rows fall inside grow. Returns `before`.
+   */
+  insertRows(before: number, count?: number): number;
+  /** Inserts empty columns before `before`, like the one to their left (not inside a table) */
+  insertColumns(before: string | number, count?: number): number;
+  /**
+   * Deletes `count` rows from `first`: what pointed only at them becomes `#REF!`, and ranges,
+   * merged cells and tables shrink. Returns `first`.
+   */
+  deleteRows(first: number, count?: number): number;
+  /** Deletes columns from `first` (not inside a table) */
+  deleteColumns(first: string | number, count?: number): number;
+  /** Hides or shows rows (`3`, `'3:5'`); they keep their cells and height */
+  setRowsHidden(rows: string | number, hidden: boolean): void;
+  /** Hides or shows columns (`'B'`, `'B:D'`, `2`); they keep their cells and width */
+  setColumnsHidden(columns: string | number, hidden: boolean): void;
+  /**
+   * Fills `target` from `source`, the cells at one of its ends, as Excel's fill handle: formats
+   * repeat, formulas move their references, and with `series` (by default) numbers continue their
+   * trend, one date goes on day by day, texts ending in a number count on and names of months and
+   * days follow their order
+   */
+  fill(source: string, target: string, options?: { series?: boolean }): void;
+  /** The cells of a range (`A1:C3`), by row: their type, value and formula, if any */
+  getCells(range: string): Cell[][];
+  /** Height of a row or rows (`3`, `'3:5'`) in points; `null` goes back to the automatic height */
+  setRowHeight(rows: string | number, height: number | null): void;
   /** Areas of this sheet */
   areas(): Area[];
   /** The region around a cell as Excel's Ctrl+A selects it (or its table, or the cell alone) */
@@ -188,10 +228,10 @@ export interface SheetLayout {
 }
 
 /**
- * `[row, col, style, text, kind, color?]`: `kind` is `n` (number or date), `s` (text), `b`,
+ * `[row, col, style, text, kind, color?, number?]`: `kind` is `n` (number or date), `s` (text), `b`,
  * `e` (error) or `''` (empty cell with a format); `color` comes from the number format
  */
-export type CellViewRow = [number, number, number, string, 'n' | 's' | 'b' | 'e' | '', string?];
+export type CellViewRow = [number, number, number, string, 'n' | 's' | 'b' | 'e' | '', (string | null)?, number?];
 
 export interface FontView {
   name: string;
