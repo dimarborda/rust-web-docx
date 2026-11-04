@@ -2,17 +2,15 @@
 
 [![npm](https://img.shields.io/npm/v/@dimarborda/docx-editor?color=cb3837&label=npm)](https://www.npmjs.com/package/@dimarborda/docx-editor)
 
-Word (`.docx`) editor for the browser. The engine is written in Rust and compiled to WebAssembly: it reads the document, lays out the pages like Word and applies edits losslessly. Pages are drawn on canvas, with their own caret and selection.
+Word (`.docx`) editor for the browser. A Rust and WebAssembly engine reads the document, lays out the pages like Word and applies edits losslessly. It works with any frontend and in desktop apps such as Tauri. No server needed: documents never leave the device.
 
-Works with any frontend (no framework, React, Vue, Svelte, Angular) and in desktop apps with a webview, such as Tauri. No server needed: documents never leave the device.
+[Demo](https://rust-web-docx.dimarborda.workers.dev/?demo) · **Full documentation on GitHub:** [English](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/api.md) · [Español](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/api.md)
 
-[Demo](https://rust-web-docx.dimarborda.workers.dev/?demo) · [Full documentation (Spanish)](https://github.com/dimarborda/rust-web-docx/tree/master/docs/docx-editor) · [Repository](https://github.com/dimarborda/rust-web-docx)
+## Install
 
 ```bash
 npm install @dimarborda/docx-editor
 ```
-
-## Web component
 
 ```html
 <docx-toolbar for="doc"></docx-toolbar>
@@ -28,7 +26,9 @@ npm install @dimarborda/docx-editor
 </script>
 ```
 
-## JavaScript
+The container needs a height. TypeScript types are included. If your app sends a `Content-Security-Policy`, the production `script-src` needs `'wasm-unsafe-eval'`.
+
+## Use it from code
 
 ```js
 import { DocxEditor } from '@dimarborda/docx-editor';
@@ -43,28 +43,25 @@ await editor.downloadPdf('contract.pdf');      // vector PDF with selectable tex
 const bytes = editor.save();                   // Uint8Array of the edited .docx
 ```
 
-The container needs a height (for example `height: 80vh`). TypeScript types included.
+## Features
 
-## What you can do
+- **Templates and markers:** list and fill `{{KEY}}`, `{key}` and pending `[…]` content, keeping the formatting.
+- **AI agents:** show where an agent is working and highlight its edits without moving the user's caret.
+- **Content:** paragraphs, tables, images, text boxes, logical sections and existing tables, from code.
+- **Formatting:** styles, fonts, character formatting, alignment, spacing, indent and lists, written the way Word does.
+- **Export:** lossless `.docx` and vector PDF with working links.
+- **View:** read-only mode, zoom, watermark and an optional toolbar.
 
-- **Templates and markers**: `markers()` lists `{{KEY}}` / `{key}` fields and pending `[…]` content with their position; `fillMarker()` and `replaceVariables()` fill them keeping the formatting. [Guide](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md#marcadores-campos-y-pendientes)
-- **Agents**: `markActivity()` shows where an agent is working, and edits made through the API are highlighted for a moment without moving the user's caret. [Guide](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md#actividad-dónde-está-trabajando-el-agente)
-- **Content**: insert paragraphs with heading styles, tables and images (inline or floating), and read the document structure.
-- **Text boxes**: `fillTextBox(marker, ooxml, images?)` writes content (paragraphs, tables, images) inside a text box that already exists in the document, located by its marker — replacing whatever it had, as one undo step.
-- **Logical sections and existing tables**: read and replace parts of the document by key, and write cells or rows copying their formatting. [Guides](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/guias.md)
-- **Export**: lossless `.docx` and vector PDF — `exportPdf()`/`exportPdfBlob()`/`downloadPdf()` keep Word hyperlinks as real PDF `/Link` annotations (URI action), at the exact position of the linked text, the same way LibreOffice or Word's own PDF export do.
-- **Formatting**: paragraph styles (Normal, Title, Heading 1–3 and the document's own), font and size, bold, italic, underline, strikethrough, superscript/subscript, color, Word highlight colors, clear formatting, alignment, line spacing, indent and bulleted or numbered lists with levels (Tab / Shift+Tab), written the way Word does.
-- **View**: read-only mode, zoom, watermark and an optional toolbar.
+## Documentation
 
-Every method, option and event is in the [API reference](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/api.md). For React, Next.js, Tauri, fonts, styles and bundlers, see the [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/integraciones.md).
+| Guide | English | Español |
+| :--- | :--- | :--- |
+| API: every method, option and event | [api](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/api.md) | [api](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/api.md) |
+| Guides: markers, agents, sections, tables, PDF, images | [guides](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/guides.md) | [guides](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/guides.md) |
+| React, Next.js, Tauri, fonts, styles, bundlers | [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/integrations.md) | [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/integrations.md) |
+| Security and limitations | [security](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/security.md) | [security](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/security.md) |
 
-## Content Security Policy
-
-If your app sends a `Content-Security-Policy`, add `'wasm-unsafe-eval'` to the production `script-src`, or the engine will not start. [Details](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/integraciones.md#content-security-policy)
-
-## Security
-
-Documents never leave the browser, their content is never executed (it is drawn on canvas) and the reader rejects external XML entities and ZIP bombs. [Security and limitations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/seguridad.md) · [Report a vulnerability](https://github.com/dimarborda/rust-web-docx/blob/master/SECURITY.md)
+Documents never leave the browser and their content is never executed. [Report a vulnerability](https://github.com/dimarborda/rust-web-docx/blob/master/SECURITY.md).
 
 ## License
 
