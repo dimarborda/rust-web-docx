@@ -1,6 +1,6 @@
 {
   "name": "@dimarborda/docx-editor",
-  "version": "0.19.1",
+  "version": "0.19.2",
   "description": "Word (.docx) editor for the browser: Rust + WebAssembly layout engine rendered to canvas, as a framework-agnostic web component. An AI agent can edit through its API while the user keeps working",
   "type": "module",
   "license": "MIT",
