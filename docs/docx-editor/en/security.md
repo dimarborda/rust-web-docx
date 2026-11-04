@@ -8,7 +8,7 @@ What the editor protects and which parts of Word it does not draw yet.
 
 ## Security and privacy
 
-- **Documents never leave the browser.** Opening, editing, saving and exporting to PDF all happen in the page. There is no server of its own, no telemetry and no requests to third parties. The only downloads are from your own site: the `.wasm` engine, the fonts and the `.docx` from the `src` attribute, if used. Fonts the user registers with `registerFont` are stored only in that browser's IndexedDB.
+- **The library sends your documents nowhere.** Opening, editing, saving and exporting to PDF all happen in the page. There is no server of its own, no telemetry and no requests to third parties. The only downloads are from your own site: the `.wasm` engine, the fonts and the `.docx` from the `src` attribute, if used. Fonts the user registers with `registerFont` are stored only in that browser's IndexedDB. If your app sends content to another service, such as an AI model, that is your app's decision and outside what the library does.
 - **Document content is never executed.** Pages are drawn on a `<canvas>` and text is never inserted as HTML, so a malicious `.docx` cannot inject scripts (XSS). Images are read only from the file itself; links to external resources do not trigger requests.
 - **XML without external entities.** The parser (quick-xml) does not resolve DTDs or external entities, which prevents XXE attacks.
 - **Limits against ZIP bombs.** Files with more than 10,000 parts, with a part larger than 256 MB, or with more than 512 MB in total when decompressed are rejected. The size is measured while decompressing, without trusting the size the ZIP declares. Images inserted through the API have a 15 MB maximum.

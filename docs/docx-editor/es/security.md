@@ -8,7 +8,7 @@ Qué protege el editor y qué partes de Word todavía no dibuja.
 
 ## Seguridad y privacidad
 
-- **Los documentos no salen del navegador.** Abrir, editar, guardar y exportar a PDF ocurren en la página. No hay servidor propio, telemetría ni peticiones a terceros. Las únicas descargas son las del propio sitio: el motor `.wasm`, las fuentes y el `.docx` del atributo `src`, si se usa. Las fuentes que registra el usuario con `registerFont` se guardan solo en el IndexedDB de ese navegador.
+- **La librería no envía tus documentos a ninguna parte.** Abrir, editar, guardar y exportar a PDF ocurren en la página. No hay servidor propio, telemetría ni peticiones a terceros. Las únicas descargas son las del propio sitio: el motor `.wasm`, las fuentes y el `.docx` del atributo `src`, si se usa. Las fuentes que registra el usuario con `registerFont` se guardan solo en el IndexedDB de ese navegador. Si tu aplicación envía contenido a otro servicio, como un modelo de IA, es decisión de tu aplicación y queda fuera de lo que hace la librería.
 - **El contenido del documento no se ejecuta.** Las páginas se dibujan en un `<canvas>` y el texto nunca se inserta como HTML, así que un `.docx` malicioso no puede inyectar scripts (XSS). Las imágenes se leen solo del propio archivo; los enlaces a recursos externos no generan peticiones.
 - **XML sin entidades externas.** El parser (quick-xml) no resuelve DTD ni entidades externas, lo que evita ataques XXE.
 - **Límites contra bombas ZIP.** Se rechazan los archivos con más de 10 000 partes, con una parte de más de 256 MB o con más de 512 MB en total al descomprimirse. El tamaño se mide mientras se descomprime, sin fiarse del que declara el ZIP. Las imágenes insertadas por API tienen un máximo de 15 MB.

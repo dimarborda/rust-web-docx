@@ -25,7 +25,7 @@ Cuando el problema esté confirmado, se corrige en una nueva versión del paquet
 
 El editor procesa documentos que pueden venir de cualquier parte, así que trata cada `.docx` como no confiable:
 
-- **Todo ocurre en el navegador.** El documento no se envía a ningún servidor, no hay telemetría y las fuentes van incluidas en el paquete. Las únicas peticiones de red son al propio sitio: el motor `.wasm`, las fuentes y, si se usa el atributo `src`, el `.docx` indicado.
+- **Todo ocurre en el navegador.** La librería no envía el documento a ningún servidor, no hay telemetría y las fuentes van incluidas en el paquete. Las únicas peticiones de red son al propio sitio: el motor `.wasm`, las fuentes y, si se usa el atributo `src`, el `.docx` indicado.
 - **Sin contenido activo.** El documento se dibuja en un `<canvas>`, nunca se inserta como HTML, así que su contenido no puede ejecutar código (XSS). Las imágenes se leen solo del propio archivo: un documento con enlaces externos no provoca peticiones de red.
 - **XML seguro.** El parser no resuelve entidades externas (XXE) ni definiciones DTD.
 - **Límites al descomprimir.** Un `.docx` es un ZIP: el editor rechaza archivos con más de 10 000 partes, partes de más de 256 MB o un total de más de 512 MB descomprimidos, sin fiarse de los tamaños declarados en el archivo, para que una "bomba ZIP" no agote la memoria del navegador. Las imágenes insertadas desde código tienen un máximo de 15 MB.

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@dimarborda/docx-editor?color=cb3837&label=npm)](https://www.npmjs.com/package/@dimarborda/docx-editor)
 
-Word (`.docx`) editor for the browser. A Rust and WebAssembly engine reads the document, lays out the pages like Word and applies edits losslessly. It works with any frontend and in desktop apps such as Tauri. No server needed: documents never leave the device.
+Word (`.docx`) editor for the browser. A Rust and WebAssembly engine reads the document, lays out the pages like Word and applies edits losslessly. It works with React, Vue, Svelte, Angular or plain HTML, and in desktop apps such as Tauri. It needs no server: the library sends your documents nowhere.
 
 For AI agents, `markers()` lists what is left to fill in, and edits made through the API are highlighted without moving the user's caret.
 
@@ -63,7 +63,7 @@ const bytes = editor.save();                   // Uint8Array of the edited .docx
 | React, Next.js, Tauri, fonts, styles, bundlers | [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/integrations.md) | [integrations](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/integrations.md) |
 | Security and limitations | [security](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/security.md) | [security](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/security.md) |
 
-Documents never leave the browser and their content is never executed. [Report a vulnerability](https://github.com/dimarborda/rust-web-docx/blob/master/SECURITY.md).
+The library sends your documents nowhere and never executes their content. [Report a vulnerability](https://github.com/dimarborda/rust-web-docx/blob/master/SECURITY.md).
 
 ## License
 

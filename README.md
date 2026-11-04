@@ -61,7 +61,7 @@ Solo se vuelven a maquetar y dibujar las páginas que cambian, y las medidas de 
 
 ## Usarlo en tus proyectos
 
-El editor está publicado en npm como [`@dimarborda/docx-editor`](https://www.npmjs.com/package/@dimarborda/docx-editor): un web component que funciona en cualquier frontend y dentro de apps Tauri.
+El editor está publicado en npm como [`@dimarborda/docx-editor`](https://www.npmjs.com/package/@dimarborda/docx-editor): un web component que funciona con React, Vue, Svelte, Angular o HTML puro, y dentro de apps Tauri.
 
 ```bash
 npm install @dimarborda/docx-editor
@@ -88,7 +88,7 @@ Con `npm run dev`, la demo del editor está en `http://localhost:5173/xlsx.html`
 
 ## Seguridad y privacidad
 
-Todo ocurre en el navegador: los documentos no se envían a ningún servidor, no hay telemetría y el contenido se dibuja en un canvas, sin insertar HTML. El editor no resuelve entidades XML externas, pone límites a lo que un `.docx` puede ocupar al descomprimirse, y cada despliegue audita las dependencias de Rust y npm. Los detalles están en la sección [Seguridad y privacidad](docs/docx-editor/es/security.md#seguridad-y-privacidad) del paquete. Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
+Todo ocurre en el navegador: la librería no envía los documentos a ningún servidor, no hay telemetría y el contenido se dibuja en un canvas, sin insertar HTML. El editor no resuelve entidades XML externas, pone límites a lo que un `.docx` puede ocupar al descomprimirse, y cada despliegue audita las dependencias de Rust y npm. Los detalles están en la sección [Seguridad y privacidad](docs/docx-editor/es/security.md#seguridad-y-privacidad) del paquete. Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
 
 ## Limitaciones conocidas
 
