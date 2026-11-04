@@ -1,6 +1,6 @@
 # @dimarborda/xlsx-editor
 
-View and edit Excel (`.xlsx`) workbooks in the browser, drawn on canvas the way Excel shows them, and work with them from Node.js. A Rust and WebAssembly engine reads the file, recalculates formulas and saves losslessly: what it does not touch stays byte by byte. It works in any frontend, and nothing leaves the browser.
+View and edit Excel (`.xlsx`) workbooks in the browser, drawn on canvas the way Excel shows them, and work with them from Node.js. A Rust and WebAssembly engine reads the file, recalculates formulas and saves losslessly: what it does not touch stays byte by byte. It works with React, Vue, Svelte, Angular or plain HTML, and in desktop apps such as Tauri. It needs no server: the library sends your files nowhere.
 
 For AI agents, `wb.area()` gives a table's columns, types and totals without reading the whole sheet, and a change that would break something is refused with the reason, leaving the workbook as it was.
 

@@ -2,7 +2,7 @@
 
 # El componente
 
-Componente para ver y editar libros de Excel (`.xlsx`) en el navegador, dibujados en canvas como los muestra Excel. Por dentro usa un motor escrito en Rust y compilado a WebAssembly, que lee el archivo, resuelve estilos y formatos de número, recalcula fórmulas y guarda sin pérdidas. Ese motor también se usa sin interfaz, en Node.js, desde [`@dimarborda/xlsx-editor/engine`](engine.md). Comparte con [`@dimarborda/docx-editor`](../../docx-editor/README.md) la capa de paquete OOXML (`crates/ooxml-core`). Funciona en cualquier frontend (HTML, React, Vue, Svelte, Angular, Tauri) y nada sale del navegador.
+Componente para ver y editar libros de Excel (`.xlsx`) en el navegador, dibujados en canvas como los muestra Excel. Por dentro usa un motor escrito en Rust y compilado a WebAssembly, que lee el archivo, resuelve estilos y formatos de número, recalcula fórmulas y guarda sin pérdidas. Ese motor también se usa sin interfaz, en Node.js, desde [`@dimarborda/xlsx-editor/engine`](engine.md). Comparte con [`@dimarborda/docx-editor`](../../docx-editor/README.md) la capa de paquete OOXML (`crates/ooxml-core`). Funciona con React, Vue, Svelte, Angular o HTML puro, y en apps de escritorio como Tauri. No necesita servidor: la librería no envía tus archivos a ninguna parte.
 
 ```bash
 npm install @dimarborda/xlsx-editor
