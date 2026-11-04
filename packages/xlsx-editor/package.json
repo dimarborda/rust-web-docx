@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "author": "Dimar Borda",
+  "homepage": "https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/README.md",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dimarborda/rust-web-docx.git",

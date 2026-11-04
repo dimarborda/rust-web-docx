@@ -401,6 +401,20 @@ export class XlsxEditor extends EventTarget {
     return this.#deleteLines('col', first, count);
   }
 
+  /** Fits `count` columns from `first` to their content, as one undo step; empty ones stay as they are */
+  autofitColumns(first, count = 1) {
+    if (this.#readOnly || !this.#sheet) return false;
+    this.#commitEdit(null, { focus: false });
+    return this.#autofit('col', first, first + count - 1);
+  }
+
+  /** Fits `count` rows from `first` to their content, as one undo step; empty ones go back to the automatic height */
+  autofitRows(first, count = 1) {
+    if (this.#readOnly || !this.#sheet) return false;
+    this.#commitEdit(null, { focus: false });
+    return this.#autofit('row', first, first + count - 1);
+  }
+
   /** Hides `count` rows from `first`, as one undo step */
   hideRows(first, count = 1) {
     return this.#setLinesHidden('row', first, first + count - 1, true);
@@ -977,7 +991,7 @@ export class XlsxEditor extends EventTarget {
 
   /** Sets rows or columns to sizes in pixels, as one undo step: `[[line, px or null]]` */
   #applySizes(axis, sizes) {
-    if (!sizes.length) return;
+    if (!sizes.length) return false;
     try {
       this.#workbook.checkpoint(this.#historyToken(null));
       const sheet = this.#activeSheet();
@@ -993,9 +1007,12 @@ export class XlsxEditor extends EventTarget {
       }
     } catch (error) {
       this.#fail(error);
+      this.reload();
+      return false;
     }
     this.#workbook.setSelectionAfter(this.#historyToken(null));
     this.reload();
+    return true;
   }
 
   /** Double click: on the edge of a header fits its lines to their content, in a cell edits it */
@@ -1049,7 +1066,7 @@ export class XlsxEditor extends EventTarget {
       if (size !== undefined) sizes.push([line, axis === 'row' ? Math.max(size, rows.defaultSize) : size]);
       else if (axis === 'row') sizes.push([line, null]);
     }
-    this.#applySizes(axis, sizes);
+    return this.#applySizes(axis, sizes);
   }
 
   /** The first and last lines of the selection along an axis */

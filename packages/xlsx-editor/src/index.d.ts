@@ -124,6 +124,10 @@ export class XlsxEditor extends EventTarget {
   deleteRows(first: number, count?: number): boolean;
   /** Deletes columns, by number (see `deleteRows`) */
   deleteColumns(first: number, count?: number): boolean;
+  /** Fits columns to their content, as one undo step; false if they are empty, read-only or refused. Needs the editor: it measures the text as drawn */
+  autofitColumns(first: number, count?: number): boolean;
+  /** Fits rows to their content (empty ones go back to the automatic height), as one undo step; false if read-only or refused */
+  autofitRows(first: number, count?: number): boolean;
   /** Hides `count` rows from `first`, as one undo step */
   hideRows(first: number, count?: number): boolean;
   /** Shows hidden rows among the `count` from `first` */
