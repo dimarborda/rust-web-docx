@@ -49,6 +49,26 @@ export interface SelectionStats {
   max: number | null;
 }
 
+export interface FindOptions {
+  matchCase?: boolean;
+  /** Only cells whose whole text matches */
+  wholeCell?: boolean;
+  /** The active sheet (default) or every worksheet */
+  scope?: 'sheet' | 'workbook';
+  /** Look in the formula of formula cells instead of the text they show */
+  inFormulas?: boolean;
+}
+
+export interface FindHit {
+  sheet: number;
+  sheetName: string;
+  ref: string;
+  row: number;
+  col: number;
+  /** The text that matched */
+  text: string;
+}
+
 /** Cells changed from the grid (typing, deleting, pasting, cutting) or by undo and redo */
 export interface ChangeDetail {
   /** Name and tab position of the sheet */
@@ -58,7 +78,7 @@ export interface ChangeDetail {
   range: string;
   /** Every cell of `range` with its new value (`null` when empty); empty above 200 000 cells */
   cells: { ref: string; value: CellValue }[];
-  source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'undo' | 'redo';
+  source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'fill' | 'replace' | 'undo' | 'redo';
 }
 
 export interface XlsxEditorEventMap {
@@ -104,6 +124,29 @@ export class XlsxEditor extends EventTarget {
   deleteRows(first: number, count?: number): boolean;
   /** Deletes columns, by number (see `deleteRows`) */
   deleteColumns(first: number, count?: number): boolean;
+  /** Hides `count` rows from `first`, as one undo step */
+  hideRows(first: number, count?: number): boolean;
+  /** Shows hidden rows among the `count` from `first` */
+  showRows(first: number, count?: number): boolean;
+  /** Hides columns, by number */
+  hideColumns(first: number, count?: number): boolean;
+  /** Shows hidden columns, by number */
+  showColumns(first: number, count?: number): boolean;
+  /**
+   * Fills `target` (`A1:A20`) from the selected cells, which must be at one of its ends, as one
+   * undo step, and selects it. False if refused.
+   */
+  fill(target: string, options?: { series?: boolean }): boolean;
+  /** Where a text is, row by row: `*` is any text, `?` one character and `~` takes them literally */
+  find(query: string, options?: FindOptions): FindHit[];
+  /**
+   * Replaces a text in cells with text and in formulas (never in numbers or dates), as one undo
+   * step; returns how many cells changed. Formatted runs of a rich text become plain.
+   */
+  replaceAll(query: string, replacement: string, options?: Omit<FindOptions, 'inFormulas'>): number;
+  /** Opens the search panel, with the row to replace when asked */
+  openFind(options?: { replace?: boolean }): void;
+  closeFind(): void;
   /** Undoes the last change; false when there is nothing to undo */
   undo(): boolean;
   /** Redoes the last undone change */

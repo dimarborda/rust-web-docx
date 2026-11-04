@@ -175,6 +175,19 @@ export class Sheet {
   deleteRows(first: number, count?: number): number;
   /** Deletes columns from `first` (not inside a table) */
   deleteColumns(first: string | number, count?: number): number;
+  /** Hides or shows rows (`3`, `'3:5'`); they keep their cells and height */
+  setRowsHidden(rows: string | number, hidden: boolean): void;
+  /** Hides or shows columns (`'B'`, `'B:D'`, `2`); they keep their cells and width */
+  setColumnsHidden(columns: string | number, hidden: boolean): void;
+  /**
+   * Fills `target` from `source`, the cells at one of its ends, as Excel's fill handle: formats
+   * repeat, formulas move their references, and with `series` (by default) numbers continue their
+   * trend, one date goes on day by day, texts ending in a number count on and names of months and
+   * days follow their order
+   */
+  fill(source: string, target: string, options?: { series?: boolean }): void;
+  /** The cells of a range (`A1:C3`), by row: their type, value and formula, if any */
+  getCells(range: string): Cell[][];
   /** Height of a row or rows (`3`, `'3:5'`) in points; `null` goes back to the automatic height */
   setRowHeight(rows: string | number, height: number | null): void;
   /** Areas of this sheet */

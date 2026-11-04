@@ -5,7 +5,8 @@
 // moving rows and columns from their headers and the status bar.
 import { createWorkbook, initEngine, openWorkbook } from './engine.js';
 import { PAD, canvasFont, drawHeaders, drawRegion, key, wrapLines } from './draw.js';
-import { Axis, MAX_COLS, MAX_ROWS, colWidthToPx, columnName, dataEdge, parseRange, ptToPx, pxToColWidth, rangeStats, sheetAxes } from './grid.js';
+import { Axis, MAX_COLS, MAX_ROWS, colWidthToPx, columnName, dataEdge, numberRun, parseRange, ptToPx, pxToColWidth, rangeStats, sheetAxes } from './grid.js';
+import { matches, replaceMatches, searchPattern } from './find.js';
 import { editText, parseInput, parseTSV, toTSV } from './input.js';
 
 const COL_HEADER_H = 22;
@@ -22,6 +23,10 @@ const MAX_CHANGE_CELLS = 200_000;
 const RESIZE_EDGE_PX = 4;
 /** Smallest size a drag leaves a row or column with */
 const MIN_LINE_PX = 4;
+/** How near the corner of the selection a press takes its fill handle */
+const FILL_HANDLE_PX = 6;
+/** Pause after typing in the search panel before looking (a search reads the whole sheet) */
+const FIND_DELAY_MS = 150;
 /** Largest row Excel allows, in points */
 const MAX_ROW_PT = 409.5;
 /** Largest column Excel allows, in characters */
@@ -103,7 +108,9 @@ export class XlsxEditor extends EventTarget {
   #statusDirty = false;
   #statusShown = null; // what the statistics of the status bar were computed from
   #messageTimer = 0;
-  #resizing = null; // { cancel } while the edge of a header is dragged
+  #gesture = null; // { cancel } while the edge of a header or the fill handle is dragged
+  #fillDrag = null; // { first, last } of the range the fill handle would fill
+  #find = null; // the search panel: its fields and the hits found, once it has been opened
   #menu = null; // the open context menu: { close }
 
   constructor(container, { locale, zoom = 1, tabs = true, formulaBar = true, statusBar = true, readOnly = false } = {}) {
@@ -156,6 +163,7 @@ export class XlsxEditor extends EventTarget {
     this.#scroller.addEventListener('keydown', e => this.#onKeyDown(e));
     this.#scroller.addEventListener('dblclick', e => this.#onDoubleClick(e));
     this.#scroller.addEventListener('contextmenu', e => this.#onContextMenu(e));
+    this.addEventListener('change', () => this.#staleFind());
     this.#input.addEventListener('keydown', e => this.#onEditKey(e));
     this.#input.addEventListener('input', () => {
       this.#valueBox.value = this.#input.value;
@@ -250,6 +258,7 @@ export class XlsxEditor extends EventTarget {
     this.#clip = null;
     this.#workbook?.close();
     this.#workbook = workbook;
+    this.#staleFind();
     this.#styles = workbook.styleView();
     this.#sheetIndex = -1; // a new workbook starts at its first sheet, scrolled to the top
     const tabs = workbook.tabs;
@@ -277,6 +286,7 @@ export class XlsxEditor extends EventTarget {
   /** Reads the active sheet again from the workbook, after changing cells through `workbook` */
   reload() {
     if (!this.#workbook || this.#sheetIndex < 0) return;
+    this.#staleFind();
     this.#styles = this.#workbook.styleView();
     // Sheets added or renamed through `workbook` show up in the tabs
     this.#renderTabs();
@@ -391,6 +401,76 @@ export class XlsxEditor extends EventTarget {
     return this.#deleteLines('col', first, count);
   }
 
+  /** Hides `count` rows from `first`, as one undo step */
+  hideRows(first, count = 1) {
+    return this.#setLinesHidden('row', first, first + count - 1, true);
+  }
+
+  /** Shows the hidden rows among the `count` from `first` */
+  showRows(first, count = 1) {
+    return this.#setLinesHidden('row', first, first + count - 1, false);
+  }
+
+  /** Hides columns, by number */
+  hideColumns(first, count = 1) {
+    return this.#setLinesHidden('col', first, first + count - 1, true);
+  }
+
+  /** Shows hidden columns, by number */
+  showColumns(first, count = 1) {
+    return this.#setLinesHidden('col', first, first + count - 1, false);
+  }
+
+  /**
+   * Fills `target` (`A1:A20`) from the selected cells, which must be at one of its ends, as one
+   * undo step, and selects it. False if refused (an `error` event says why).
+   * @param {string} target
+   * @param {{series?: boolean}} [options]
+   */
+  fill(target, { series = true } = {}) {
+    if (!this.#selection) return false;
+    const range = this.#selection;
+    return this.#fillRange(rangeOf(range.first, range.last), parseRange(target), series);
+  }
+
+  /**
+   * Where a text is, row by row: `*` is any text, `?` one character and `~` takes them literally
+   * @param {string} query
+   * @param {{matchCase?: boolean, wholeCell?: boolean, scope?: 'sheet' | 'workbook', inFormulas?: boolean}} [options]
+   */
+  find(query, options = {}) {
+    return this.#findHits(query, options).map(({ cell, ...hit }) => hit);
+  }
+
+  /**
+   * Replaces a text in cells with text and in formulas (never in numbers or dates), as one undo
+   * step; returns how many cells changed. Formatted runs of a rich text become plain.
+   */
+  replaceAll(query, replacement, options = {}) {
+    if (this.#readOnly || !this.#workbook) return 0;
+    const pattern = searchPattern(query, options);
+    return pattern ? this.#replaceHits(this.#findHits(query, { ...options, inFormulas: true }), pattern, replacement) : 0;
+  }
+
+  /** Opens the search panel, with the row to replace when asked */
+  openFind({ replace = false } = {}) {
+    const find = this.#findPanel();
+    find.el.hidden = false;
+    find.replaceRow.hidden = !replace || this.#readOnly;
+    find.replacing = !find.replaceRow.hidden;
+    find.hits = null;
+    find.query.focus({ preventScroll: true });
+    find.query.select();
+    this.#findStatus('');
+  }
+
+  closeFind() {
+    if (!this.#find || this.#find.el.hidden) return;
+    this.#find.el.hidden = true;
+    clearTimeout(this.#find.timer);
+    this.#scroller.focus({ preventScroll: true });
+  }
+
   /** Undoes the last change made from the grid (or since the last `workbook.checkpoint()`) */
   undo() {
     return this.#moveInHistory('undo');
@@ -429,8 +509,9 @@ export class XlsxEditor extends EventTarget {
   destroy() {
     cancelAnimationFrame(this.#frame);
     this.#drag?.cancel();
-    this.#resizing?.cancel();
+    this.#gesture?.cancel();
     this.#menu?.close();
+    if (this.#find) clearTimeout(this.#find.timer);
     clearTimeout(this.#messageTimer);
     this.#observer.disconnect();
     for (const [type, listener] of this.#clipboardListeners) document.removeEventListener(type, listener);
@@ -651,6 +732,23 @@ export class XlsxEditor extends EventTarget {
       drawHeaders(ctx, { rows, cols, colSegs, rowSegs, rowHeaderW: gx, colHeaderH: gy, width, height, zoom, selection: this.#selection, columnName });
     }
     if (this.#drag) this.#drawLineDrag(ctx, width, height, gx, gy);
+    if (this.#fillDrag) this.#drawFillDrag(ctx, width, height, gx, gy);
+  }
+
+  /** While the fill handle is dragged: the range it would fill */
+  #drawFillDrag(ctx, width, height, gx, gy) {
+    const { first, last } = this.#fillDrag;
+    const x = this.#linePos('col', first.col);
+    const y = this.#linePos('row', first.row);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(gx, gy, width - gx, height - gy);
+    ctx.clip();
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = SELECTION;
+    ctx.strokeRect(Math.round(x), Math.round(y), Math.round(this.#linePos('col', last.col + 1) - x) - 1, Math.round(this.#linePos('row', last.row + 1) - y) - 1);
+    ctx.restore();
   }
 
   /** While a header is dragged: the lines it takes and the place they would go */
@@ -709,7 +807,7 @@ export class XlsxEditor extends EventTarget {
     ctx.strokeRect(Math.round(x) - 1, Math.round(y) - 1, Math.round(w), Math.round(h));
     ctx.fillStyle = SELECTION;
     const handle = Math.max(5, Math.round(5 * zoom));
-    ctx.fillRect(Math.round(x + w) - handle / 2 - 1, Math.round(y + h) - handle / 2 - 1, handle, handle);
+    if (!sel.whole) ctx.fillRect(Math.round(x + w) - handle / 2 - 1, Math.round(y + h) - handle / 2 - 1, handle, handle);
     ctx.restore();
   }
 
@@ -838,7 +936,7 @@ export class XlsxEditor extends EventTarget {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', cancel);
-      this.#resizing = null;
+      this.#gesture = null;
       this.#scroller.style.cursor = '';
     };
     const cancel = () => {
@@ -870,7 +968,7 @@ export class XlsxEditor extends EventTarget {
       for (let i = a; i <= b; i++) sizes.push([i, size]);
       this.#applySizes(axis, sizes);
     };
-    this.#resizing = { cancel };
+    this.#gesture = { cancel };
     this.#scroller.style.cursor = isRow ? 'row-resize' : 'col-resize';
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -907,7 +1005,8 @@ export class XlsxEditor extends EventTarget {
     const x = e.clientX - box.left;
     const y = e.clientY - box.top;
     if (!this.#headerAt(x, y)) {
-      this.#beginEdit({ mode: 'edit' });
+      if (this.#fillHandleAt(x, y)) this.#fillDownToData();
+      else this.#beginEdit({ mode: 'edit' });
       return;
     }
     const edge = this.#resizeEdge(x, y);
@@ -976,7 +1075,416 @@ export class XlsxEditor extends EventTarget {
         if (header.line >= a && header.line <= b) cursor = 'grab';
       }
     }
+    if (!header && this.#fillHandleAt(x, y)) cursor = 'crosshair';
     this.#scroller.style.cursor = cursor;
+  }
+
+  /** Whether a point of the canvas is on the handle at the corner of the selection */
+  #fillHandleAt(x, y) {
+    const sel = this.#selection;
+    if (this.#readOnly || !sel || sel.whole || this.#edit) return false;
+    const { last } = this.#expandToMerges(sel.first, sel.last);
+    return Math.abs(x - this.#linePos('col', last.col + 1)) <= FILL_HANDLE_PX && Math.abs(y - this.#linePos('row', last.row + 1)) <= FILL_HANDLE_PX;
+  }
+
+  /** Follows the pointer from the fill handle: the range grows along one axis, whichever it left by more */
+  #startFillDrag(box) {
+    const source = this.#expandToMerges(this.#selection.first, this.#selection.last);
+    const { first, last } = source;
+    const finish = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      this.#gesture = null;
+      this.#scroller.style.cursor = '';
+      const target = this.#fillDrag;
+      this.#fillDrag = null;
+      return target;
+    };
+    const cancel = () => {
+      finish();
+      this.render();
+    };
+    const move = ev => {
+      const row = this.#lineAt('row', ev.clientY - box.top);
+      const col = this.#lineAt('col', ev.clientX - box.left);
+      const rows = row > last.row ? row - last.row : row < first.row ? row - first.row : 0;
+      const cols = col > last.col ? col - last.col : col < first.col ? col - first.col : 0;
+      let target = null;
+      if (rows && Math.abs(rows) >= Math.abs(cols)) target = rows > 0 ? { first, last: { row, col: last.col } } : { first: { row, col: first.col }, last };
+      else if (cols) target = cols > 0 ? { first, last: { row: last.row, col } } : { first: { row: first.row, col }, last };
+      this.#fillDrag = target;
+      if (target) {
+        this.#extend(target.last.row, target.last.col);
+        this.#scrollIntoView(rows && Math.abs(rows) >= Math.abs(cols) ? { row } : { col });
+      }
+      this.render();
+    };
+    const up = () => {
+      const target = finish();
+      if (target) this.#fillRange(rangeOf(first, last), target, true);
+      this.render();
+    };
+    this.#gesture = { cancel };
+    this.#scroller.style.cursor = 'crosshair';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  }
+
+  /** Fills `target` from the range `source`, as one undo step, and selects it */
+  #fillRange(source, target, series) {
+    if (this.#readOnly || !this.#sheet) return false;
+    this.#commitEdit(null, { focus: false });
+    const changed = rangeOf(target.first, target.last);
+    try {
+      this.#workbook.checkpoint(this.#historyToken(changed));
+      this.#activeSheet().fill(source, changed, { series });
+    } catch (error) {
+      this.#fail(error);
+      return false;
+    }
+    this.#clip = null;
+    this.#lastChange = changed;
+    this.reload();
+    const { active } = this.#selection;
+    this.#setSelection(target.first, target.last, active, { scroll: false });
+    this.#recordSelectionAfter();
+    this.#emitChange(changed, 'fill');
+    return true;
+  }
+
+  /** Double click on the handle: down as far as the data in the column beside the selection goes */
+  #fillDownToData() {
+    const { cells, used } = this.#sheet;
+    const { first, last } = this.#expandToMerges(this.#selection.first, this.#selection.last);
+    const filled = (row, col) => col >= 1 && !!cells.get(key(row, col))?.text;
+    const beside = filled(last.row + 1, first.col - 1) ? first.col - 1 : last.col + 1;
+    if (!filled(last.row + 1, beside)) return;
+    let end = last.row + 1;
+    while (end < used.maxRow && filled(end + 1, beside)) end++;
+    this.#fillRange(rangeOf(first, last), { first, last: { row: end, col: last.col } }, true);
+  }
+
+  /** Ctrl+D and Ctrl+R: copies the first row or column of the selection over the rest (with one, the one before) */
+  #fillSelection(axis) {
+    if (this.#readOnly || this.#selection.whole) return;
+    const { first, last } = this.#selection;
+    const down = axis === 'row';
+    const single = down ? first.row === last.row : first.col === last.col;
+    if (single && (down ? first.row : first.col) === 1) return;
+    const from = single
+      ? { first: down ? { row: first.row - 1, col: first.col } : { row: first.row, col: first.col - 1 }, last: down ? { row: first.row - 1, col: last.col } : { row: last.row, col: first.col - 1 } }
+      : { first, last: down ? { row: first.row, col: last.col } : { row: last.row, col: first.col } };
+    this.#fillRange(rangeOf(from.first, from.last), { first: from.first, last }, false);
+    if (single) this.#setSelection(first, last, first, { scroll: false });
+  }
+
+  /** Alt+=: the sum of the numbers next to the cell, to confirm; below or beside a selected range, written */
+  #autosum() {
+    if (this.#readOnly || this.#selection.whole) return;
+    this.#commitEdit(null, { focus: false });
+    const { cells, rows, cols } = this.#sheet;
+    const isNumber = (row, col) => cells.get(key(row, col))?.number !== undefined;
+    const isEmpty = (row, col) => !cells.get(key(row, col))?.kind;
+    const { first, last, active } = this.#selection;
+    if (first.row === last.row && first.col === last.col) {
+      const { row, col } = active;
+      const up = numberRun(r => isNumber(r, col), row, -1, rows.count);
+      const left = up === null ? numberRun(c => isNumber(row, c), col, -1, cols.count) : null;
+      const range = up !== null ? rangeOf({ row: up, col }, { row: row - 1, col }) : left !== null ? rangeOf({ row, col: left }, { row, col: col - 1 }) : '';
+      this.#beginEdit({ mode: 'edit', text: `=SUM(${range})` });
+      if (!range) this.#input.setSelectionRange(5, 5);
+      return;
+    }
+    const sideways = first.row === last.row;
+    const lastIsEmpty = sideways
+      ? isEmpty(last.row, last.col)
+      : Array.from({ length: last.col - first.col + 1 }, (_, i) => isEmpty(last.row, first.col + i)).every(Boolean);
+    const lanes = sideways ? [first.row] : Array.from({ length: last.col - first.col + 1 }, (_, i) => first.col + i);
+    const at = (sideways ? last.col : last.row) + (lastIsEmpty ? 0 : 1);
+    const start = sideways ? first.col : first.row;
+    const values = lanes.map(lane => {
+      const cell = line => (sideways ? { row: lane, col: line } : { row: line, col: lane });
+      let any = false;
+      for (let line = start; line < at; line++) any ||= isNumber(cell(line).row, cell(line).col);
+      if (!any || !isEmpty(cell(at).row, cell(at).col)) return undefined;
+      return { formula: `SUM(${rangeOf(cell(start), cell(at - 1))})` };
+    });
+    if (values.every(v => v === undefined)) {
+      this.#showMessage('No hay números que sumar, o el lugar de la suma ya tiene datos.');
+      return;
+    }
+    const written = this.#write(sideways ? { row: first.row, col: at } : { row: at, col: first.col }, sideways ? [values] : [values], 'edit');
+    if (written) {
+      this.#setSelection(first, sideways ? { row: last.row, col: at } : { row: at, col: last.col }, active, { scroll: false });
+      this.#recordSelectionAfter();
+    }
+  }
+
+  /** Hides or shows the lines `a..=b`, as one undo step */
+  #setLinesHidden(axis, a, b, hidden) {
+    if (this.#readOnly || !this.#sheet) return false;
+    this.#commitEdit(null, { focus: false });
+    try {
+      this.#workbook.checkpoint(this.#historyToken(null));
+      const sheet = this.#activeSheet();
+      if (axis === 'row') sheet.setRowsHidden(`${a}:${b}`, hidden);
+      else sheet.setColumnsHidden(`${columnName(a)}:${columnName(b)}`, hidden);
+      this.#workbook.setSelectionAfter(this.#historyToken(null));
+    } catch (error) {
+      this.#fail(error);
+      return false;
+    }
+    this.reload();
+    return true;
+  }
+
+  /** Whether any of the lines `a..=b` is hidden */
+  #hasHidden(axis, a, b) {
+    const { custom } = axis === 'row' ? this.#sheet.rows : this.#sheet.cols;
+    for (const [line, size] of custom) if (size === 0 && line >= a && line <= b) return true;
+    return false;
+  }
+
+  // ---------- Search ----------
+
+  /** The hits found by the search panel are out of date */
+  #staleFind() {
+    if (this.#find) this.#find.hits = null;
+  }
+
+  /**
+   * Cells whose text matches, sheet by sheet and row by row. With `inFormulas` the formula counts
+   * instead of the text it shows, and `cell` has the formula or text to replace in; numbers and
+   * dates are then left out.
+   */
+  #findHits(query, { matchCase, wholeCell, scope = 'sheet', inFormulas = false } = {}) {
+    const pattern = searchPattern(query, { matchCase, wholeCell });
+    if (!pattern || !this.#workbook) return [];
+    const tabs = this.#workbook.tabs;
+    const indexes = scope === 'workbook' ? tabs.flatMap((t, i) => (t.kind === 'worksheet' && t.state === 'visible' ? [i] : [])) : [this.#sheetIndex];
+    const hits = [];
+    for (const index of indexes) {
+      const sheet = this.#workbook.sheet(index);
+      const found = [];
+      if (inFormulas) {
+        let maxRow = 0;
+        let maxCol = 0;
+        for (const [row, col, , text] of sheet.cellViews(this.locale)) {
+          if (!text) continue;
+          maxRow = Math.max(maxRow, row);
+          maxCol = Math.max(maxCol, col);
+        }
+        if (!maxRow) continue;
+        sheet.getCells(`A1:${columnName(maxCol)}${maxRow}`).forEach((cells, r) => cells.forEach((cell, c) => {
+          const text = cell.formula ? `=${cell.formula}` : cell.type === 'string' ? cell.value : null;
+          if (text && matches(pattern, text)) found.push({ row: r + 1, col: c + 1, text, cell });
+        }));
+      } else if (index === this.#sheetIndex) {
+        for (const [at, cell] of this.#sheet.cells) {
+          if (!cell.text || !matches(pattern, cell.text)) continue;
+          const row = Math.floor(at / 16_385);
+          found.push({ row, col: at - row * 16_385, text: cell.text });
+        }
+      } else {
+        for (const [row, col, , text] of sheet.cellViews(this.locale)) if (text && matches(pattern, text)) found.push({ row, col, text });
+      }
+      found.sort((a, b) => a.row - b.row || a.col - b.col);
+      for (const hit of found) hits.push({ sheet: index, sheetName: tabs[index].name, ref: refOf(hit), ...hit });
+    }
+    return hits;
+  }
+
+  /** Writes the replacements, one block per sheet, as one undo step; returns how many cells changed */
+  #replaceHits(hits, pattern, replacement) {
+    if (!hits.length) return 0;
+    this.#commitEdit(null, { focus: false });
+    const bySheet = new Map();
+    for (const hit of hits) {
+      if (!bySheet.has(hit.sheet)) bySheet.set(hit.sheet, []);
+      bySheet.get(hit.sheet).push(hit);
+    }
+    const blocks = [...bySheet].map(([index, found]) => {
+      const first = { row: Math.min(...found.map(h => h.row)), col: Math.min(...found.map(h => h.col)) };
+      const last = { row: Math.max(...found.map(h => h.row)), col: Math.max(...found.map(h => h.col)) };
+      return { index, first, last, found };
+    });
+    const only = blocks.length === 1 && blocks[0].index === this.#sheetIndex ? rangeOf(blocks[0].first, blocks[0].last) : null;
+    let written = false;
+    try {
+      this.#workbook.checkpoint(this.#historyToken(only));
+      for (const { index, first, last, found } of blocks) {
+        // Holes leave the cells between the hits as they are
+        const rows = Array.from({ length: last.row - first.row + 1 }, () => new Array(last.col - first.col + 1));
+        for (const hit of found) {
+          const text = replaceMatches(pattern, hit.text, replacement);
+          const value = hit.cell.formula ? { formula: text } : parseInput(text, this.locale).value;
+          rows[hit.row - first.row][hit.col - first.col] = value === '' ? null : value;
+        }
+        this.#workbook.sheet(index).setValues(refOf(first), rows);
+        written = true;
+      }
+      this.#workbook.setSelectionAfter(this.#historyToken(only));
+    } catch (error) {
+      // All or nothing, also when a later sheet refuses
+      if (written) this.#workbook.undo();
+      this.reload();
+      this.#fail(error);
+      return 0;
+    }
+    this.#clip = null;
+    this.reload();
+    for (const { index, first, last } of blocks) this.#emitChange(rangeOf(first, last), 'replace', this.#workbook.sheet(index));
+    return hits.length;
+  }
+
+  #findOptions() {
+    const { matchCase, wholeCell, scope, inFormulas, replacing } = this.#find;
+    return { matchCase: matchCase.checked, wholeCell: wholeCell.checked, scope: scope.value, inFormulas: inFormulas.checked || replacing };
+  }
+
+  #findStatus(text) {
+    this.#find.count.textContent = text;
+  }
+
+  /** Goes to the next hit after the active cell (or that one, with `here`), or the one before */
+  #findStep(step, { here = false } = {}) {
+    const find = this.#find;
+    const query = find.query.value;
+    if (!query) {
+      this.#findStatus('');
+      return;
+    }
+    try {
+      find.hits ??= this.#findHits(query, this.#findOptions());
+    } catch (error) {
+      this.#fail(error);
+      return;
+    }
+    const { hits } = find;
+    if (!hits.length) {
+      this.#findStatus('Sin resultados');
+      return;
+    }
+    const { row, col } = this.#selection.active;
+    const compare = hit => hit.sheet - this.#sheetIndex || hit.row - row || hit.col - col;
+    let at;
+    if (step > 0) {
+      at = hits.findIndex(hit => (here ? compare(hit) >= 0 : compare(hit) > 0));
+      if (at < 0) at = 0;
+    } else {
+      at = hits.findLastIndex(hit => compare(hit) < 0);
+      if (at < 0) at = hits.length - 1;
+    }
+    const hit = hits[at];
+    if (hit.sheet !== this.#sheetIndex) this.setSheet(hit.sheet);
+    this.select(hit.ref);
+    this.#findStatus(`${at + 1} de ${hits.length}`);
+  }
+
+  /** The replacement of the search panel on the active cell if it is a hit, and on to the next */
+  #findReplaceOne() {
+    const find = this.#find;
+    const pattern = searchPattern(find.query.value, this.#findOptions());
+    if (!pattern) return;
+    find.hits ??= this.#findHits(find.query.value, this.#findOptions());
+    const { row, col } = this.#selection.active;
+    const hit = find.hits.find(h => h.sheet === this.#sheetIndex && h.row === row && h.col === col);
+    if (hit) this.#replaceHits([hit], pattern, find.replacement.value);
+    this.#findStep(1);
+  }
+
+  #findReplaceAll() {
+    const find = this.#find;
+    const pattern = searchPattern(find.query.value, this.#findOptions());
+    if (!pattern) return;
+    const hits = this.#findHits(find.query.value, this.#findOptions());
+    const done = this.#replaceHits(hits, pattern, find.replacement.value);
+    this.#findStatus(done === 1 ? '1 reemplazo' : `${done} reemplazos`);
+  }
+
+  /** The search panel, made the first time it is asked for */
+  #findPanel() {
+    if (this.#find) return this.#find;
+    const el = document.createElement('div');
+    el.className = 'xlsx-editor-find';
+    el.setAttribute('role', 'search');
+    el.innerHTML = `
+      <div class="xlsx-editor-find-row">
+        <input type="text" data-field="query" placeholder="Buscar" aria-label="Buscar" spellcheck="false" autocomplete="off" />
+        <button type="button" data-action="previous" aria-label="Anterior" title="Anterior (Mayús+Enter)">‹</button>
+        <button type="button" data-action="next" aria-label="Siguiente" title="Siguiente (Enter)">›</button>
+        <button type="button" data-action="close" aria-label="Cerrar" title="Cerrar (Escape)">×</button>
+      </div>
+      <div class="xlsx-editor-find-row" data-field="replaceRow" hidden>
+        <input type="text" data-field="replacement" placeholder="Reemplazar por" aria-label="Reemplazar por" spellcheck="false" autocomplete="off" />
+        <button type="button" data-action="replace">Reemplazar</button>
+        <button type="button" data-action="replaceAll">Todos</button>
+      </div>
+      <div class="xlsx-editor-find-row">
+        <label><input type="checkbox" data-field="matchCase" /> Mayús/minús</label>
+        <label><input type="checkbox" data-field="wholeCell" /> Celda completa</label>
+        <label><input type="checkbox" data-field="inFormulas" /> En fórmulas</label>
+        <select data-field="scope" aria-label="Dónde buscar">
+          <option value="sheet">Esta hoja</option>
+          <option value="workbook">Todo el libro</option>
+        </select>
+        <span class="xlsx-editor-find-count" role="status"></span>
+      </div>`;
+    const field = name => el.querySelector(`[data-field="${name}"]`);
+    const find = {
+      el,
+      hits: null,
+      timer: 0,
+      replacing: false,
+      query: field('query'),
+      replacement: field('replacement'),
+      replaceRow: field('replaceRow'),
+      matchCase: field('matchCase'),
+      wholeCell: field('wholeCell'),
+      inFormulas: field('inFormulas'),
+      scope: field('scope'),
+      count: el.querySelector('.xlsx-editor-find-count'),
+    };
+    this.#find = find;
+    // Native events of the inner fields are not the editor's, and its keys are not the grid's
+    for (const type of ['change', 'input', 'selectionchange', 'keydown', 'copy', 'cut', 'paste']) el.addEventListener(type, e => e.stopPropagation());
+    const search = () => {
+      clearTimeout(find.timer);
+      find.hits = null;
+      find.timer = setTimeout(() => this.#findStep(1, { here: true }), FIND_DELAY_MS);
+    };
+    find.query.addEventListener('input', search);
+    for (const option of [find.matchCase, find.wholeCell, find.inFormulas, find.scope]) option.addEventListener('change', search);
+    const actions = {
+      next: () => this.#findStep(1),
+      previous: () => this.#findStep(-1),
+      close: () => this.closeFind(),
+      replace: () => this.#findReplaceOne(),
+      replaceAll: () => this.#findReplaceAll(),
+    };
+    el.addEventListener('click', e => actions[e.target.closest?.('[data-action]')?.dataset.action]?.());
+    el.addEventListener('keydown', e => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeFind();
+      } else if (mod && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        find.query.focus();
+        find.query.select();
+      } else if (e.key === 'Enter' && e.target === find.query) {
+        e.preventDefault();
+        clearTimeout(find.timer);
+        this.#findStep(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Enter' && e.target === find.replacement) {
+        e.preventDefault();
+        this.#findReplaceOne();
+      }
+    });
+    this.#body.appendChild(el);
+    return find;
   }
 
   #onPointerDown(e) {
@@ -994,6 +1502,10 @@ export class XlsxEditor extends EventTarget {
       const edge = this.#resizeEdge(x, y);
       if (edge) this.#startResize(edge, e, box);
       else this.#onHeaderDown(e, header, box);
+      return;
+    }
+    if (!e.shiftKey && this.#fillHandleAt(x, y)) {
+      this.#startFillDrag(box);
       return;
     }
     const at = this.#cellAt(x, y);
@@ -1238,7 +1750,18 @@ export class XlsxEditor extends EventTarget {
       { label: 'Pegar', keys: shortcut('V'), run: () => this.#pasteFromSystem() },
       { label: 'Borrar contenido', keys: 'Supr', run: () => this.#clearSelection() },
     );
-    if (whole === 'all') return items;
+    if (whole === 'all') {
+      if (this.#hasHidden('row', r1, r2) || this.#hasHidden('col', c1, c2)) {
+        items.push(null, {
+          label: 'Mostrar filas y columnas ocultas',
+          run: () => {
+            this.#setLinesHidden('row', r1, r2, false);
+            this.#setLinesHidden('col', c1, c2, false);
+          },
+        });
+      }
+      return items;
+    }
     items.push(null);
     if (whole !== 'col') {
       items.push(
@@ -1257,6 +1780,15 @@ export class XlsxEditor extends EventTarget {
     if (whole !== 'row') items.push({ label: cols === 1 ? 'Eliminar la columna' : `Eliminar ${cols} columnas`, run: () => this.#deleteLines('col', c1, cols) });
     if (whole === 'col') items.push(null, { label: 'Autoajustar el ancho', run: () => this.#autofit('col', c1, c2) });
     if (whole === 'row') items.push(null, { label: 'Autoajustar el alto', run: () => this.#autofit('row', r1, r2) });
+    if (whole === 'col') {
+      items.push({ label: cols === 1 ? 'Ocultar la columna' : `Ocultar ${cols} columnas`, run: () => this.#setLinesHidden('col', c1, c2, true) });
+      if (this.#hasHidden('col', c1, c2)) items.push({ label: 'Mostrar columnas ocultas', run: () => this.#setLinesHidden('col', c1, c2, false) });
+    }
+    if (whole === 'row') {
+      items.push({ label: rows === 1 ? 'Ocultar la fila' : `Ocultar ${rows} filas`, run: () => this.#setLinesHidden('row', r1, r2, true) });
+      if (this.#hasHidden('row', r1, r2)) items.push({ label: 'Mostrar filas ocultas', run: () => this.#setLinesHidden('row', r1, r2, false) });
+    }
+    if (!whole) items.push(null, { label: 'Autosuma', keys: 'Alt+=', run: () => this.#autosum() });
     return items;
   }
 
@@ -1400,8 +1932,8 @@ export class XlsxEditor extends EventTarget {
   }
 
   #onKeyDown(e) {
-    if (this.#drag || this.#resizing) {
-      if (e.key === 'Escape') (this.#drag ?? this.#resizing).cancel();
+    if (this.#drag || this.#gesture) {
+      if (e.key === 'Escape') (this.#drag ?? this.#gesture).cancel();
       return;
     }
     if (!this.#sheet || !this.#selection || e.isComposing) return;
@@ -1412,6 +1944,12 @@ export class XlsxEditor extends EventTarget {
     }
     if (this.#navigate(e)) {
       e.preventDefault();
+      return;
+    }
+    if (e.altKey && e.code === 'Equal' && !e.ctrlKey && !e.metaKey) {
+      // By the physical key: on a Mac, Option+= types another character
+      e.preventDefault();
+      this.#autosum();
       return;
     }
     if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !this.#readOnly) {
@@ -1438,6 +1976,26 @@ export class XlsxEditor extends EventTarget {
       if (k === 'a') {
         e.preventDefault();
         this.#selectLines('all', 1, 1, 1);
+      } else if (k === 'f') {
+        e.preventDefault();
+        this.openFind();
+      } else if (k === 'h' && e.ctrlKey && !this.#readOnly) {
+        e.preventDefault();
+        this.openFind({ replace: true });
+      } else if (k === 'd' && !this.#readOnly) {
+        e.preventDefault();
+        this.#fillSelection('row');
+      } else if (k === 'r' && e.ctrlKey && !e.shiftKey && !this.#readOnly) {
+        // Cmd+R stays the browser's reload
+        e.preventDefault();
+        this.#fillSelection('col');
+      } else if (e.ctrlKey && (e.code === 'Digit9' || e.code === 'Digit0') && !this.#readOnly) {
+        // Ctrl+9 hides rows and Ctrl+0 columns; with Shift they show them again
+        e.preventDefault();
+        const axis = e.code === 'Digit9' ? 'row' : 'col';
+        const [a, b] = this.#selectedLines(axis);
+        if (this.#selection.whole === (axis === 'row' ? 'col' : 'row') && !e.shiftKey) return;
+        this.#setLinesHidden(axis, a, b, !e.shiftKey);
       } else if ((k === '-' || k === '+' || (k === '=' && e.shiftKey)) && (whole === 'row' || whole === 'col') && !this.#readOnly) {
         // Ctrl+- and Ctrl++ on whole lines, as in Excel (on anything else they are the browser's zoom)
         e.preventDefault();
@@ -1507,7 +2065,7 @@ export class XlsxEditor extends EventTarget {
     let target = null;
     const arrow = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
     if (arrow && mod && !e.altKey) {
-      const filled = (row, col) => !!cells.get(key(row, col))?.kind;
+      const filled = (row, col) => !!cells.get(key(row, col))?.kind && rows.size(row) !== 0 && cols.size(col) !== 0;
       target = arrow[0]
         ? { row: dataEdge(r => filled(r, from.col), from.row, arrow[0], MAX_ROWS), col: from.col }
         : { row: from.row, col: dataEdge(c => filled(from.row, c), from.col, arrow[1], MAX_COLS) };
@@ -1817,8 +2375,7 @@ export class XlsxEditor extends EventTarget {
     return { first, last };
   }
 
-  #emitChange(range, source) {
-    const sheet = this.#activeSheet();
+  #emitChange(range, source, sheet = this.#activeSheet()) {
     const { first, last } = parseRange(range);
     const cells = [];
     if ((last.row - first.row + 1) * (last.col - first.col + 1) <= MAX_CHANGE_CELLS) {
@@ -1826,7 +2383,7 @@ export class XlsxEditor extends EventTarget {
         cells.push({ ref: refOf({ row: first.row + r, col: first.col + c }), value });
       }));
     }
-    this.dispatchEvent(new CustomEvent('change', { detail: { sheet: sheet.name, index: this.#sheetIndex, range, cells, source } }));
+    this.dispatchEvent(new CustomEvent('change', { detail: { sheet: sheet.name, index: sheet.index, range, cells, source } }));
   }
 
   /** Delete and Backspace: empties the selected cells, keeping their format */
@@ -1850,6 +2407,7 @@ export class XlsxEditor extends EventTarget {
       token = null; // a checkpoint made from code with a selection of its own
     }
     this.#clip = null;
+    this.#staleFind();
     this.#styles = this.#workbook.styleView();
     const tabs = this.#workbook.tabs;
     this.#renderTabs();

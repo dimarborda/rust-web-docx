@@ -2,7 +2,7 @@
 // Run with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Axis, MAX_ROWS, colWidthToPx, columnName, dataEdge, defaultColPx, parseRange, parseRef, ptToPx, pxToColWidth, rangeStats, sheetAxes } from '../src/grid.js';
+import { Axis, MAX_ROWS, colWidthToPx, columnName, dataEdge, defaultColPx, numberRun, parseRange, parseRef, ptToPx, pxToColWidth, rangeStats, sheetAxes } from '../src/grid.js';
 
 test('Excel sizes in pixels', () => {
   assert.equal(Math.round(ptToPx(15)), 20);
@@ -111,4 +111,14 @@ test('dataEdge lands where Ctrl+arrow does', () => {
   assert.equal(dataEdge(has, 3, -1, 100), 1, 'nothing before: the start');
   assert.equal(dataEdge(has, 1, -1, 100), 1, 'already there');
   assert.equal(dataEdge(has, 100, 1, 100), 100);
+});
+
+test('numberRun finds what Autosum takes', () => {
+  const numbers = new Set([2, 3, 4, 7]);
+  const has = i => numbers.has(i);
+  assert.equal(numberRun(has, 5, -1, 100), 2);
+  assert.equal(numberRun(has, 1, 1, 100), 4);
+  assert.equal(numberRun(has, 6, -1, 100), null);
+  assert.equal(numberRun(has, 1, -1, 100), null);
+  assert.equal(numberRun(() => true, 3, -1, 100), 1);
 });

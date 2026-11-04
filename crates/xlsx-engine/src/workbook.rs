@@ -27,7 +27,7 @@ use crate::view::{self, CellView, SheetLayout, StyleSheetView};
 pub const WORKBOOK_PART: &str = "xl/workbook.xml";
 
 pub(crate) const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const SHARED_STRINGS_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+pub(crate) const SHARED_STRINGS_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 const STYLES_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 
 /// Most cells one read or write may cover, so a typo like `A1:XFD1048576` fails instead of
@@ -224,7 +224,7 @@ impl Workbook {
         }
     }
 
-    fn styles(&self) -> Result<Styles, String> {
+    pub(crate) fn styles(&self) -> Result<Styles, String> {
         match self.related_part("styles") {
             Some(part) => Styles::parse(&self.package.get_string(&part)?),
             None => Ok(Styles::default()),
@@ -689,7 +689,7 @@ fn display_formula(stored: &str) -> String {
 }
 
 /// A `<c>` element with a formula and no cached value (the recalculation fills it in)
-fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, formula: &str) -> String {
+pub(crate) fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, formula: &str) -> String {
     let mut out = format!(r#"<{}c r="{}""#, prefix, at);
     if let Some(s) = style {
         out.push_str(&format!(r#" s="{}""#, escape_xml(s)));
@@ -703,7 +703,7 @@ fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Opt
 
 /// A `<c>` element with only the attributes that survive a new value: reference, format and
 /// phonetic flag
-fn cell_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, kind: Option<&str>, value: Option<&str>) -> String {
+pub(crate) fn cell_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, kind: Option<&str>, value: Option<&str>) -> String {
     let mut out = format!(r#"<{}c r="{}""#, prefix, at);
     if let Some(s) = style {
         out.push_str(&format!(r#" s="{}""#, escape_xml(s)));

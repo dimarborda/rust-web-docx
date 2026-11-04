@@ -10,6 +10,7 @@ pub mod formula;
 pub mod moves;
 pub mod cell_ref;
 pub mod dates;
+pub mod fill;
 pub mod shared_strings;
 pub mod sheet;
 pub mod sheets;
@@ -293,6 +294,21 @@ impl XlsxWorkbook {
     /// Height in points of the rows `first..=last`; none goes back to the automatic height
     pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), JsValue> {
         self.workbook.set_row_height(sheet, first, last, height).map_err(js_err)
+    }
+
+    /// Hides or shows the rows `first..=last`
+    pub fn set_rows_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), JsValue> {
+        self.workbook.set_rows_hidden(sheet, first, last, hidden).map_err(js_err)
+    }
+
+    /// Hides or shows the columns `first..=last`
+    pub fn set_columns_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), JsValue> {
+        self.workbook.set_columns_hidden(sheet, first, last, hidden).map_err(js_err)
+    }
+
+    /// Fills `target` from `source`, the cells at one of its ends; with `series`, trends continue
+    pub fn fill_range(&mut self, sheet: usize, source: &str, target: &str, series: bool) -> Result<(), JsValue> {
+        self.workbook.fill(sheet, source, target, series).map_err(js_err)
     }
 
     /// Numbers as the cell format `style` shows them in the language `locale`

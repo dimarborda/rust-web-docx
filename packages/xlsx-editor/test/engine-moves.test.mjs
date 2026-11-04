@@ -107,3 +107,33 @@ test('insertColumns(), deleteColumns() and setRowHeight()', async () => {
   assert.throws(() => sheet.setRowHeight(1, 'alto'), TypeError);
   assert.equal(sheet.getValue('A2'), 1);
 });
+
+test('fill() continues series and moves formulas', async () => {
+  const wb = await createWorkbook();
+  const sheet = wb.sheet(0);
+  sheet.setValues('A1', [[1, 'Lote 1', 'enero', { formula: 'A1*2' }], [2]]);
+  sheet.fill('A1:A2', 'A1:A4');
+  assert.deepEqual(sheet.getValues('A3:A4').flat(), [3, 4]);
+  sheet.fill('B1:D1', 'B1:D3');
+  assert.deepEqual(sheet.getValues('B2:D2')[0], ['Lote 2', 'febrero', 4]);
+  assert.equal(sheet.getCell('D3').formula, 'A3*2');
+  sheet.fill('A1:A2', 'A1:A4', { series: false });
+  assert.deepEqual(sheet.getValues('A3:A4').flat(), [1, 2]);
+  assert.throws(() => sheet.fill('A1', 'B2'), /extremo/);
+  assert.equal(sheet.getCells('D3:D3')[0][0].formula, 'A3*2');
+});
+
+test('setRowsHidden() and setColumnsHidden() keep cells and sizes', async () => {
+  const wb = await sales();
+  const sheet = wb.sheet(0);
+  sheet.setColumnWidth('B', 20);
+  sheet.setColumnsHidden('B', true);
+  sheet.setRowsHidden('2:3', true);
+  assert.deepEqual(sheet.layout().cols, [[2, 2, 20, true]]);
+  assert.deepEqual(sheet.layout().rows.map(([row, , hidden]) => [row, hidden]), [[2, true], [3, true]]);
+  assert.equal(sheet.getValue('B5'), 6);
+  sheet.setColumnsHidden('B', false);
+  sheet.setRowsHidden(2, false);
+  assert.deepEqual(sheet.layout().cols, [[2, 2, 20, false]]);
+  assert.deepEqual(sheet.layout().rows.map(([row]) => row), [3]);
+});

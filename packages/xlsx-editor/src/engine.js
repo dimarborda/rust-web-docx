@@ -102,6 +102,11 @@ export class Sheet {
     return this.getCell(ref).value;
   }
 
+  /** The cells of a range (`A1:C3`), by row: their type, value and formula, if any */
+  getCells(range) {
+    return JSON.parse(call(() => this.workbook._engine.range_json(this.index, range))).map(row => row.map(toCell));
+  }
+
   /** The values of a range (`A1:C3`), by row */
   getValues(range) {
     return JSON.parse(call(() => this.workbook._engine.range_json(this.index, range))).map(row => row.map(c => toCell(c).value));
@@ -261,6 +266,41 @@ export class Sheet {
     if (height !== null && (typeof height !== 'number' || !Number.isFinite(height))) throw new TypeError('El alto debe ser un número de puntos o null.');
     const [first, last] = [lineNumber(a, 'La fila'), lineNumber(b, 'La fila')];
     call(() => this.workbook._engine.set_row_height(this.index, first, last, height ?? undefined));
+  }
+
+  /**
+   * Hides or shows rows (`3`, `'3:5'`); they keep their cells and height
+   * @param {string | number} rows
+   * @param {boolean} hidden
+   */
+  setRowsHidden(rows, hidden) {
+    const [a, b = a] = typeof rows === 'string' ? rows.split(':').map(Number) : [rows];
+    const [first, last] = [lineNumber(a, 'La fila'), lineNumber(b, 'La fila')];
+    call(() => this.workbook._engine.set_rows_hidden(this.index, first, last, !!hidden));
+  }
+
+  /**
+   * Hides or shows columns (`'B'`, `'B:D'`, `2`); they keep their cells and width
+   * @param {string | number} columns
+   * @param {boolean} hidden
+   */
+  setColumnsHidden(columns, hidden) {
+    const [a, b = a] = typeof columns === 'string' ? columns.split(':') : [columns];
+    const [first, last] = [columnNumber(a), columnNumber(b)];
+    call(() => this.workbook._engine.set_columns_hidden(this.index, first, last, !!hidden));
+  }
+
+  /**
+   * Fills `target` from `source`, the cells at one of its ends, as Excel's fill handle: formats
+   * repeat, formulas move their references, and with `series` (by default) numbers continue their
+   * trend, one date goes on day by day, texts ending in a number count on and names of months and
+   * days follow their order. Refuses to fill over merged cells.
+   * @param {string} source e.g. `A1:A2`
+   * @param {string} target e.g. `A1:A20`
+   * @param {{series?: boolean}} [options]
+   */
+  fill(source, target, { series = true } = {}) {
+    call(() => this.workbook._engine.fill_range(this.index, source, target, !!series));
   }
 
   /** Merges a range into one cell; only its first cell may hold a value */

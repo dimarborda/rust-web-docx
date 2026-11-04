@@ -222,3 +222,17 @@ export function dataEdge(filled, from, step, limit) {
   for (i = from + step; inside(i); i += step) if (filled(i)) return i;
   return step < 0 ? 1 : limit;
 }
+
+/**
+ * The far end of the run of numbers next to the line `from`, going by `step`; null when the next
+ * line has none. Autosum takes that run.
+ * @param {(line: number) => boolean} isNumber
+ * @param {number} from
+ * @param {1 | -1} step
+ * @param {number} limit last line of the sheet
+ */
+export function numberRun(isNumber, from, step, limit) {
+  let end = null;
+  for (let i = from + step; i >= 1 && i <= limit && isNumber(i); i += step) end = i;
+  return end;
+}

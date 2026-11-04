@@ -42,6 +42,10 @@ Aún no se dibujan gráficos, imágenes, formato condicional ni comentarios, y e
 | Mover filas y columnas | Selecciónalas y arrastra su encabezado hasta el lugar que indica la línea verde (**Escape** cancela), o usa **Alt+↑ ↓** para las filas y **Alt+← →** para las columnas de la selección. Ver [Mover filas y columnas](#mover-filas-y-columnas). |
 | Insertar y eliminar filas y columnas | Clic derecho en una celda o un encabezado (también **Mayús+F10** o la tecla de menú). Con filas o columnas enteras seleccionadas, **Ctrl/Cmd+Mayús++** inserta y **Ctrl/Cmd+-** elimina. Ver [Insertar y eliminar](#insertar-y-eliminar). |
 | Cambiar ancho y alto | Arrastra el borde derecho de un encabezado de columna o el inferior de uno de fila (**Escape** cancela); doble clic en ese borde lo ajusta al contenido. Con varias seleccionadas, se aplica a todas. El menú contextual también ofrece el autoajuste. |
+| Ocultar y mostrar | Clic derecho en encabezados, o **Ctrl+9** (filas) y **Ctrl+0** (columnas); con **Mayús** se muestran. Para mostrar, selecciona las líneas de alrededor. Una línea más gruesa en el encabezado señala dónde hay ocultas. Conservan sus celdas y su tamaño. |
+| Rellenar | Arrastra el cuadrito de la esquina de la selección. Doble clic en él rellena hacia abajo hasta donde lleguen los datos de la columna vecina. **Ctrl/Cmd+D** copia hacia abajo y **Ctrl+R** hacia la derecha. Ver [Relleno](#relleno). |
+| Autosuma | **Alt+=** o el menú contextual. En una celda propone `=SUM(…)` con los números de arriba o, si no hay, de la izquierda, para confirmar con **Enter**. Con un rango seleccionado escribe la suma debajo de cada columna (o a la derecha de una sola fila), en su última línea si está vacía o en la siguiente, sin sobrescribir datos. |
+| Buscar y reemplazar | **Ctrl/Cmd+F** busca y **Ctrl+H** reemplaza; **Enter** y **Mayús+Enter** recorren los resultados. Ver [Buscar y reemplazar](#buscar-y-reemplazar). |
 | Moverse | **Ctrl/Cmd+flechas** va al borde de los datos, **Inicio** al principio de la fila, **Ctrl/Cmd+Inicio** y **Ctrl/Cmd+Fin** a las esquinas de los datos, **RePág** y **AvPág** una pantalla (con **Alt**, hacia los lados). Con **Mayús** extienden la selección. |
 | Deshacer y rehacer | **Ctrl/Cmd+Z**, y **Ctrl/Cmd+Y** o **Cmd+Mayús+Z**. Cada edición, borrado, pegado o movimiento es un paso; deshacer vuelve a la hoja y a la selección de entonces. |
 
@@ -192,6 +196,9 @@ En Node el motor se carga solo. En el navegador, los bundlers (Vite, webpack 5, 
 | `hoja.insertRows(antesDe, cantidad?)` / `hoja.insertColumns('C', cantidad?)` | Inserta filas o columnas vacías, con el formato de la anterior (ver [Insertar y eliminar](#insertar-y-eliminar)). También `editor.insertRows` y `editor.insertColumns`, en un paso de deshacer. |
 | `hoja.deleteRows(primera, cantidad?)` / `hoja.deleteColumns('C', cantidad?)` | Elimina filas o columnas. También `editor.deleteRows` y `editor.deleteColumns`. |
 | `hoja.setRowHeight('3:5', 30)` | Alto de filas en puntos; `null` vuelve al alto automático. |
+| `hoja.setRowsHidden('3:5', true)` / `hoja.setColumnsHidden('B:D', true)` | Oculta o muestra líneas. También `editor.hideRows`, `showRows`, `hideColumns` y `showColumns`. |
+| `hoja.fill('A1:A2', 'A1:A20', { series })` | Rellena un rango desde las celdas de uno de sus extremos (ver [Relleno](#relleno)). `editor.fill('A1:A20')` lo hace desde la selección, en un paso de deshacer. |
+| `hoja.getCells('A1:C3')` | Las celdas de un rango con su tipo, valor y fórmula. |
 | `wb.toBytes()` | El libro como `.xlsx`. |
 | `wb.close()` | Libera la memoria del motor. |
 
@@ -275,6 +282,24 @@ Se rechaza, sin cambiar nada:
 - Insertar o eliminar cortando una **fórmula matricial** de varias celdas.
 - Eliminar una columna con un **filtro aplicado**.
 - Cualquiera de estas operaciones en una **hoja con tablas dinámicas**.
+
+#### Relleno
+
+A lo largo de cada fila o columna rellenada se repiten las celdas de origen con su formato, y:
+
+- Las **fórmulas** se reescriben para cada celda: las referencias relativas se desplazan y las absolutas no.
+- Dos o más **números** siguen su tendencia (la recta que mejor se ajusta, como Excel). Un número solo se copia. Una **fecha** sola avanza de día en día.
+- Un **texto que acaba en número** sigue contando (`Lote 9`, `Lote 10`; `L08`, `L09`).
+- Los **meses y días**, completos o abreviados, en español o inglés, siguen su orden y respetan las mayúsculas.
+- Lo demás se copia tal cual, y una celda de origen vacía vacía su destino.
+
+Con `{ series: false }`, y con **Ctrl/Cmd+D** y **Ctrl+R**, solo se copia (las fórmulas siguen desplazándose). No se puede rellenar sobre celdas combinadas ni sobre la celda de origen de una fórmula compartida. Reducir la selección con el cuadrito no borra nada, a diferencia de Excel.
+
+#### Buscar y reemplazar
+
+`*` es cualquier texto, `?` un carácter y `~` los toma literalmente. Por defecto se busca en el texto que muestran las celdas de la hoja activa; el panel y las opciones permiten distinguir mayúsculas, exigir la celda completa, mirar las fórmulas o abarcar todo el libro (sin las hojas ocultas). Desde código: `editor.find(texto, opciones)` y `editor.replaceAll(texto, nuevo, opciones)`.
+
+Reemplazar actúa sobre las celdas de texto y sobre el texto de las fórmulas, nunca sobre números ni fechas. El resultado se interpreta como lo escrito a mano, así que `12` queda como número, y "Todos" es un solo paso de deshacer. El texto con varios formatos dentro de una celda queda con un solo formato. Si alguna celda es la de origen de una fórmula compartida se rechaza entero, sin cambiar nada.
 
 #### Fechas
 
