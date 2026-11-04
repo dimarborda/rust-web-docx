@@ -14,6 +14,7 @@ use ooxml_core::{content_types, Package, Undone, ZipLimits};
 use crate::cell_ref::{CellRange, CellRef};
 use crate::dates::{has_time, iso_to_unix_ms, serial_to_unix_ms, unix_ms_to_serial};
 use crate::formula::{self, ParseError};
+use crate::moves::without_shared_sources;
 use crate::recalc::{self, defined_names, sheet_formulas};
 use crate::shared_strings::{SharedStrings, EMPTY_SST};
 use crate::sheet::{CellNode, SheetXml};
@@ -357,7 +358,7 @@ impl Workbook {
         }
 
         let part = self.worksheet_part(sheet)?;
-        let xml = self.package.get_string(&part)?;
+        let xml = without_shared_sources(self.package.get_string(&part)?, |at| inputs.contains_key(&at))?;
         let parsed = SheetXml::parse(&xml)?;
         let prefix = parsed.prefix().to_string();
         let date1904 = self.date1904();
@@ -385,12 +386,6 @@ impl Workbook {
         let mut formulas: HashMap<CellRef, String> = HashMap::new();
         for (at, input) in &inputs {
             let existing = parsed.cell(*at);
-            if existing.and_then(|c| c.formula.as_ref()).is_some_and(|f| f.shared_master) {
-                return Err(format!(
-                    "La celda {} tiene una fórmula compartida que usan otras celdas; no se puede sobrescribir sin romperlas.",
-                    at
-                ));
-            }
             let mut style_attr = existing.and_then(|c| c.style_attr.clone());
             let (kind, content) = match input {
                 CellInput::Text(text) => (Some("s"), Some(strings.intern(text).to_string())),
@@ -947,15 +942,39 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_break_shared_formulas_and_keeps_the_workbook_unchanged() {
+    fn overwriting_the_first_cell_of_a_shared_formula_keeps_the_others() {
         let mut wb = open(&template());
-        // A valid value next to the shared formula: the whole batch is refused
-        let err = wb.set_values(1, "B3", vec![vec![Some(CellInput::Text("nuevo".into())), Some(CellInput::Number(1.0))]]);
+        wb.set_value(1, "A4", CellInput::Number(3.0)).unwrap();
+        assert_eq!(value(&wb, 1, "C4"), CellValue::Number(6.0));
+
+        wb.checkpoint(None);
+        wb.set_value(1, "C3", CellInput::Number(1.0)).unwrap();
+        assert_eq!(value(&wb, 1, "C3"), CellValue::Number(1.0));
+        assert_eq!(wb.cell(1, "C3").unwrap().formula, None);
+        // C4 has its own formula now, and still calculates
+        assert_eq!(wb.cell(1, "C4").unwrap().formula.as_deref(), Some("A4*2"));
+        assert!(!part(&wb, "xl/hojas/datos.xml").contains("shared"));
+        wb.set_value(1, "A4", CellInput::Number(5.0)).unwrap();
+        assert_eq!(value(&wb, 1, "C4"), CellValue::Number(10.0));
+
+        // Back to the shared formula, in one step
+        wb.undo().unwrap();
+        assert!(part(&wb, "xl/hojas/datos.xml").contains(r#"<f t="shared" si="0"/>"#));
+        assert_eq!(value(&wb, 1, "C3"), CellValue::Number(2469.0));
+
+        // Another cell of the group leaves the first one shared
+        wb.set_value(1, "C4", CellInput::Number(1.0)).unwrap();
+        assert!(part(&wb, "xl/hojas/datos.xml").contains(r#"<f t="shared" ref="C3:C4" si="0">A3*2</f>"#));
+    }
+
+    #[test]
+    fn an_invalid_value_leaves_the_workbook_unchanged() {
+        let mut wb = open(&template());
+        let error = wb.set_values(1, "C3", vec![vec![Some(CellInput::Number(1.0)), Some(CellInput::Formula("SUM(".into()))]]);
+        assert!(error.is_err());
         assert_eq!(part(&wb, "xl/hojas/datos.xml"), DATOS);
         assert_eq!(part(&wb, "xl/sharedStrings.xml"), SHARED);
         assert!(wb.package().contains("xl/calcChain.xml"));
-        assert!(err.unwrap_err().contains("compartida"));
-        assert!(wb.set_value(1, "C4", CellInput::Number(1.0)).is_ok(), "a cell that only reuses it can be overwritten");
         assert!(wb.set_value(1, "A1", CellInput::Number(f64::NAN)).is_err());
         assert!(wb.set_value(1, "A0", CellInput::Number(1.0)).is_err());
     }

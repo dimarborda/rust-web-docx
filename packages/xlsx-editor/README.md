@@ -75,7 +75,6 @@ Los valores se escriben con `sheet.setValues` del motor, que conserva el formato
 
 - **Fórmulas:** lo que empieza por `=` se guarda como fórmula y se calcula, igual que las fórmulas que dependen de ella. Se escriben en la sintaxis en inglés (`=SUM(A1:A3)`, `,` o `;` entre argumentos) en cualquier idioma del editor. Las funciones admitidas están en el [motor](#fórmulas); con otras, la celda muestra el último valor guardado y Excel la calcula al abrir el archivo (`fullCalcOnLoad`).
 - **Formato:** escribir no cambia el formato de número (salvo en fechas), y las columnas no se ensanchan solas: una fecha en una columna estrecha se ve como `####`, como en Excel.
-- No se puede sobrescribir la celda de origen de una fórmula compartida (la que usan otras celdas); el editor emite `error` y deja el libro como estaba.
 
 ### Áreas y contexto para agentes
 
@@ -293,13 +292,13 @@ A lo largo de cada fila o columna rellenada se repiten las celdas de origen con 
 - Los **meses y días**, completos o abreviados, en español o inglés, siguen su orden y respetan las mayúsculas.
 - Lo demás se copia tal cual, y una celda de origen vacía vacía su destino.
 
-Con `{ series: false }`, y con **Ctrl/Cmd+D** y **Ctrl+R**, solo se copia (las fórmulas siguen desplazándose). No se puede rellenar sobre celdas combinadas ni sobre la celda de origen de una fórmula compartida. Reducir la selección con el cuadrito no borra nada, a diferencia de Excel.
+Con `{ series: false }`, y con **Ctrl/Cmd+D** y **Ctrl+R**, solo se copia (las fórmulas siguen desplazándose). No se puede rellenar sobre celdas combinadas. Reducir la selección con el cuadrito no borra nada, a diferencia de Excel.
 
 #### Buscar y reemplazar
 
 `*` es cualquier texto, `?` un carácter y `~` los toma literalmente. Por defecto se busca en el texto que muestran las celdas de la hoja activa; el panel y las opciones permiten distinguir mayúsculas, exigir la celda completa, mirar las fórmulas o abarcar todo el libro (sin las hojas ocultas). Desde código: `editor.find(texto, opciones)` y `editor.replaceAll(texto, nuevo, opciones)`.
 
-Reemplazar actúa sobre las celdas de texto y sobre el texto de las fórmulas, nunca sobre números ni fechas. El resultado se interpreta como lo escrito a mano, así que `12` queda como número, y "Todos" es un solo paso de deshacer. El texto con varios formatos dentro de una celda queda con un solo formato. Si alguna celda es la de origen de una fórmula compartida se rechaza entero, sin cambiar nada.
+Reemplazar actúa sobre las celdas de texto y sobre el texto de las fórmulas, nunca sobre números ni fechas. El resultado se interpreta como lo escrito a mano, así que `12` queda como número, y "Todos" es un solo paso de deshacer. El texto con varios formatos dentro de una celda queda con un solo formato.
 
 #### Fechas
 
@@ -311,13 +310,14 @@ Las fechas de Excel no tienen zona horaria: la hora que muestra Excel se represe
 
 Solo se reescriben las partes del archivo que cambian (la hoja editada, las cadenas compartidas y, si hace falta, los estilos), y dentro de ellas solo las celdas escritas: gráficos, imágenes, formatos condicionales, validaciones, nombres definidos y todo lo demás se guarda byte a byte tal como estaba.
 
+Si se escribe sobre la celda de origen de una fórmula compartida (la que Excel guarda para todo un grupo de celdas rellenadas), las demás celdas del grupo pasan a tener cada una su propia fórmula, con el mismo resultado.
+
 Cuando un libro cambia, se elimina `xl/calcChain.xml` (Excel lo reconstruye) y se marca `fullCalcOnLoad="1"` para que Excel recalcule las fórmulas al abrirlo: así quedan bien también las que este motor no calcula.
 
 Limitaciones actuales:
 
 - Las fórmulas fuera de lo admitido (ver [Fórmulas](#fórmulas)) no se recalculan: `getValue` devuelve su último resultado guardado.
 - Las fórmulas se escriben en la sintaxis en inglés (`SUM`, no `SUMA`); los nombres de función en español no se traducen.
-- Escribir en la celda de origen de una fórmula compartida (la que usan otras celdas) da error, para no romper esas celdas.
 - Una variable `{{CAMPO}}` partida entre fragmentos de texto con formatos distintos no se reconoce.
 
 ## Content Security Policy

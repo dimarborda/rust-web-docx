@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use ooxml_core::xml::{element_ranges, set_attr};
 
-use crate::areas::overlaps_range;
+use crate::areas::{overlaps_range, range_contains};
 use crate::cell_ref::{CellRange, CellRef};
-use crate::moves::shift_formula;
+use crate::moves::{shift_formula, without_shared_sources};
 use crate::shared_strings::{SharedStrings, EMPTY_SST};
 use crate::sheet::{CellNode, SheetXml};
 use crate::view::SheetLayout;
@@ -206,6 +206,8 @@ impl Workbook {
 
         let part = self.worksheet_part(sheet)?;
         let xml = self.package.get_string(&part)?;
+        // The cells to fill: what they hold now may be the first cell of a shared formula
+        let xml = without_shared_sources(xml, |at| range_contains(&target, at) && !range_contains(&source, at))?;
         if let Some(merge) = SheetLayout::parse(&xml)?.merges.iter().find(|m| overlaps_range(m, &target)) {
             return Err(format!("No se puede rellenar sobre las celdas combinadas {}.", merge));
         }
@@ -245,9 +247,6 @@ impl Workbook {
                     continue;
                 }
                 let at = at_of(lane, line);
-                if nodes.get(&at).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.shared_master) {
-                    return Err(format!("La celda {} tiene una fórmula compartida que usan otras celdas; no se puede sobrescribir sin romperlas.", at));
-                }
                 let position = line as i64 - lane_first as i64;
                 let from = cells[position.rem_euclid(length as i64) as usize];
                 let style = from.and_then(|c| c.style_attr.as_deref());
@@ -433,8 +432,17 @@ mod tests {
         wb.fill(0, "B2", "B2:B3", true).unwrap();
         assert_eq!(wb.cell(0, "B3").unwrap().formula.as_deref(), Some("A3*2"));
         assert_eq!(wb.cell(0, "B3").unwrap().value, CellValue::Number(6.0));
-        // Over the first cell of a shared formula: refused, nothing changes
-        assert!(wb.fill(0, "B3", "B1:B3", true).unwrap_err().contains("compartida"));
+        // Over the first cell of a shared formula: B2, which read it from there, keeps its own
+        let mut wb2 = blank();
+        let xml = wb2.package.get_string("xl/worksheets/sheet1.xml").unwrap();
+        let start = xml.find("<sheetData").unwrap();
+        let end = xml.find("</worksheet>").unwrap();
+        let data = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="shared" ref="B1:B2" si="0">A1*2</f><v>2</v></c><c r="C1"><v>9</v></c></row><row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>4</v></c></row></sheetData>"#;
+        wb2.package.put("xl/worksheets/sheet1.xml".into(), format!("{}{}{}", &xml[..start], data, &xml[end..]).into_bytes());
+        wb2.fill(0, "C1", "B1:C1", false).unwrap();
+        assert_eq!(wb2.cell(0, "B1").unwrap().value, CellValue::Number(9.0));
+        assert_eq!(wb2.cell(0, "B2").unwrap().formula.as_deref(), Some("A2*2"));
+        assert_eq!(wb2.cell(0, "B2").unwrap().value, CellValue::Number(4.0));
     }
 
     #[test]

@@ -764,6 +764,34 @@ fn formula_edits(parsed: &SheetXml, host_is_target: bool, target: Target) -> Has
     edits
 }
 
+/// `xml` with the shared formulas whose first cell will be overwritten written out in each of
+/// their cells, since the others read it from there. The rest of the sheet stays as it is.
+pub(crate) fn without_shared_sources(xml: String, overwritten: impl Fn(CellRef) -> bool) -> Result<String, String> {
+    let parsed = SheetXml::parse(&xml)?;
+    let cells = || parsed.rows.iter().flat_map(|r| &r.cells);
+    let mut masters: HashMap<u32, (CellRef, &str)> = HashMap::new();
+    for cell in cells() {
+        if let Some(f) = cell.formula.as_ref().filter(|f| f.shared_master && overwritten(cell.at)) {
+            if let Some(si) = f.shared_index {
+                masters.insert(si, (cell.at, &f.text));
+            }
+        }
+    }
+    if masters.is_empty() {
+        drop(parsed);
+        return Ok(xml);
+    }
+    let mut edits = std::collections::BTreeMap::new();
+    for cell in cells() {
+        let Some(f) = cell.formula.as_ref().filter(|f| f.kind.as_deref() == Some("shared")) else { continue };
+        let Some((anchor, text)) = f.shared_index.and_then(|si| masters.get(&si)) else { continue };
+        let own = shift_formula(text, cell.at.row as i64 - anchor.row as i64, cell.at.col as i64 - anchor.col as i64);
+        let edit = FormulaEdit { text: Some(own), unshare: true };
+        edits.insert(cell.at, Some(with_formula(&xml[cell.range.clone()], &edit)?));
+    }
+    Ok(parsed.splice(&edits))
+}
+
 /// A `<c>` element with its `<f>` changed
 fn with_formula(cell: &str, edit: &FormulaEdit) -> Result<String, String> {
     let Some(range) = element_ranges(cell, "f", |_| true)?.into_iter().next() else { return Ok(cell.to_string()) };

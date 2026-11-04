@@ -86,7 +86,7 @@ export interface XlsxEditorEventMap {
   sheetchange: CustomEvent<{ index: number; name: string }>;
   selectionchange: CustomEvent<Selection>;
   change: CustomEvent<ChangeDetail>;
-  /** A change the engine refused (e.g. overwriting the source of a shared formula) */
+  /** A change the engine refused (e.g. moving a row through merged cells) */
   error: CustomEvent<{ error: Error }>;
 }
 
