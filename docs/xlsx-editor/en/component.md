@@ -92,12 +92,12 @@ Values are written with the engine's `sheet.setValues`, which keeps the cell for
 
 Events on the element: `ready` (with `detail.editor`), `load`, `sheetchange`, `selectionchange`, `change` and `error`.
 
-`change` comes after each edit, clear, paste, cut, move, fill, replacement, undo or redo:
+`change` comes after each edit, clear, paste, cut, move, resize, hide, show, fill, replacement, undo or redo, so it is the moment to save. A replacement across several sheets sends one per sheet:
 
 ```js
 element.addEventListener('change', ({ detail }) => {
   // detail: { sheet: 'Sales', index: 0, range: 'B3:C4',
-  //           source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'fill' | 'replace' | 'undo' | 'redo',
+  //           source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'resize' | 'hide' | 'show' | 'fill' | 'replace' | 'undo' | 'redo',
   //           cells: [{ ref: 'B3', value: 1200 }, …] }  // empty above 200,000 cells
 });
 ```

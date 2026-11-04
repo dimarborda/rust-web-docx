@@ -992,8 +992,9 @@ export class XlsxEditor extends EventTarget {
   /** Sets rows or columns to sizes in pixels, as one undo step: `[[line, px or null]]` */
   #applySizes(axis, sizes) {
     if (!sizes.length) return false;
+    const changed = this.#linesRange(axis, sizes[0][0], sizes[sizes.length - 1][0]);
     try {
-      this.#workbook.checkpoint(this.#historyToken(null));
+      this.#workbook.checkpoint(this.#historyToken(changed));
       const sheet = this.#activeSheet();
       // Runs of lines of one size are one call
       for (let i = 0; i < sizes.length;) {
@@ -1010,9 +1011,16 @@ export class XlsxEditor extends EventTarget {
       this.reload();
       return false;
     }
-    this.#workbook.setSelectionAfter(this.#historyToken(null));
+    this.#workbook.setSelectionAfter(this.#historyToken(changed));
     this.reload();
+    this.#emitChange(changed, 'resize');
     return true;
+  }
+
+  /** The lines `a..=b` as a range, only as far across as the sheet has cells */
+  #linesRange(axis, a, b) {
+    const { maxRow, maxCol } = this.#sheet.used;
+    return axis === 'row' ? rangeOf({ row: a, col: 1 }, { row: b, col: Math.max(maxCol, 1) }) : rangeOf({ row: 1, col: a }, { row: Math.max(maxRow, 1), col: b });
   }
 
   /** Double click: on the edge of a header fits its lines to their content, in a cell edits it */
@@ -1243,17 +1251,19 @@ export class XlsxEditor extends EventTarget {
   #setLinesHidden(axis, a, b, hidden) {
     if (this.#readOnly || !this.#sheet) return false;
     this.#commitEdit(null, { focus: false });
+    const changed = this.#linesRange(axis, a, b);
     try {
-      this.#workbook.checkpoint(this.#historyToken(null));
+      this.#workbook.checkpoint(this.#historyToken(changed));
       const sheet = this.#activeSheet();
       if (axis === 'row') sheet.setRowsHidden(`${a}:${b}`, hidden);
       else sheet.setColumnsHidden(`${columnName(a)}:${columnName(b)}`, hidden);
-      this.#workbook.setSelectionAfter(this.#historyToken(null));
+      this.#workbook.setSelectionAfter(this.#historyToken(changed));
     } catch (error) {
       this.#fail(error);
       return false;
     }
     this.reload();
+    this.#emitChange(changed, hidden ? 'hide' : 'show');
     return true;
   }
 
@@ -1328,9 +1338,11 @@ export class XlsxEditor extends EventTarget {
       return { index, first, last, found };
     });
     const only = blocks.length === 1 && blocks[0].index === this.#sheetIndex ? rangeOf(blocks[0].first, blocks[0].last) : null;
+    // Other sheets too: undoing says what changed in each one
+    const others = only ? null : blocks.map(({ index, first, last }) => [index, rangeOf(first, last)]);
     let written = false;
     try {
-      this.#workbook.checkpoint(this.#historyToken(only));
+      this.#workbook.checkpoint(this.#historyToken(only, others));
       for (const { index, first, last, found } of blocks) {
         // Holes leave the cells between the hits as they are
         const rows = Array.from({ length: last.row - first.row + 1 }, () => new Array(last.col - first.col + 1));
@@ -1342,7 +1354,7 @@ export class XlsxEditor extends EventTarget {
         this.#workbook.sheet(index).setValues(refOf(first), rows);
         written = true;
       }
-      this.#workbook.setSelectionAfter(this.#historyToken(only));
+      this.#workbook.setSelectionAfter(this.#historyToken(only, others));
     } catch (error) {
       // All or nothing, also when a later sheet refuses
       if (written) this.#workbook.undo();
@@ -2359,9 +2371,9 @@ export class XlsxEditor extends EventTarget {
   }
 
   /** What the undo history remembers about a change: the sheet, the selection, the cells */
-  #historyToken(changed) {
+  #historyToken(changed, others = null) {
     const sel = this.selection;
-    return JSON.stringify({ sheet: this.#sheetIndex, range: sel?.range, active: sel?.ref, whole: sel?.whole ?? null, changed });
+    return JSON.stringify({ sheet: this.#sheetIndex, range: sel?.range, active: sel?.ref, whole: sel?.whole ?? null, changed, others });
   }
 
   /** Once the selection has moved after a change, redo puts it back there */
@@ -2447,6 +2459,9 @@ export class XlsxEditor extends EventTarget {
       if (whole === 'col') this.#scrollIntoView({ col: active.col });
     }
     if (token?.changed) this.#emitChange(token.changed, direction);
+    for (const [index, range] of token?.others ?? []) {
+      if (tabs[index]?.kind === 'worksheet') this.#emitChange(range, direction, this.#workbook.sheet(index));
+    }
     return true;
   }
 
