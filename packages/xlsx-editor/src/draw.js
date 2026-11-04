@@ -26,7 +26,7 @@ export function canvasFont(font, zoom = 1) {
 }
 
 const GRIDLINE = '#d9d9d9';
-const PAD = 3; // horizontal text padding, px at zoom 1
+export const PAD = 3; // horizontal text padding, px at zoom 1
 
 /** Line width and dash of an Excel border style, at zoom 1 */
 function borderLook(style) {

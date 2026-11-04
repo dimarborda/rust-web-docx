@@ -73,6 +73,12 @@ function columnNumber(col) {
   throw new TypeError(`Columna no válida: ${col} (usa una letra como 'B' o un número desde 1).`);
 }
 
+/** A row or column number, or a count, for the engine */
+function lineNumber(value, what) {
+  if (!Number.isInteger(value) || value < 0) throw new TypeError(`${what} debe ser un entero positivo: ${value}`);
+  return value;
+}
+
 /** One worksheet of a workbook */
 export class Sheet {
   /**
@@ -132,8 +138,9 @@ export class Sheet {
 
   /**
    * Drawing API: every cell that shows something, with the text Excel shows for it in the
-   * language `locale`, as `[row, col, style, text, kind, color?]` (`kind`: `n`, `s`, `b`, `e`
-   * or `''` for an empty cell with a format; `style` indexes `workbook.styleView().xfs`)
+   * language `locale`, as `[row, col, style, text, kind, color?, number?]` (`kind`: `n`, `s`,
+   * `b`, `e` or `''` for an empty cell with a format; `style` indexes
+   * `workbook.styleView().xfs`; `number` is the value of `n` cells, dates as serial numbers)
    * @param {string} [locale]
    */
   cellViews(locale = 'en') {
@@ -183,6 +190,79 @@ export class Sheet {
     call(() => this.workbook._engine.set_column_width(this.index, columnNumber(a), columnNumber(b), width));
   }
 
+  /**
+   * Moves whole rows, as Excel's "cut and insert": `count` rows from `first` go before the row
+   * `before` (numbered as they are now). Formats, heights, merged cells, formulas of the whole
+   * workbook, defined names, charts, tables, validations, conditional formats, images and
+   * comments follow. Throws, and changes nothing, when it would tear merged cells, an array
+   * formula, a table or a filter. Returns where the first row ends up.
+   * @param {number} first
+   * @param {number} count
+   * @param {number} before
+   */
+  moveRows(first, count, before) {
+    const [a, n, b] = [lineNumber(first, 'La fila'), lineNumber(count, 'La cantidad'), lineNumber(before, 'El destino')];
+    return call(() => this.workbook._engine.move_rows(this.index, a, n, b));
+  }
+
+  /**
+   * Moves whole columns (see `moveRows`); `first` and `before` are letters (`'B'`) or numbers
+   * @param {string | number} first
+   * @param {number} count
+   * @param {string | number} before
+   */
+  moveColumns(first, count, before) {
+    const [a, n, b] = [columnNumber(first), lineNumber(count, 'La cantidad'), columnNumber(before)];
+    return call(() => this.workbook._engine.move_columns(this.index, a, n, b));
+  }
+
+  /**
+   * Inserts `count` empty rows before the row `before`, with the height and format of the one
+   * above. Formulas, names, charts and everything that `moveRows` follows are updated; ranges and
+   * merged cells that the new rows fall inside grow, also tables. Returns `before`.
+   * @param {number} before
+   * @param {number} [count]
+   */
+  insertRows(before, count = 1) {
+    const [b, n] = [lineNumber(before, 'La fila'), lineNumber(count, 'La cantidad')];
+    return call(() => this.workbook._engine.insert_rows(this.index, b, n));
+  }
+
+  /** Inserts empty columns before `before` (letters or number), like the one to their left */
+  insertColumns(before, count = 1) {
+    const [b, n] = [columnNumber(before), lineNumber(count, 'La cantidad')];
+    return call(() => this.workbook._engine.insert_columns(this.index, b, n));
+  }
+
+  /**
+   * Deletes `count` rows from `first`. What pointed only at them becomes `#REF!`; ranges and
+   * merged cells shrink, also tables. Returns `first`.
+   * @param {number} first
+   * @param {number} [count]
+   */
+  deleteRows(first, count = 1) {
+    const [a, n] = [lineNumber(first, 'La fila'), lineNumber(count, 'La cantidad')];
+    return call(() => this.workbook._engine.delete_rows(this.index, a, n));
+  }
+
+  /** Deletes columns from `first` (letters or number), see `deleteRows` */
+  deleteColumns(first, count = 1) {
+    const [a, n] = [columnNumber(first), lineNumber(count, 'La cantidad')];
+    return call(() => this.workbook._engine.delete_columns(this.index, a, n));
+  }
+
+  /**
+   * Height of a row or rows (`3`, `'3:5'`) in points; `null` goes back to the automatic height
+   * @param {string | number} rows
+   * @param {number | null} height
+   */
+  setRowHeight(rows, height) {
+    const [a, b = a] = typeof rows === 'string' ? rows.split(':').map(Number) : [rows];
+    if (height !== null && (typeof height !== 'number' || !Number.isFinite(height))) throw new TypeError('El alto debe ser un número de puntos o null.');
+    const [first, last] = [lineNumber(a, 'La fila'), lineNumber(b, 'La fila')];
+    call(() => this.workbook._engine.set_row_height(this.index, first, last, height ?? undefined));
+  }
+
   /** Merges a range into one cell; only its first cell may hold a value */
   mergeCells(range) {
     call(() => this.workbook._engine.merge_cells(this.index, range));
@@ -221,6 +301,16 @@ export class Workbook {
   /** Drawing API: the cell formats resolved to fonts, fills, borders and alignment */
   styleView() {
     return JSON.parse(call(() => this._engine.styles_view_json()));
+  }
+
+  /**
+   * Numbers as a cell format shows them: `style` indexes `styleView().xfs`
+   * @param {number} style
+   * @param {number[]} values
+   * @param {string} [locale]
+   */
+  formatNumbers(style, values, locale = 'en') {
+    return call(() => this._engine.format_numbers(style, Float64Array.from(values), locale));
   }
 
   /**

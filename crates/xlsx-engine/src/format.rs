@@ -733,6 +733,89 @@ impl Workbook {
         Ok(())
     }
 
+    /// Height in points of the rows `first..=last`; `None` goes back to the automatic height
+    pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), String> {
+        if height.is_some_and(|h| !(0.0..=409.5).contains(&h)) {
+            return Err("El alto de fila debe estar entre 0 y 409,5 puntos.".to_string());
+        }
+        let (first, last) = (first.min(last), first.max(last));
+        if first == 0 || last > crate::cell_ref::MAX_ROW {
+            return Err("Fila fuera de la hoja.".to_string());
+        }
+        let part = self.worksheet_part(sheet)?;
+        let xml = self.package.get_string(&part)?;
+        let parsed = SheetXml::parse(&xml)?;
+        let prefix = parsed.prefix();
+        let text = height.map(|h| format!("{}", (h * 100.0).round() / 100.0));
+        let new_rows = |from: u32, to: u32, out: &mut String| {
+            if let Some(text) = &text {
+                for number in from..=to {
+                    out.push_str(&format!(r#"<{}row r="{}" ht="{}" customHeight="1"/>"#, prefix, number, text));
+                }
+            }
+        };
+        let mut body = String::new();
+        let mut next = first;
+        let (inner, closing) = match parsed.data_inner() {
+            Some(inner) => (inner, false),
+            None => {
+                let end = parsed.data_end();
+                (end..end, true)
+            }
+        };
+        let mut cursor = inner.start;
+        for row in &parsed.rows {
+            let in_range = row.number >= first && row.number <= last;
+            if next <= last && row.number > next {
+                body.push_str(&xml[cursor..row.range.start]);
+                cursor = row.range.start;
+                new_rows(next, row.number.min(last + 1) - 1, &mut body);
+                next = row.number.min(last + 1);
+            }
+            if in_range {
+                next = row.number + 1;
+            }
+            if !in_range && row.has_ref {
+                continue;
+            }
+            let mut tag = xml[row.start_tag.clone()].to_string();
+            if !row.has_ref {
+                tag = set_attr(&tag, "r", &row.number.to_string());
+            }
+            if in_range {
+                tag = match &text {
+                    Some(text) => set_attr(&set_attr(&tag, "ht", text), "customHeight", "1"),
+                    None => remove_attr(&remove_attr(&tag, "ht"), "customHeight"),
+                };
+                if height.is_some_and(|h| h > 0.0) {
+                    tag = remove_attr(&tag, "hidden");
+                }
+            }
+            body.push_str(&xml[cursor..row.start_tag.start]);
+            body.push_str(&tag);
+            cursor = row.start_tag.end;
+        }
+        let tail_at = parsed.rows.last().map(|r| r.range.end.max(cursor)).unwrap_or(inner.start);
+        body.push_str(&xml[cursor..tail_at]);
+        if next <= last {
+            new_rows(next, last, &mut body);
+        }
+        let written = if closing {
+            if body.is_empty() {
+                return Ok(());
+            }
+            // <sheetData/> opens up to hold the rows
+            let end = parsed.data_end();
+            let start = xml[..end].rfind('<').unwrap_or(end);
+            format!("{}<{p}sheetData>{}</{p}sheetData>{}", &xml[..start], body, &xml[end..], p = prefix)
+        } else {
+            format!("{}{}{}", &xml[..inner.start], body, &xml[tail_at.max(inner.start)..])
+        };
+        drop(parsed);
+        self.package.put(part, written.into_bytes());
+        Ok(())
+    }
+
     /// Merges the cells of `range` into one; only its first cell may hold a value
     pub fn merge_cells(&mut self, sheet: usize, range: &str) -> Result<(), String> {
         let range = CellRange::parse(range)?;
@@ -916,6 +999,26 @@ mod tests {
         wb.set_column_width(0, 3, 6, 8.5).unwrap();
         let layout = SheetLayout::parse(&sheet_xml(&wb)).unwrap();
         assert_eq!(layout.cols, vec![(2, 2, Some(20.0), false), (3, 4, Some(8.5), false), (5, 6, Some(8.5), false)]);
+    }
+
+    #[test]
+    fn sets_row_heights_on_existing_and_new_rows() {
+        let mut wb = blank();
+        wb.set_row_height(0, 2, 3, Some(30.0)).unwrap();
+        assert!(sheet_xml(&wb).contains(r#"<row r="2" ht="30" customHeight="1"/><row r="3" ht="30" customHeight="1"/>"#), "{}", sheet_xml(&wb));
+        wb.set_value(0, "A5", crate::workbook::CellInput::Number(1.0)).unwrap();
+        wb.set_value(0, "A1", crate::workbook::CellInput::Number(2.0)).unwrap();
+        wb.set_row_height(0, 1, 6, Some(18.5)).unwrap();
+        let rows = wb.sheet_layout(0).unwrap().rows;
+        assert_eq!(rows.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), (1..=6).map(|r| (r, Some(18.5))).collect::<Vec<_>>());
+        assert_eq!(wb.cell(0, "A5").unwrap().value, crate::workbook::CellValue::Number(1.0));
+        assert_eq!(wb.cell(0, "A1").unwrap().value, crate::workbook::CellValue::Number(2.0));
+
+        wb.set_row_height(0, 2, 5, None).unwrap();
+        let rows = wb.sheet_layout(0).unwrap().rows;
+        assert_eq!(rows.iter().map(|r| r.0).collect::<Vec<_>>(), [1, 6]);
+        assert!(wb.set_row_height(0, 1, 1, Some(500.0)).is_err());
+        assert!(wb.set_row_height(0, 0, 1, Some(10.0)).is_err());
     }
 
     #[test]

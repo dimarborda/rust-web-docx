@@ -259,6 +259,11 @@ impl Workbook {
         view::cell_views(&xml, &self.shared_strings()?, &self.style_view()?, locale, self.date1904())
     }
 
+    /// Numbers as the cell format `style` shows them in the language `locale`
+    pub fn format_numbers(&self, style: u32, values: &[f64], locale: &Locale) -> Result<Vec<String>, String> {
+        Ok(view::format_numbers(values, style, &self.style_view()?, locale, self.date1904()))
+    }
+
     /// The cell at `reference` of the sheet at `sheet`
     pub fn cell(&self, sheet: usize, reference: &str) -> Result<CellData, String> {
         let at = CellRef::parse(reference)?;

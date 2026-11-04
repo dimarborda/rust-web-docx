@@ -7,6 +7,7 @@ pub mod blank;
 pub mod calc;
 pub mod format;
 pub mod formula;
+pub mod moves;
 pub mod cell_ref;
 pub mod dates;
 pub mod shared_strings;
@@ -259,6 +260,46 @@ impl XlsxWorkbook {
         self.workbook.unmerge_cells(sheet, range).map_err(js_err)
     }
 
+    /// Moves `count` rows from `first` before the row `before`; returns where the first ends up
+    pub fn move_rows(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, JsValue> {
+        self.workbook.move_rows(sheet, first, count, before).map_err(js_err)
+    }
+
+    /// Moves `count` columns from `first` before the column `before` (see `move_rows`)
+    pub fn move_columns(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, JsValue> {
+        self.workbook.move_columns(sheet, first, count, before).map_err(js_err)
+    }
+
+    /// `count` empty rows before the row `before`, like the one above them
+    pub fn insert_rows(&mut self, sheet: usize, before: u32, count: u32) -> Result<u32, JsValue> {
+        self.workbook.insert_rows(sheet, before, count).map_err(js_err)
+    }
+
+    /// `count` empty columns before the column `before`, like the one to their left
+    pub fn insert_columns(&mut self, sheet: usize, before: u32, count: u32) -> Result<u32, JsValue> {
+        self.workbook.insert_columns(sheet, before, count).map_err(js_err)
+    }
+
+    /// Deletes `count` rows from `first`
+    pub fn delete_rows(&mut self, sheet: usize, first: u32, count: u32) -> Result<u32, JsValue> {
+        self.workbook.delete_rows(sheet, first, count).map_err(js_err)
+    }
+
+    /// Deletes `count` columns from `first`
+    pub fn delete_columns(&mut self, sheet: usize, first: u32, count: u32) -> Result<u32, JsValue> {
+        self.workbook.delete_columns(sheet, first, count).map_err(js_err)
+    }
+
+    /// Height in points of the rows `first..=last`; none goes back to the automatic height
+    pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), JsValue> {
+        self.workbook.set_row_height(sheet, first, last, height).map_err(js_err)
+    }
+
+    /// Numbers as the cell format `style` shows them in the language `locale`
+    pub fn format_numbers(&self, style: u32, values: Vec<f64>, locale: &str) -> Result<Vec<String>, JsValue> {
+        self.workbook.format_numbers(style, &values, &numfmt::Locale::from_tag(locale)).map_err(js_err)
+    }
+
     /// Adds an empty worksheet after the tab at `after` (at the end without it); returns its
     /// tab position
     pub fn add_sheet(&mut self, name: &str, after: Option<usize>) -> Result<usize, JsValue> {
@@ -321,7 +362,8 @@ impl XlsxWorkbook {
     }
 
     /// Cells of the sheet at `sheet` that show something, formatted in the language `locale`
-    /// (`es`, `en-US`…), as JSON rows `[row, col, style, text, kind, color?]`
+    /// (`es`, `en-US`…), as JSON rows `[row, col, style, text, kind, color, number]` (the last two
+    /// only when there is something to say: numbers carry `number`, with `color` null if none)
     pub fn sheet_cells_json(&self, sheet: usize, locale: &str) -> Result<String, JsValue> {
         let cells = self.workbook.cell_views(sheet, &numfmt::Locale::from_tag(locale)).map_err(js_err)?;
         Ok(view::cells_json(&cells).to_string())

@@ -1,15 +1,33 @@
 // XlsxEditor: shows an Excel workbook on a canvas, as Excel draws it, and edits its cells. The
 // workbook is read, formatted and written by the Rust/WebAssembly engine (engine.js);
 // this class lays out the grid, scrolls it virtually (only the visible cells are drawn), keeps
-// frozen panes in place and handles selection, the in-cell editor, the clipboard, undo and tabs.
+// frozen panes in place and handles selection, the in-cell editor, the clipboard, undo, tabs,
+// moving rows and columns from their headers and the status bar.
 import { createWorkbook, initEngine, openWorkbook } from './engine.js';
-import { canvasFont, drawHeaders, drawRegion, key } from './draw.js';
-import { MAX_COLS, MAX_ROWS, columnName, parseRange, sheetAxes } from './grid.js';
+import { PAD, canvasFont, drawHeaders, drawRegion, key, wrapLines } from './draw.js';
+import { Axis, MAX_COLS, MAX_ROWS, colWidthToPx, columnName, dataEdge, parseRange, ptToPx, pxToColWidth, rangeStats, sheetAxes } from './grid.js';
 import { editText, parseInput, parseTSV, toTSV } from './input.js';
 
 const COL_HEADER_H = 22;
 const SELECTION = '#217346';
 const MS_PER_DAY = 86_400_000;
+/** Pixels the pointer travels on a selected header before it counts as dragging it */
+const DRAG_START_PX = 4;
+/** How close to the edge of the view a drag scrolls it, and how fast (pixels every 40 ms) */
+const DRAG_SCROLL_EDGE_PX = 24;
+const DRAG_SCROLL_STEP_PX = 24;
+/** Above this many cells a `change` event leaves out their values, to stay fast */
+const MAX_CHANGE_CELLS = 200_000;
+/** How near the edge of a header a press resizes its row or column */
+const RESIZE_EDGE_PX = 4;
+/** Smallest size a drag leaves a row or column with */
+const MIN_LINE_PX = 4;
+/** Largest row Excel allows, in points */
+const MAX_ROW_PT = 409.5;
+/** Largest column Excel allows, in characters */
+const MAX_COL_CHARS = 255;
+/** Seconds a message of the status bar stays */
+const MESSAGE_SECONDS = 8;
 
 const refOf = cell => `${columnName(cell.col)}${cell.row}`;
 const rangeOf = (first, last) => (first.row === last.row && first.col === last.col ? refOf(first) : `${refOf(first)}:${refOf(last)}`);
@@ -44,7 +62,7 @@ export class XlsxEditor extends EventTarget {
   /**
    * Creates an editor inside `container` (which should have a height)
    * @param {HTMLElement} container
-   * @param {{locale?: string, zoom?: number, tabs?: boolean, formulaBar?: boolean, readOnly?: boolean, wasmUrl?: string | URL}} [options]
+   * @param {{locale?: string, zoom?: number, tabs?: boolean, formulaBar?: boolean, statusBar?: boolean, readOnly?: boolean, wasmUrl?: string | URL}} [options]
    */
   static async create(container, options = {}) {
     await initEngine(options.wasmUrl);
@@ -64,6 +82,9 @@ export class XlsxEditor extends EventTarget {
   #scroller;
   #spacer;
   #tabsEl;
+  #statusEl;
+  #messageEl;
+  #statsEl;
   #observer;
   #frame = 0;
   #workbook = null;
@@ -78,8 +99,14 @@ export class XlsxEditor extends EventTarget {
   #edit = null; // { row, col, mode: 'enter' | 'edit', original } while a cell is being edited
   #clip = null; // { tsv, values, sheet, first, last, cut? } of the last copy, to paste losslessly
   #lastChange = null; // range of the last change, until the selection after it is recorded
+  #drag = null; // { axis, first, count, before, cancel } while a header is dragged to move lines
+  #statusDirty = false;
+  #statusShown = null; // what the statistics of the status bar were computed from
+  #messageTimer = 0;
+  #resizing = null; // { cancel } while the edge of a header is dragged
+  #menu = null; // the open context menu: { close }
 
-  constructor(container, { locale, zoom = 1, tabs = true, formulaBar = true, readOnly = false } = {}) {
+  constructor(container, { locale, zoom = 1, tabs = true, formulaBar = true, statusBar = true, readOnly = false } = {}) {
     super();
     this.#container = container;
     this.locale = locale || defaultLocale();
@@ -98,7 +125,11 @@ export class XlsxEditor extends EventTarget {
         <textarea class="xlsx-editor-input" hidden spellcheck="false" autocomplete="off" aria-label="Editar celda"></textarea>
         <textarea class="xlsx-editor-clipboard" tabindex="-1" aria-hidden="true"></textarea>
       </div>
-      <div class="xlsx-editor-tabs" role="tablist"${tabs ? '' : ' hidden'}></div>`;
+      <div class="xlsx-editor-tabs" role="tablist"${tabs ? '' : ' hidden'}></div>
+      <div class="xlsx-editor-status"${statusBar ? '' : ' hidden'}>
+        <span class="xlsx-editor-status-message" role="status"></span>
+        <span class="xlsx-editor-status-stats"></span>
+      </div>`;
     container.appendChild(root);
     this.#root = root;
     this.#bar = root.querySelector('.xlsx-editor-bar');
@@ -110,6 +141,9 @@ export class XlsxEditor extends EventTarget {
     this.#scroller = root.querySelector('.xlsx-editor-scroller');
     this.#spacer = root.querySelector('.xlsx-editor-spacer');
     this.#tabsEl = root.querySelector('.xlsx-editor-tabs');
+    this.#statusEl = root.querySelector('.xlsx-editor-status');
+    this.#messageEl = root.querySelector('.xlsx-editor-status-message');
+    this.#statsEl = root.querySelector('.xlsx-editor-status-stats');
     this.#input = root.querySelector('.xlsx-editor-input');
     this.#sink = root.querySelector('.xlsx-editor-clipboard');
 
@@ -118,8 +152,10 @@ export class XlsxEditor extends EventTarget {
       this.render();
     });
     this.#scroller.addEventListener('pointerdown', e => this.#onPointerDown(e));
+    this.#scroller.addEventListener('pointermove', e => this.#updateCursor(e));
     this.#scroller.addEventListener('keydown', e => this.#onKeyDown(e));
-    this.#scroller.addEventListener('dblclick', () => this.#beginEdit({ mode: 'edit' }));
+    this.#scroller.addEventListener('dblclick', e => this.#onDoubleClick(e));
+    this.#scroller.addEventListener('contextmenu', e => this.#onContextMenu(e));
     this.#input.addEventListener('keydown', e => this.#onEditKey(e));
     this.#input.addEventListener('input', () => {
       this.#valueBox.value = this.#input.value;
@@ -299,14 +335,60 @@ export class XlsxEditor extends EventTarget {
     return this.#workbook.area(target, { sheet: this.#sheetIndex, maxRows, locale: this.locale });
   }
 
-  /** The selected range: `{ref, range, active, text}` or null */
+  /** The selected range: `{ref, range, active, text, whole}` or null */
   get selection() {
     if (!this.#selection) return null;
-    const { first, last, active } = this.#selection;
+    const { first, last, active, whole = null } = this.#selection;
     const ref = `${columnName(first.col)}${first.row}`;
     const range = first.row === last.row && first.col === last.col ? ref : `${ref}:${columnName(last.col)}${last.row}`;
     const cell = this.#sheet?.cells.get(key(active.row, active.col));
-    return { ref: `${columnName(active.col)}${active.row}`, range, active: { ...active }, text: cell?.text ?? '' };
+    return { ref: `${columnName(active.col)}${active.row}`, range, active: { ...active }, text: cell?.text ?? '', whole };
+  }
+
+  /**
+   * Count, sum, average, smallest and largest of the selected cells, as the status bar shows
+   * them; null when they are empty
+   */
+  get selectionStats() {
+    if (!this.#selection || !this.#sheet) return null;
+    const stats = rangeStats(this.#sheet.cells, this.#selection, this.#sheet);
+    if (!stats) return null;
+    const { style, ...numbers } = stats;
+    return numbers;
+  }
+
+  /**
+   * Moves `count` whole rows from `first` before the row `before` (numbered as they are now), as
+   * Excel's "cut and insert", in one undo step, and selects them. False when nothing changed: it
+   * stays where it is, the editor is read-only, or the engine refused (an `error` event says why).
+   */
+  moveRows(first, count, before) {
+    return this.#moveLines('row', first, count, before);
+  }
+
+  /** Moves whole columns, by number (see `moveRows`) */
+  moveColumns(first, count, before) {
+    return this.#moveLines('col', first, count, before);
+  }
+
+  /** Inserts `count` rows before the row `before`, as one undo step, and selects them; false if refused */
+  insertRows(before, count = 1) {
+    return this.#insertLines('row', before, count);
+  }
+
+  /** Inserts columns, by number (see `insertRows`) */
+  insertColumns(before, count = 1) {
+    return this.#insertLines('col', before, count);
+  }
+
+  /** Deletes `count` rows from `first`, as one undo step; false if refused */
+  deleteRows(first, count = 1) {
+    return this.#deleteLines('row', first, count);
+  }
+
+  /** Deletes columns, by number (see `deleteRows`) */
+  deleteColumns(first, count = 1) {
+    return this.#deleteLines('col', first, count);
   }
 
   /** Undoes the last change made from the grid (or since the last `workbook.checkpoint()`) */
@@ -346,6 +428,10 @@ export class XlsxEditor extends EventTarget {
 
   destroy() {
     cancelAnimationFrame(this.#frame);
+    this.#drag?.cancel();
+    this.#resizing?.cancel();
+    this.#menu?.close();
+    clearTimeout(this.#messageTimer);
     this.#observer.disconnect();
     for (const [type, listener] of this.#clipboardListeners) document.removeEventListener(type, listener);
     if (this.#fontsListener) document.fonts.removeEventListener('loadingdone', this.#fontsListener);
@@ -376,8 +462,8 @@ export class XlsxEditor extends EventTarget {
     const cells = new Map();
     let maxRow = 1;
     let maxCol = 1;
-    for (const [row, col, style, text, kind, color] of sheet.cellViews(this.locale)) {
-      cells.set(key(row, col), { style, text, kind, color });
+    for (const [row, col, style, text, kind, color, number] of sheet.cellViews(this.locale)) {
+      cells.set(key(row, col), { style, text, kind, color, number });
       if (text) {
         maxRow = Math.max(maxRow, row);
         maxCol = Math.max(maxCol, col);
@@ -405,6 +491,7 @@ export class XlsxEditor extends EventTarget {
     const frozen = layout.frozen ?? { rows: 0, cols: 0 };
     this.#sheet = {
       cells, merges, mergeAt, covered, rows, cols,
+      used: { maxRow, maxCol },
       gridlines: layout.gridlines,
       headings: layout.headings,
       frozen: { rows: Math.min(frozen.rows, rows.count - 1), cols: Math.min(frozen.cols, cols.count - 1) },
@@ -419,6 +506,9 @@ export class XlsxEditor extends EventTarget {
       this.#selection = { first: { row: 1, col: 1 }, last: { row: 1, col: 1 }, active: { row: 1, col: 1 } };
       if (start.row > 1 || start.col > 1) this.#selection = { first: start, last: start, active: start };
     }
+    this.#fitWholeSelection();
+    this.#statusDirty = true;
+    this.#statusShown = null;
     this.#updateTabs();
     this.#updateBar();
     this.render();
@@ -446,7 +536,22 @@ export class XlsxEditor extends EventTarget {
     if (rows === sheet.rows && cols === sheet.cols) return;
     sheet.rows = rows;
     sheet.cols = cols;
+    this.#fitWholeSelection();
     this.#updateSpacer();
+  }
+
+  /** Whole rows or columns reach the end of the grid, also after it grows */
+  #fitWholeSelection() {
+    const sel = this.#selection;
+    if (!sel?.whole || !this.#sheet) return;
+    if (sel.whole !== 'row') {
+      sel.last = { ...sel.last, row: this.#sheet.rows.count };
+      sel.cursor = { ...sel.cursor, row: this.#sheet.rows.count };
+    }
+    if (sel.whole !== 'col') {
+      sel.last = { ...sel.last, col: this.#sheet.cols.count };
+      sel.cursor = { ...sel.cursor, col: this.#sheet.cols.count };
+    }
   }
 
   /** Grows the grid when the view comes near its bottom or right end */
@@ -477,6 +582,7 @@ export class XlsxEditor extends EventTarget {
     this.#frame = requestAnimationFrame(() => {
       this.#frame = 0;
       this.#draw();
+      if (this.#statusDirty) this.#updateStatus();
     });
   }
 
@@ -544,6 +650,30 @@ export class XlsxEditor extends EventTarget {
     if (this.#sheet.headings) {
       drawHeaders(ctx, { rows, cols, colSegs, rowSegs, rowHeaderW: gx, colHeaderH: gy, width, height, zoom, selection: this.#selection, columnName });
     }
+    if (this.#drag) this.#drawLineDrag(ctx, width, height, gx, gy);
+  }
+
+  /** While a header is dragged: the lines it takes and the place they would go */
+  #drawLineDrag(ctx, width, height, gx, gy) {
+    const { axis, first, count, before } = this.#drag;
+    const isRow = axis === 'row';
+    const start = this.#linePos(axis, first);
+    const end = this.#linePos(axis, first + count);
+    ctx.save();
+    ctx.beginPath();
+    if (isRow) ctx.rect(0, gy, width, height - gy);
+    else ctx.rect(gx, 0, width - gx, height);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(33, 115, 70, 0.18)';
+    if (isRow) ctx.fillRect(0, start, width, end - start);
+    else ctx.fillRect(start, 0, end - start, height);
+    if (before !== null) {
+      const at = Math.round(this.#linePos(axis, before));
+      ctx.fillStyle = SELECTION;
+      if (isRow) ctx.fillRect(0, at - 1, width, 3);
+      else ctx.fillRect(at - 1, 0, 3, height);
+    }
+    ctx.restore();
   }
 
   #drawSelection(ctx, rs, cs, clip) {
@@ -553,7 +683,8 @@ export class XlsxEditor extends EventTarget {
     const zoom = this.zoom;
     const xOf = c => cs.start + (cols.offset(c) - cols.offset(cs.from)) * zoom;
     const yOf = r => rs.start + (rows.offset(r) - rows.offset(rs.from)) * zoom;
-    const range = this.#expandToMerges(sel.first, sel.last);
+    // Whole rows or columns are what was asked for, even under a merged title that goes beyond them
+    const range = sel.whole ? sel : this.#expandToMerges(sel.first, sel.last);
     const x = xOf(range.first.col);
     const y = yOf(range.first.row);
     const w = xOf(range.last.col + 1) - x;
@@ -564,7 +695,7 @@ export class XlsxEditor extends EventTarget {
     ctx.clip();
     if (range.first.row !== range.last.row || range.first.col !== range.last.col) {
       // Tint the range, leaving the active cell clear as Excel does
-      const a = this.#expandToMerges(sel.active, sel.active);
+      const a = sel.whole ? { first: sel.active, last: sel.active } : this.#expandToMerges(sel.active, sel.active);
       const ax = xOf(a.first.col);
       const ay = yOf(a.first.row);
       ctx.beginPath();
@@ -626,30 +757,246 @@ export class XlsxEditor extends EventTarget {
 
   /** The cell under a point of the canvas, or null over the headers */
   #cellAt(x, y) {
+    const { gx, gy } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
+    if (x < gx || y < gy) return null;
+    return { row: this.#lineAt('row', y), col: this.#lineAt('col', x) };
+  }
+
+  /** The row or column at a position of the canvas (clamped to the grid) */
+  #lineAt(axis, pos) {
     const { rows, cols, frozen } = this.#sheet;
     const zoom = this.zoom;
     const { gx, gy, frozenW, frozenH } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
-    if (x < gx || y < gy) return null;
-    const col = x < gx + frozenW
-      ? cols.indexAt((x - gx) / zoom + cols.offset(1))
-      : cols.indexAt(cols.offset(frozen.cols + 1) + this.#scroller.scrollLeft / zoom + (x - gx - frozenW) / zoom);
-    const row = y < gy + frozenH
-      ? rows.indexAt((y - gy) / zoom + rows.offset(1))
-      : rows.indexAt(rows.offset(frozen.rows + 1) + this.#scroller.scrollTop / zoom + (y - gy - frozenH) / zoom);
-    return { row, col };
+    if (axis === 'col') {
+      return pos < gx + frozenW
+        ? cols.indexAt((pos - gx) / zoom + cols.offset(1))
+        : cols.indexAt(cols.offset(frozen.cols + 1) + this.#scroller.scrollLeft / zoom + (pos - gx - frozenW) / zoom);
+    }
+    return pos < gy + frozenH
+      ? rows.indexAt((pos - gy) / zoom + rows.offset(1))
+      : rows.indexAt(rows.offset(frozen.rows + 1) + this.#scroller.scrollTop / zoom + (pos - gy - frozenH) / zoom);
+  }
+
+  /** Where a row or column starts on the canvas */
+  #linePos(axis, line) {
+    const { rows, cols, frozen } = this.#sheet;
+    const zoom = this.zoom;
+    const { gx, gy, frozenW, frozenH } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
+    if (axis === 'col') {
+      return line <= frozen.cols
+        ? gx + (cols.offset(line) - cols.offset(1)) * zoom
+        : gx + frozenW + (cols.offset(line) - cols.offset(frozen.cols + 1)) * zoom - this.#scroller.scrollLeft;
+    }
+    return line <= frozen.rows
+      ? gy + (rows.offset(line) - rows.offset(1)) * zoom
+      : gy + frozenH + (rows.offset(line) - rows.offset(frozen.rows + 1)) * zoom - this.#scroller.scrollTop;
+  }
+
+  /** The header under a point of the canvas: `{axis: 'row' | 'col', line}`, `{axis: 'all'}` or null */
+  #headerAt(x, y) {
+    const { gx, gy } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
+    if (x >= gx && y >= gy) return null;
+    if (x < gx && y < gy) return { axis: 'all' };
+    return y < gy ? { axis: 'col', line: this.#lineAt('col', x) } : { axis: 'row', line: this.#lineAt('row', y) };
+  }
+
+  /** The row or column whose end is at a point of a header: `{axis, line}`, or null */
+  #resizeEdge(x, y) {
+    if (this.#readOnly) return null;
+    const header = this.#headerAt(x, y);
+    if (!header || header.axis === 'all') return null;
+    const { axis, line } = header;
+    const sizes = axis === 'col' ? this.#sheet.cols : this.#sheet.rows;
+    const pos = axis === 'col' ? x : y;
+    const start = this.#linePos(axis, line);
+    if (start + sizes.size(line) * this.zoom - pos <= RESIZE_EDGE_PX) return { axis, line };
+    if (pos - start > RESIZE_EDGE_PX) return null;
+    // The start of a line is the end of the one before it that can be seen
+    let before = line - 1;
+    while (before >= 1 && sizes.size(before) === 0) before--;
+    return before >= 1 ? { axis, line: before } : null;
+  }
+
+  /** The lines a resize of `line` acts on: the selected ones when it is one of them */
+  #linesToResize(axis, line) {
+    const [a, b] = this.#selectedLines(axis);
+    return this.#selection.whole === axis && line >= a && line <= b ? [a, b] : [line, line];
+  }
+
+  /** Follows the pointer from the edge of a header, showing the new size as it changes */
+  #startResize({ axis, line }, e, box) {
+    const isRow = axis === 'row';
+    const sheet = this.#sheet;
+    const original = isRow ? sheet.rows : sheet.cols;
+    const [a, b] = this.#linesToResize(axis, line);
+    const posOf = ev => (isRow ? ev.clientY - box.top : ev.clientX - box.left);
+    const startPos = posOf(e);
+    const startSize = original.size(line);
+    const max = isRow ? Math.round(ptToPx(MAX_ROW_PT)) : colWidthToPx(MAX_COL_CHARS, this.#mdw);
+    let size = startSize;
+    const finish = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      this.#resizing = null;
+      this.#scroller.style.cursor = '';
+    };
+    const cancel = () => {
+      finish();
+      if (isRow) sheet.rows = original;
+      else sheet.cols = original;
+      this.#updateSpacer();
+      this.#updateBar();
+      this.render();
+    };
+    const move = ev => {
+      size = Math.min(max, Math.max(MIN_LINE_PX, Math.round(startSize + (posOf(ev) - startPos) / this.zoom)));
+      const custom = new Map(original.custom);
+      for (let i = a; i <= b; i++) custom.set(i, size);
+      const axisNow = new Axis(original.count, original.defaultSize, custom);
+      if (isRow) sheet.rows = axisNow;
+      else sheet.cols = axisNow;
+      this.#updateSpacer();
+      this.#nameBox.textContent = isRow ? `Alto: ${(size * 0.75).toFixed(2)}` : `Ancho: ${pxToColWidth(size, this.#mdw).toFixed(2)}`;
+      this.render();
+    };
+    const up = () => {
+      finish();
+      if (size === startSize) {
+        cancel();
+        return;
+      }
+      const sizes = [];
+      for (let i = a; i <= b; i++) sizes.push([i, size]);
+      this.#applySizes(axis, sizes);
+    };
+    this.#resizing = { cancel };
+    this.#scroller.style.cursor = isRow ? 'row-resize' : 'col-resize';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  }
+
+  /** Sets rows or columns to sizes in pixels, as one undo step: `[[line, px or null]]` */
+  #applySizes(axis, sizes) {
+    if (!sizes.length) return;
+    try {
+      this.#workbook.checkpoint(this.#historyToken(null));
+      const sheet = this.#activeSheet();
+      // Runs of lines of one size are one call
+      for (let i = 0; i < sizes.length;) {
+        const [first, size] = sizes[i];
+        let j = i;
+        while (j + 1 < sizes.length && sizes[j + 1][1] === size && sizes[j + 1][0] === sizes[j][0] + 1) j++;
+        const last = sizes[j][0];
+        if (axis === 'row') sheet.setRowHeight(`${first}:${last}`, size === null ? null : Math.round(size * 0.75 * 4) / 4);
+        else if (size !== null) sheet.setColumnWidth(`${columnName(first)}:${columnName(last)}`, pxToColWidth(size, this.#mdw));
+        i = j + 1;
+      }
+    } catch (error) {
+      this.#fail(error);
+    }
+    this.#workbook.setSelectionAfter(this.#historyToken(null));
+    this.reload();
+  }
+
+  /** Double click: on the edge of a header fits its lines to their content, in a cell edits it */
+  #onDoubleClick(e) {
+    if (!this.#sheet) return;
+    const box = this.#scroller.getBoundingClientRect();
+    const x = e.clientX - box.left;
+    const y = e.clientY - box.top;
+    if (!this.#headerAt(x, y)) {
+      this.#beginEdit({ mode: 'edit' });
+      return;
+    }
+    const edge = this.#resizeEdge(x, y);
+    if (edge) this.#autofit(edge.axis, ...this.#linesToResize(edge.axis, edge.line));
+  }
+
+  /** Each of the lines `a..=b` as wide or tall as its content asks for */
+  #autofit(axis, a, b) {
+    const { cells, covered, mergeAt, rows, cols } = this.#sheet;
+    const needed = new Map();
+    const ctx = this.#ctx;
+    ctx.save();
+    for (const [at, cell] of cells) {
+      if (!cell.text) continue;
+      const r = Math.floor(at / 16_385);
+      const c = at - r * 16_385;
+      const line = axis === 'row' ? r : c;
+      if (line < a || line > b || covered.has(at) || mergeAt.has(at)) continue;
+      const xf = this.#styles.xfs[cell.style] || this.#styles.xfs[0];
+      const font = xf?.font ?? this.#styles.defaultFont;
+      ctx.font = canvasFont(font);
+      const padding = PAD * 2 + (xf?.indent || 0) * 9;
+      let size;
+      if (axis === 'col') {
+        // Wrapped text fits whatever the width: it does not ask for any
+        if (xf?.wrap) continue;
+        size = Math.ceil(ctx.measureText(cell.text).width + padding + 2);
+      } else {
+        const lines = xf?.wrap && cell.kind !== 'n' ? wrapLines(ctx, cell.text, Math.max(cols.size(c) - padding, 1)).length : 1;
+        size = Math.ceil(lines * ptToPx(font.size || 11) * 1.22 + 4);
+      }
+      needed.set(line, Math.max(needed.get(line) ?? 0, size));
+    }
+    ctx.restore();
+    const sizes = [];
+    for (let line = a; line <= b; line++) {
+      if ((axis === 'row' ? rows : cols).size(line) === 0) continue;
+      const size = needed.get(line);
+      // A row with nothing goes back to the automatic height; a column stays as it is
+      if (size !== undefined) sizes.push([line, axis === 'row' ? Math.max(size, rows.defaultSize) : size]);
+      else if (axis === 'row') sizes.push([line, null]);
+    }
+    this.#applySizes(axis, sizes);
+  }
+
+  /** The first and last lines of the selection along an axis */
+  #selectedLines(axis) {
+    const { first, last } = this.#selection;
+    return axis === 'row' ? [first.row, last.row] : [first.col, last.col];
+  }
+
+  #updateCursor(e) {
+    if (!this.#sheet || e.buttons || !this.#selection) return;
+    const box = this.#scroller.getBoundingClientRect();
+    const x = e.clientX - box.left;
+    const y = e.clientY - box.top;
+    const header = x > this.#scroller.clientWidth || y > this.#scroller.clientHeight ? null : this.#headerAt(x, y);
+    let cursor = '';
+    const edge = header ? this.#resizeEdge(x, y) : null;
+    if (edge) {
+      cursor = edge.axis === 'col' ? 'col-resize' : 'row-resize';
+    } else if (header) {
+      cursor = 'pointer';
+      if (!this.#readOnly && this.#selection.whole === header.axis && header.axis !== 'all') {
+        const [a, b] = this.#selectedLines(header.axis);
+        if (header.line >= a && header.line <= b) cursor = 'grab';
+      }
+    }
+    this.#scroller.style.cursor = cursor;
   }
 
   #onPointerDown(e) {
-    if (!this.#sheet || e.button !== 0) return;
+    // Ctrl+click is the right button on a Mac: `contextmenu` takes it
+    if (!this.#sheet || e.button !== 0 || e.ctrlKey) return;
     const box = this.#scroller.getBoundingClientRect();
     const x = e.clientX - box.left;
     const y = e.clientY - box.top;
     // Clicks on the scrollbars scroll
     if (x > this.#scroller.clientWidth || y > this.#scroller.clientHeight) return;
-    const at = this.#cellAt(x, y);
-    if (!at) return;
     this.#commitEdit(null, { focus: false });
     this.#scroller.focus({ preventScroll: true });
+    const header = this.#headerAt(x, y);
+    if (header) {
+      const edge = this.#resizeEdge(x, y);
+      if (edge) this.#startResize(edge, e, box);
+      else this.#onHeaderDown(e, header, box);
+      return;
+    }
+    const at = this.#cellAt(x, y);
     const anchor = e.shiftKey && this.#selection ? this.#selection.active : at;
     this.#setSelection(anchor, at, anchor, { scroll: false });
     const move = ev => {
@@ -664,11 +1011,440 @@ export class XlsxEditor extends EventTarget {
     window.addEventListener('pointerup', up);
   }
 
+  /**
+   * A press on a header: selects its row or column (with Shift, up to it; dragging, the ones
+   * passed over), or on a line already selected starts moving the selected ones
+   */
+  #onHeaderDown(e, { axis, line }, box) {
+    if (axis === 'all') {
+      this.#selectLines('all', 1, 1, 1);
+      return;
+    }
+    const sel = this.#selection;
+    const [a, b] = this.#selectedLines(axis);
+    if (!this.#readOnly && !e.shiftKey && sel.whole === axis && line >= a && line <= b) {
+      this.#startLineDrag(axis, a, b - a + 1, line, e, box);
+      return;
+    }
+    const anchor = e.shiftKey ? (axis === 'row' ? sel.active.row : sel.active.col) : line;
+    this.#selectLines(axis, anchor, line, anchor);
+    const move = ev => this.#selectLines(axis, anchor, this.#lineAt(axis, axis === 'row' ? ev.clientY - box.top : ev.clientX - box.left), anchor);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  /**
+   * Follows the pointer from a selected header: past a few pixels the selected lines are being
+   * moved (near the edges the view scrolls); a press that stays selects only the line pressed
+   */
+  #startLineDrag(axis, first, count, line, e, box) {
+    const isRow = axis === 'row';
+    const posOf = ev => (isRow ? ev.clientY - box.top : ev.clientX - box.left);
+    const startPos = posOf(e);
+    let lastPos = startPos;
+    const aim = () => {
+      // The nearest line between two: after the line under the pointer past its middle
+      const under = this.#lineAt(axis, lastPos);
+      const size = (isRow ? this.#sheet.rows : this.#sheet.cols).size(under) * this.zoom;
+      const before = lastPos > this.#linePos(axis, under) + size / 2 ? under + 1 : under;
+      this.#drag.before = before >= first && before <= first + count ? null : before;
+      this.render();
+    };
+    const scrollTimer = setInterval(() => {
+      if (!this.#drag) return;
+      const { gx, gy, frozenW, frozenH } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
+      const start = isRow ? gy + frozenH : gx + frozenW;
+      const end = isRow ? this.#scroller.clientHeight : this.#scroller.clientWidth;
+      let step = 0;
+      if (lastPos < start + DRAG_SCROLL_EDGE_PX) step = -DRAG_SCROLL_STEP_PX;
+      else if (lastPos > end - DRAG_SCROLL_EDGE_PX) step = DRAG_SCROLL_STEP_PX;
+      if (!step) return;
+      if (isRow) this.#scroller.scrollTop += step;
+      else this.#scroller.scrollLeft += step;
+      aim();
+    }, 40);
+    const finish = () => {
+      clearInterval(scrollTimer);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      this.#scroller.style.cursor = '';
+      const drag = this.#drag;
+      this.#drag = null;
+      return drag;
+    };
+    const cancel = () => {
+      finish();
+      this.render();
+    };
+    const move = ev => {
+      lastPos = posOf(ev);
+      if (!this.#drag) {
+        if (Math.abs(lastPos - startPos) < DRAG_START_PX) return;
+        this.#drag = { axis, first, count, before: null, cancel };
+        this.#scroller.style.cursor = 'grabbing';
+      }
+      aim();
+    };
+    const up = () => {
+      const drag = finish();
+      if (!drag) this.#selectLines(axis, line, line, line);
+      else if (drag.before !== null) this.#moveLines(axis, first, count, drag.before);
+      this.render();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+  }
+
+  /** Selects whole rows or columns from `a` to `b` (or the whole sheet, with `axis` `all`) */
+  #selectLines(axis, a, b, activeLine) {
+    const { rows, cols } = this.#sheet;
+    const options = { scroll: false, whole: axis };
+    if (axis === 'row') this.#setSelection({ row: a, col: 1 }, { row: b, col: cols.count }, { row: activeLine, col: 1 }, options);
+    else if (axis === 'col') this.#setSelection({ row: 1, col: a }, { row: rows.count, col: b }, { row: 1, col: activeLine }, options);
+    else this.#setSelection({ row: 1, col: 1 }, { row: rows.count, col: cols.count }, { row: 1, col: 1 }, options);
+  }
+
+  /** The selected cells to act on: whole rows or columns only as far as the sheet has cells */
+  #contentBounds() {
+    const { first, last, whole } = this.#selection;
+    if (!whole) return { first, last };
+    const { maxRow, maxCol } = this.#sheet.used;
+    return {
+      first,
+      last: {
+        row: whole === 'row' ? last.row : Math.max(first.row, Math.min(last.row, maxRow)),
+        col: whole === 'col' ? last.col : Math.max(first.col, Math.min(last.col, maxCol)),
+      },
+    };
+  }
+
+  /** The cells copying or clearing act on: a plain range takes in the merged cells it touches */
+  #actionBounds() {
+    const bounds = this.#contentBounds();
+    return this.#selection.whole ? bounds : this.#expandToMerges(bounds.first, bounds.last);
+  }
+
+  /** Alt+arrow: the rows or columns of the selection one place up, down, left or right */
+  #nudgeLines(axis, step) {
+    const { whole } = this.#selection;
+    if (whole && whole !== axis) return;
+    const [first, last] = this.#selectedLines(axis);
+    const before = step < 0 ? first - 1 : last + 2;
+    if (before < 1 || before > (axis === 'row' ? MAX_ROWS : MAX_COLS) + 1) return;
+    if (!this.#moveLines(axis, first, last - first + 1, before)) return;
+    const [a, b] = this.#selectedLines(axis);
+    const line = step < 0 ? a : b;
+    this.#scrollIntoView(axis === 'row' ? { row: line } : { col: line });
+  }
+
+  #moveLines(axis, first, count, before) {
+    const last = first + count - 1;
+    if (before >= first && before <= last + 1) return false;
+    const isRow = axis === 'row';
+    return this.#editLines(axis, Math.min(first, before), Math.max(last, before - 1), count, 'move', sheet => (isRow ? sheet.moveRows(first, count, before) : sheet.moveColumns(first, count, before)));
+  }
+
+  #insertLines(axis, before, count) {
+    const isRow = axis === 'row';
+    return this.#editLines(axis, before, null, count, 'insert', sheet => (isRow ? sheet.insertRows(before, count) : sheet.insertColumns(before, count)));
+  }
+
+  #deleteLines(axis, first, count) {
+    const isRow = axis === 'row';
+    return this.#editLines(axis, first, null, count, 'delete', sheet => (isRow ? sheet.deleteRows(first, count) : sheet.deleteColumns(first, count)));
+  }
+
+  /**
+   * One edit of whole lines as an undo step: `run` does it and returns where the lines start.
+   * It changes the lines `from..=to`; `to` null reaches the end of what the sheet has (and of what
+   * is pushed there). The lines end up selected.
+   */
+  #editLines(axis, from, to, count, source, run) {
+    if (this.#readOnly || !this.#sheet) return false;
+    this.#commitEdit(null, { focus: false });
+    const isRow = axis === 'row';
+    const { maxRow, maxCol } = this.#sheet.used;
+    const end = Math.min(isRow ? MAX_ROWS : MAX_COLS, to ?? Math.max((isRow ? maxRow : maxCol) + count, from + count - 1));
+    const changed = isRow ? rangeOf({ row: from, col: 1 }, { row: end, col: maxCol }) : rangeOf({ row: 1, col: from }, { row: maxRow, col: end });
+    let start;
+    try {
+      this.#workbook.checkpoint(this.#historyToken(changed));
+      start = run(this.#activeSheet());
+    } catch (error) {
+      this.#fail(error);
+      return false;
+    }
+    this.#clip = null;
+    this.#lastChange = changed;
+    this.reload();
+    this.#extend(isRow ? start + count : 1, isRow ? 1 : start + count);
+    this.#selectLines(axis, start, start + count - 1, start);
+    this.#recordSelectionAfter();
+    this.#emitChange(changed, source);
+    return true;
+  }
+
+  // ---------- Context menu ----------
+
+  /** Right click: acts on what is selected, or on what is under the pointer when it is outside */
+  #onContextMenu(e) {
+    if (!this.#sheet || !this.#selection) return;
+    const box = this.#scroller.getBoundingClientRect();
+    const x = e.clientX - box.left;
+    const y = e.clientY - box.top;
+    if (x > this.#scroller.clientWidth || y > this.#scroller.clientHeight) return;
+    e.preventDefault();
+    this.#commitEdit(null, { focus: false });
+    this.#scroller.focus({ preventScroll: true });
+    const header = this.#headerAt(x, y);
+    const { first, last, whole } = this.#selection;
+    if (header?.axis === 'all') {
+      this.#selectLines('all', 1, 1, 1);
+    } else if (header) {
+      const [a, b] = this.#selectedLines(header.axis);
+      if (whole !== header.axis || header.line < a || header.line > b) this.#selectLines(header.axis, header.line, header.line, header.line);
+    } else {
+      const at = this.#cellAt(x, y);
+      if (at.row < first.row || at.row > last.row || at.col < first.col || at.col > last.col) this.#setSelection(at, at, at, { scroll: false });
+    }
+    this.#openMenu(e.clientX, e.clientY);
+  }
+
+  /** Shift+F10 or the menu key: the menu at the active cell */
+  #openMenuAtCell() {
+    const { active } = this.#selection;
+    const box = this.#scroller.getBoundingClientRect();
+    this.#openMenu(box.left + this.#linePos('col', active.col) + 8, box.top + this.#linePos('row', active.row) + 8);
+  }
+
+  #menuItems() {
+    const { whole } = this.#selection;
+    const [r1, r2] = this.#selectedLines('row');
+    const [c1, c2] = this.#selectedLines('col');
+    const [rows, cols] = [r2 - r1 + 1, c2 - c1 + 1];
+    const many = (n, one, several) => (n === 1 ? `una ${one}` : `${n} ${several}`);
+    const shortcut = key => `${/Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '') ? '⌘' : 'Ctrl+'}${key}`;
+    const items = [];
+    if (!this.#readOnly) items.push({ label: 'Cortar', keys: shortcut('X'), run: () => this.#copyToSystem(true) });
+    items.push({ label: 'Copiar', keys: shortcut('C'), run: () => this.#copyToSystem(false) });
+    if (this.#readOnly) return items;
+    items.push(
+      { label: 'Pegar', keys: shortcut('V'), run: () => this.#pasteFromSystem() },
+      { label: 'Borrar contenido', keys: 'Supr', run: () => this.#clearSelection() },
+    );
+    if (whole === 'all') return items;
+    items.push(null);
+    if (whole !== 'col') {
+      items.push(
+        { label: `Insertar ${many(rows, 'fila', 'filas')} arriba`, run: () => this.#insertLines('row', r1, rows) },
+        { label: `Insertar ${many(rows, 'fila', 'filas')} abajo`, run: () => this.#insertLines('row', r2 + 1, rows) },
+      );
+    }
+    if (whole !== 'row') {
+      items.push(
+        { label: `Insertar ${many(cols, 'columna', 'columnas')} a la izquierda`, run: () => this.#insertLines('col', c1, cols) },
+        { label: `Insertar ${many(cols, 'columna', 'columnas')} a la derecha`, run: () => this.#insertLines('col', c2 + 1, cols) },
+      );
+    }
+    items.push(null);
+    if (whole !== 'col') items.push({ label: rows === 1 ? 'Eliminar la fila' : `Eliminar ${rows} filas`, run: () => this.#deleteLines('row', r1, rows) });
+    if (whole !== 'row') items.push({ label: cols === 1 ? 'Eliminar la columna' : `Eliminar ${cols} columnas`, run: () => this.#deleteLines('col', c1, cols) });
+    if (whole === 'col') items.push(null, { label: 'Autoajustar el ancho', run: () => this.#autofit('col', c1, c2) });
+    if (whole === 'row') items.push(null, { label: 'Autoajustar el alto', run: () => this.#autofit('row', r1, r2) });
+    return items;
+  }
+
+  #openMenu(clientX, clientY) {
+    this.#menu?.close();
+    const menu = document.createElement('div');
+    menu.className = 'xlsx-editor-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Acciones de la selección');
+    const buttons = [];
+    let close = () => {};
+    for (const item of this.#menuItems()) {
+      if (!item) {
+        const line = document.createElement('div');
+        line.className = 'xlsx-editor-menu-line';
+        line.setAttribute('role', 'separator');
+        menu.appendChild(line);
+        continue;
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'xlsx-editor-menu-item';
+      button.setAttribute('role', 'menuitem');
+      const label = document.createElement('span');
+      label.textContent = item.label;
+      button.appendChild(label);
+      if (item.keys) {
+        const keys = document.createElement('span');
+        keys.className = 'xlsx-editor-menu-keys';
+        keys.textContent = item.keys;
+        button.appendChild(keys);
+      }
+      button.addEventListener('click', () => {
+        close();
+        this.#scroller.focus({ preventScroll: true });
+        item.run();
+      });
+      menu.appendChild(button);
+      buttons.push(button);
+    }
+    menu.addEventListener('contextmenu', e => e.preventDefault());
+    menu.addEventListener('keydown', e => {
+      e.stopPropagation();
+      const at = buttons.indexOf(document.activeElement);
+      const go = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: buttons.length - 1 }[e.key];
+      if (go !== undefined) {
+        e.preventDefault();
+        buttons[(go + buttons.length) % buttons.length].focus();
+      } else if (e.key === 'Escape' || e.key === 'Tab') {
+        e.preventDefault();
+        close();
+        this.#scroller.focus({ preventScroll: true });
+      }
+    });
+    const outside = e => {
+      if (!menu.contains(e.target)) close();
+    };
+    close = () => {
+      document.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('resize', close);
+      this.#scroller.removeEventListener('scroll', close);
+      menu.remove();
+      this.#menu = null;
+    };
+    document.addEventListener('pointerdown', outside, true);
+    window.addEventListener('blur', close);
+    window.addEventListener('resize', close);
+    this.#scroller.addEventListener('scroll', close);
+    this.#root.appendChild(menu);
+    this.#menu = { close };
+    // Inside the window, also near its edges
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(clientX, window.innerWidth - width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(clientY, window.innerHeight - height - 4))}px`;
+    buttons[0]?.focus({ preventScroll: true });
+  }
+
+  /** Copy and cut from the menu: no clipboard event comes with them */
+  #copyToSystem(cut) {
+    let text = '';
+    this.#onClipboard({ type: cut ? 'cut' : 'copy', preventDefault() {}, clipboardData: { setData: (_, t) => { text = t; } } });
+    if (!navigator.clipboard?.writeText) {
+      this.#showMessage('Este navegador no deja copiar desde el menú: usa el atajo de teclado.');
+      return;
+    }
+    navigator.clipboard.writeText(text).catch(() => this.#showMessage('El navegador no dejó copiar desde el menú: usa el atajo de teclado.'));
+  }
+
+  #pasteFromSystem() {
+    if (!navigator.clipboard?.readText) {
+      this.#showMessage('Este navegador no deja pegar desde el menú: usa el atajo de teclado.');
+      return;
+    }
+    navigator.clipboard.readText().then(text => this.#paste(text), () => this.#showMessage('El navegador no dejó pegar desde el menú: usa el atajo de teclado.'));
+  }
+
+  /** The engine refused a change: says why in the status bar and in an `error` event */
+  #fail(error) {
+    this.#showMessage(error.message);
+    this.dispatchEvent(new CustomEvent('error', { detail: { error } }));
+  }
+
+  #showMessage(text) {
+    clearTimeout(this.#messageTimer);
+    this.#messageEl.textContent = text;
+    this.#messageEl.title = text;
+    if (text) this.#messageTimer = setTimeout(() => this.#showMessage(''), MESSAGE_SECONDS * 1000);
+  }
+
+  /** The count, average and sum of the selection, as many cells as it has */
+  #updateStatus() {
+    this.#statusDirty = false;
+    if (this.#statusEl.hidden) return;
+    const sel = this.#selection;
+    const several = sel && this.#sheet && (sel.first.row !== sel.last.row || sel.first.col !== sel.last.col);
+    const stats = several ? rangeStats(this.#sheet.cells, sel, this.#sheet) : null;
+    const shown = stats ? `${stats.count}|${stats.sum}|${stats.average}|${stats.style}` : '';
+    if (shown === this.#statusShown) return;
+    this.#statusShown = shown;
+    const parts = [];
+    if (stats) {
+      let count = String(stats.count);
+      try {
+        count = new Intl.NumberFormat(this.locale).format(stats.count);
+      } catch {
+        // A language the browser does not know: plain digits
+      }
+      if (stats.sum === null) {
+        parts.push(`Recuento: ${count}`);
+      } else {
+        const [average, sum] = this.#workbook.formatNumbers(stats.style, [stats.average, stats.sum], this.locale);
+        parts.push(`Promedio: ${average}`, `Recuento: ${count}`, `Suma: ${sum}`);
+      }
+    }
+    this.#statsEl.replaceChildren(...parts.map(text => {
+      const part = document.createElement('span');
+      part.textContent = text;
+      return part;
+    }));
+  }
+
   #onKeyDown(e) {
+    if (this.#drag || this.#resizing) {
+      if (e.key === 'Escape') (this.#drag ?? this.#resizing).cancel();
+      return;
+    }
     if (!this.#sheet || !this.#selection || e.isComposing) return;
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      e.preventDefault();
+      this.#openMenuAtCell();
+      return;
+    }
+    if (this.#navigate(e)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !this.#readOnly) {
+      const nudge = { ArrowUp: ['row', -1], ArrowDown: ['row', 1], ArrowLeft: ['col', -1], ArrowRight: ['col', 1] }[e.key];
+      if (nudge) {
+        e.preventDefault();
+        this.#nudgeLines(...nudge);
+        return;
+      }
+    }
+    if (e.key === ' ' && (e.ctrlKey || e.shiftKey) && !e.metaKey && !e.altKey) {
+      // Ctrl+Space selects the columns of the selection and Shift+Space its rows, as in Excel
+      e.preventDefault();
+      const axis = e.ctrlKey && e.shiftKey ? 'all' : e.ctrlKey ? 'col' : 'row';
+      const [a, b] = axis === 'all' ? [1, 1] : this.#selectedLines(axis);
+      const { active } = this.#selection;
+      const anchor = axis === 'row' ? active.row : active.col;
+      this.#selectLines(axis, a === anchor ? a : b, a === anchor ? b : a, anchor);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const k = e.key.toLowerCase();
-      if (k === 'z' || k === 'y') {
+      const { whole } = this.#selection;
+      if (k === 'a') {
+        e.preventDefault();
+        this.#selectLines('all', 1, 1, 1);
+      } else if ((k === '-' || k === '+' || (k === '=' && e.shiftKey)) && (whole === 'row' || whole === 'col') && !this.#readOnly) {
+        // Ctrl+- and Ctrl++ on whole lines, as in Excel (on anything else they are the browser's zoom)
+        e.preventDefault();
+        const [a, b] = this.#selectedLines(whole);
+        if (k === '-') this.#deleteLines(whole, a, b - a + 1);
+        else this.#insertLines(whole, a, b - a + 1);
+      } else if (k === 'z' || k === 'y') {
         e.preventDefault();
         if (k === 'y' || e.shiftKey) this.redo();
         else this.undo();
@@ -718,8 +1494,70 @@ export class XlsxEditor extends EventTarget {
     this.#move(dr, dc, e.shiftKey && e.key.startsWith('Arrow'));
   }
 
+  /**
+   * Keys that go far: Ctrl/Cmd+arrow to the edge of the data, Home to the start of the row,
+   * Ctrl/Cmd+Home and End to the corners of the data, PageUp and PageDown a screen (with Alt,
+   * sideways); with Shift they extend the selection. Returns whether the key was one of them.
+   */
+  #navigate(e) {
+    const mod = e.ctrlKey || e.metaKey;
+    const extend = e.shiftKey;
+    const { rows, cols, frozen, cells, used } = this.#sheet;
+    const from = extend ? this.#selection.cursor : this.#selection.active;
+    let target = null;
+    const arrow = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    if (arrow && mod && !e.altKey) {
+      const filled = (row, col) => !!cells.get(key(row, col))?.kind;
+      target = arrow[0]
+        ? { row: dataEdge(r => filled(r, from.col), from.row, arrow[0], MAX_ROWS), col: from.col }
+        : { row: from.row, col: dataEdge(c => filled(from.row, c), from.col, arrow[1], MAX_COLS) };
+    } else if (e.key === 'Home' && !e.altKey) {
+      target = mod ? { row: frozen.rows + 1, col: frozen.cols + 1 } : { row: from.row, col: frozen.cols + 1 };
+    } else if (e.key === 'End' && mod && !e.altKey) {
+      target = { row: used.maxRow, col: used.maxCol };
+    } else if ((e.key === 'PageDown' || e.key === 'PageUp') && !mod) {
+      const step = e.key === 'PageDown' ? 1 : -1;
+      const { gx, gy, frozenW, frozenH } = this.#panes(this.#scroller.clientWidth, this.#scroller.clientHeight);
+      if (e.altKey) {
+        const page = (this.#scroller.clientWidth - gx - frozenW) / this.zoom;
+        // Going back rounds the other way, to come back to the line a page forward started from
+        const col = cols.indexAt(cols.offset(from.col) + step * page + (step < 0 ? cols.defaultSize - 1 : 0));
+        this.#extend(1, col);
+        this.#scroller.scrollLeft += (this.#sheet.cols.offset(col) - cols.offset(from.col)) * this.zoom;
+        target = { row: from.row, col };
+      } else {
+        const page = (this.#scroller.clientHeight - gy - frozenH) / this.zoom;
+        // Past the shown grid when there is room to grow
+        this.#extend(rows.indexAt(rows.offset(from.row) + page) + 1, 1);
+        const axis = this.#sheet.rows;
+        const row = axis.indexAt(axis.offset(from.row) + step * page + (step < 0 ? axis.defaultSize - 1 : 0));
+        this.#scroller.scrollTop += (axis.offset(row) - axis.offset(from.row)) * this.zoom;
+        target = { row, col: from.col };
+      }
+    }
+    if (!target) return false;
+    this.#extend(target.row, target.col);
+    const anchor = extend ? this.#selection.active : target;
+    this.#setSelection(anchor, target, anchor);
+    return true;
+  }
+
   /** Moves the active cell (or, with `extend`, the moving corner of the range) one step */
   #move(dr, dc, extend = false) {
+    const { whole } = this.#selection;
+    if (extend && (whole === 'row' || whole === 'col')) {
+      // Mayús+arrow along the lines selected takes one more or one less
+      const step = whole === 'row' ? dr : dc;
+      if (!step) return;
+      const { active, cursor } = this.#selection;
+      const anchor = whole === 'row' ? active.row : active.col;
+      const limit = whole === 'row' ? this.#sheet.rows.count : this.#sheet.cols.count;
+      const line = Math.min(Math.max((whole === 'row' ? cursor.row : cursor.col) + step, 1), limit);
+      this.#selectLines(whole, anchor, line, anchor);
+      this.#extend(whole === 'row' ? line : 1, whole === 'col' ? line : 1);
+      this.#scrollIntoView(whole === 'row' ? { row: line } : { col: line });
+      return;
+    }
     const from = extend ? this.#selection.cursor : this.#selection.active;
     this.#extend(from.row + Math.max(dr, 0), from.col + Math.max(dc, 0));
     const { rows, cols } = this.#sheet;
@@ -735,16 +1573,18 @@ export class XlsxEditor extends EventTarget {
     else this.#setSelection({ row, col }, { row, col }, { row, col });
   }
 
-  #setSelection(a, b, active, { scroll = true } = {}) {
+  #setSelection(a, b, active, { scroll = true, whole = null } = {}) {
     const first = { row: Math.min(a.row, b.row), col: Math.min(a.col, b.col) };
     const last = { row: Math.max(a.row, b.row), col: Math.max(a.col, b.col) };
     const prev = this.#selection;
     // `cursor` is the corner that moves when the range is extended with Shift
-    this.#selection = { first, last, active: { ...active }, cursor: { ...b } };
+    this.#selection = { first, last, active: { ...active }, cursor: { ...b }, whole };
     if (scroll) this.#scrollIntoView(b);
+    this.#statusDirty = true;
     this.#updateBar();
     this.render();
     if (!prev || prev.first.row !== first.row || prev.first.col !== first.col || prev.last.row !== last.row || prev.last.col !== last.col) {
+      if (this.#messageEl.textContent) this.#showMessage('');
       this.dispatchEvent(new CustomEvent('selectionchange', { detail: this.selection }));
     }
   }
@@ -771,7 +1611,7 @@ export class XlsxEditor extends EventTarget {
 
   #updateBar() {
     const sel = this.selection;
-    this.#nameBox.textContent = sel ? sel.range : '';
+    this.#nameBox.textContent = sel ? this.#selectionName(sel) : '';
     if (this.#edit) return; // the bar shows what is being typed
     let content = '';
     if (sel && this.#workbook && this.#sheetIndex >= 0) {
@@ -781,6 +1621,14 @@ export class XlsxEditor extends EventTarget {
     }
     this.#valueBox.value = content;
     this.#valueBox.title = content;
+  }
+
+  /** What the name box shows: `B:D` and `2:5` for whole columns and rows */
+  #selectionName(sel) {
+    const { first, last } = this.#selection;
+    if (sel.whole === 'col') return `${columnName(first.col)}:${columnName(last.col)}`;
+    if (sel.whole === 'row') return `${first.row}:${last.row}`;
+    return sel.range;
   }
 
   // ---------- Editing ----------
@@ -833,13 +1681,11 @@ export class XlsxEditor extends EventTarget {
   /** Puts the editor over its cell, wide and tall enough for the text */
   #placeInput() {
     if (!this.#edit || !this.#sheet) return;
-    const { rows, cols, frozen } = this.#sheet;
     const zoom = this.zoom;
     const width = this.#scroller.clientWidth;
     const height = this.#scroller.clientHeight;
-    const { gx, gy, frozenW, frozenH } = this.#panes(width, height);
-    const xOf = c => (c <= frozen.cols ? gx + (cols.offset(c) - cols.offset(1)) * zoom : gx + frozenW + (cols.offset(c) - cols.offset(frozen.cols + 1)) * zoom - this.#scroller.scrollLeft);
-    const yOf = r => (r <= frozen.rows ? gy + (rows.offset(r) - rows.offset(1)) * zoom : gy + frozenH + (rows.offset(r) - rows.offset(frozen.rows + 1)) * zoom - this.#scroller.scrollTop);
+    const xOf = c => this.#linePos('col', c);
+    const yOf = r => this.#linePos('row', r);
     const at = { row: this.#edit.row, col: this.#edit.col };
     const range = this.#expandToMerges(at, at);
     const x = Math.round(xOf(range.first.col)) - 1;
@@ -887,9 +1733,9 @@ export class XlsxEditor extends EventTarget {
     this.#closeEditor();
     if (text !== edit.original || fill) {
       const { value } = parseInput(text, this.locale);
-      const sel = this.#selection;
-      const first = fill ? sel.first : { row: edit.row, col: edit.col };
-      const last = fill ? sel.last : first;
+      const bounds = this.#contentBounds();
+      const first = fill ? bounds.first : { row: edit.row, col: edit.col };
+      const last = fill ? bounds.last : first;
       const rows = Array.from({ length: last.row - first.row + 1 }, () => new Array(last.col - first.col + 1).fill(value));
       this.#write(first, rows, 'edit');
     }
@@ -940,7 +1786,7 @@ export class XlsxEditor extends EventTarget {
   /** What the undo history remembers about a change: the sheet, the selection, the cells */
   #historyToken(changed) {
     const sel = this.selection;
-    return JSON.stringify({ sheet: this.#sheetIndex, range: sel?.range, active: sel?.ref, changed });
+    return JSON.stringify({ sheet: this.#sheetIndex, range: sel?.range, active: sel?.ref, whole: sel?.whole ?? null, changed });
   }
 
   /** Once the selection has moved after a change, redo puts it back there */
@@ -961,7 +1807,7 @@ export class XlsxEditor extends EventTarget {
       this.#workbook.checkpoint(this.#historyToken(changed));
       this.#activeSheet().setValues(refOf(first), rows);
     } catch (error) {
-      this.dispatchEvent(new CustomEvent('error', { detail: { error } }));
+      this.#fail(error);
       return null;
     }
     this.#lastChange = changed;
@@ -973,17 +1819,19 @@ export class XlsxEditor extends EventTarget {
 
   #emitChange(range, source) {
     const sheet = this.#activeSheet();
-    const { first } = parseRange(range);
+    const { first, last } = parseRange(range);
     const cells = [];
-    sheet.getValues(range).forEach((row, r) => row.forEach((value, c) => {
-      cells.push({ ref: refOf({ row: first.row + r, col: first.col + c }), value });
-    }));
+    if ((last.row - first.row + 1) * (last.col - first.col + 1) <= MAX_CHANGE_CELLS) {
+      sheet.getValues(range).forEach((row, r) => row.forEach((value, c) => {
+        cells.push({ ref: refOf({ row: first.row + r, col: first.col + c }), value });
+      }));
+    }
     this.dispatchEvent(new CustomEvent('change', { detail: { sheet: sheet.name, index: this.#sheetIndex, range, cells, source } }));
   }
 
   /** Delete and Backspace: empties the selected cells, keeping their format */
   #clearSelection(source = 'clear') {
-    const { first, last } = this.#expandToMerges(this.#selection.first, this.#selection.last);
+    const { first, last } = this.#actionBounds();
     const rows = Array.from({ length: last.row - first.row + 1 }, () => new Array(last.col - first.col + 1).fill(null));
     this.#clip = null;
     this.#write(first, rows, source);
@@ -1016,7 +1864,12 @@ export class XlsxEditor extends EventTarget {
     if (token?.range) {
       const range = parseRange(token.range);
       const active = token.active ? parseRange(token.active).first : range.first;
-      this.#setSelection(range.first, range.last, active);
+      const whole = token.whole ?? null;
+      this.#setSelection(range.first, range.last, active, { whole, scroll: !whole });
+      this.#fitWholeSelection();
+      // Whole lines end far away: only their first one needs to be in view
+      if (whole === 'row') this.#scrollIntoView({ row: active.row });
+      if (whole === 'col') this.#scrollIntoView({ col: active.col });
     }
     if (token?.changed) this.#emitChange(token.changed, direction);
     return true;
@@ -1034,7 +1887,7 @@ export class XlsxEditor extends EventTarget {
     }
     if (e.type === 'cut' && this.#readOnly) return;
     e.preventDefault();
-    const { first, last } = this.#expandToMerges(this.#selection.first, this.#selection.last);
+    const { first, last } = this.#actionBounds();
     const texts = [];
     for (let r = first.row; r <= last.row; r++) {
       const row = [];
@@ -1061,7 +1914,9 @@ export class XlsxEditor extends EventTarget {
     if (!rows.length || (rows.length === 1 && rows[0].length === 1 && !text)) return;
     const width = Math.max(...rows.map(r => r.length));
     rows = rows.map(r => Array.from({ length: width }, (_, i) => (i < r.length ? r[i] : null)));
-    const { first, last } = this.#selection;
+    const { first, whole } = this.#selection;
+    // Whole rows or columns take the block from their first cell, without repeating it
+    const last = whole ? first : this.#selection.last;
     const selH = last.row - first.row + 1;
     const selW = last.col - first.col + 1;
     if ((selH > rows.length || selW > width) && selH % rows.length === 0 && selW % width === 0) {

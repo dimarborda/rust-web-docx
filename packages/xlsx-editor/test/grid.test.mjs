@@ -2,7 +2,7 @@
 // Run with: npm test -w packages/xlsx-editor
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Axis, MAX_ROWS, colWidthToPx, columnName, defaultColPx, parseRange, parseRef, ptToPx, sheetAxes } from '../src/grid.js';
+import { Axis, MAX_ROWS, colWidthToPx, columnName, dataEdge, defaultColPx, parseRange, parseRef, ptToPx, pxToColWidth, rangeStats, sheetAxes } from '../src/grid.js';
 
 test('Excel sizes in pixels', () => {
   assert.equal(Math.round(ptToPx(15)), 20);
@@ -68,4 +68,47 @@ test('an axis grows keeping its sizes, up to the end of the sheet', () => {
   assert.equal(grown.total, axis.total + 300 * 20);
   assert.equal(axis.grown(100, MAX_ROWS), axis, 'never shrinks');
   assert.equal(axis.grown(MAX_ROWS + 10, MAX_ROWS).count, MAX_ROWS);
+});
+
+test('rangeStats says what the status bar shows', () => {
+  const at = (row, col) => row * 16_385 + col;
+  const cells = new Map([
+    [at(1, 1), { kind: 's', style: 0 }],
+    [at(2, 1), { kind: 'n', style: 3, number: 10 }],
+    [at(3, 1), { kind: 'n', style: 5, number: 20 }],
+    [at(4, 1), { kind: '', style: 2 }],
+    [at(5, 1), { kind: 'n', style: 5, number: 90 }],
+    [at(2, 2), { kind: 'e', style: 0 }],
+    [at(9, 9), { kind: 'n', style: 1, number: 1000 }],
+  ]);
+  const range = (a, b, c, d) => ({ first: { row: a, col: b }, last: { row: c, col: d } });
+  assert.deepEqual(rangeStats(cells, range(1, 1, 3, 1)), { count: 3, numbers: 2, sum: 30, average: 15, min: 10, max: 20, style: 3 });
+  // Text only, an error, nothing
+  assert.equal(rangeStats(cells, range(1, 1, 1, 1)).sum, null);
+  assert.deepEqual(rangeStats(cells, range(2, 1, 2, 2)), { count: 2, numbers: 0, sum: null, average: null, min: null, max: null, style: 3 });
+  assert.equal(rangeStats(cells, range(20, 1, 30, 5)), null);
+  // A range far larger than the sheet walks the cells of the sheet
+  assert.equal(rangeStats(cells, range(1, 1, 1_048_576, 1)).sum, 120);
+  // Hidden rows do not count
+  const rows = new Axis(100, 20, new Map([[3, 0]]));
+  assert.equal(rangeStats(cells, range(1, 1, 5, 1), { rows }).sum, 100);
+});
+
+test('pxToColWidth gives back the pixels', () => {
+  for (const mdw of [6, 7, 8, 11]) {
+    for (let px = 4; px < 1000; px += 7) assert.equal(colWidthToPx(pxToColWidth(px, mdw), mdw), px);
+  }
+});
+
+test('dataEdge lands where Ctrl+arrow does', () => {
+  const filled = new Set([3, 4, 5, 9]);
+  const has = i => filled.has(i);
+  assert.equal(dataEdge(has, 3, 1, 100), 5, 'to the end of the block');
+  assert.equal(dataEdge(has, 5, 1, 100), 9, 'from its end to the next one');
+  assert.equal(dataEdge(has, 1, 1, 100), 3, 'from empty to the next one');
+  assert.equal(dataEdge(has, 9, 1, 100), 100, 'nothing else: the end of the sheet');
+  assert.equal(dataEdge(has, 5, -1, 100), 3);
+  assert.equal(dataEdge(has, 3, -1, 100), 1, 'nothing before: the start');
+  assert.equal(dataEdge(has, 1, -1, 100), 1, 'already there');
+  assert.equal(dataEdge(has, 100, 1, 100), 100);
 });

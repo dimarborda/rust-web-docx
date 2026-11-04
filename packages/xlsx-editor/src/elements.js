@@ -49,6 +49,7 @@ export class XlsxEditorElement extends ElementBase {
       zoom: Number(this.getAttribute('zoom')) || 1,
       tabs: this.getAttribute('tabs') !== 'false',
       formulaBar: this.getAttribute('formula-bar') !== 'false',
+      statusBar: this.getAttribute('status-bar') !== 'false',
       readOnly: this.hasAttribute('readonly'),
       wasmUrl: this.getAttribute('wasm-url') || undefined,
     });
