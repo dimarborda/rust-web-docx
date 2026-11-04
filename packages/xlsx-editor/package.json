@@ -1,7 +1,7 @@
 {
   "name": "@dimarborda/xlsx-editor",
   "version": "0.2.0",
-  "description": "Excel (.xlsx) editor for the browser and engine for Node.js: Rust + WebAssembly that edits workbooks without losing what it does not touch, with a canvas grid as a framework-agnostic web component",
+  "description": "Excel (.xlsx) editor for the browser and engine for Node.js: Rust + WebAssembly that edits workbooks without losing what it does not touch, from a canvas grid or from code. An AI agent can read a table's structure without loading the whole sheet",
   "type": "module",
   "license": "MIT",
   "author": "Dimar Borda",
@@ -12,6 +12,7 @@
     "directory": "packages/xlsx-editor"
   },
   "keywords": [
+    "ai-agents",
     "xlsx",
     "excel",
     "spreadsheet",

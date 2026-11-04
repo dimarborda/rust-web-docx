@@ -2,6 +2,8 @@
 
 View and edit Excel (`.xlsx`) workbooks in the browser, drawn on canvas the way Excel shows them, and work with them from Node.js. A Rust and WebAssembly engine reads the file, recalculates formulas and saves losslessly: what it does not touch stays byte by byte. It works in any frontend, and nothing leaves the browser.
 
+For AI agents, `wb.area()` gives a table's columns, types and totals without reading the whole sheet, and a change that would break something is refused with the reason, leaving the workbook as it was.
+
 **Full documentation on GitHub:** [English](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/en/component.md) · [Español](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/es/component.md)
 
 ## Install
@@ -28,7 +30,7 @@ With WebAssembly, the production `script-src` needs `'wasm-unsafe-eval'`.
 - **Rows and columns:** move, insert, delete, resize, autofit, hide and show, updating formulas, names, charts and tables across the workbook.
 - **Productivity:** fill handle with series, autosum, find and replace, keyboard navigation and a context menu.
 - **Formulas:** about 90 functions recalculated instantly; for anything else, Excel's saved value stays and Excel recalculates when opening the file.
-- **Headless engine and AI agents:** the same API in Node.js, plus areas and context so an agent can work without reading the whole sheet.
+- **Headless engine:** the same API in Node.js.
 
 Charts, images, conditional formats and comments are kept in the file but not drawn yet.
 

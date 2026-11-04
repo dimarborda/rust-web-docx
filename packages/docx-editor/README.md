@@ -4,6 +4,8 @@
 
 Word (`.docx`) editor for the browser. A Rust and WebAssembly engine reads the document, lays out the pages like Word and applies edits losslessly. It works with any frontend and in desktop apps such as Tauri. No server needed: documents never leave the device.
 
+For AI agents, `markers()` lists what is left to fill in, and edits made through the API are highlighted without moving the user's caret.
+
 [Demo](https://rust-web-docx.dimarborda.workers.dev/?demo) · **Full documentation on GitHub:** [English](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/en/api.md) · [Español](https://github.com/dimarborda/rust-web-docx/blob/master/docs/docx-editor/es/api.md)
 
 ## Install
@@ -46,7 +48,7 @@ const bytes = editor.save();                   // Uint8Array of the edited .docx
 ## Features
 
 - **Templates and markers:** list and fill `{{KEY}}`, `{key}` and pending `[…]` content, keeping the formatting.
-- **AI agents:** show where an agent is working and highlight its edits without moving the user's caret.
+- **Agent activity:** `markActivity()` shows where an agent is working.
 - **Content:** paragraphs, tables, images, text boxes, logical sections and existing tables, from code.
 - **Formatting:** styles, fonts, character formatting, alignment, spacing, indent and lists, written the way Word does.
 - **Export:** lossless `.docx` and vector PDF with working links.
