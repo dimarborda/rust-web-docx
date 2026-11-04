@@ -92,12 +92,12 @@ Los valores se escriben con `sheet.setValues` del motor, que conserva el formato
 
 Eventos en el elemento: `ready` (con `detail.editor`), `load`, `sheetchange`, `selectionchange`, `change` y `error`.
 
-`change` llega tras cada edición, borrado, pegado, corte, movimiento, relleno, reemplazo, deshacer o rehacer:
+`change` llega tras cada edición, borrado, pegado, corte, movimiento, cambio de tamaño, ocultar, mostrar, relleno, reemplazo, deshacer o rehacer, así que es el momento de guardar. Un reemplazo en varias hojas envía uno por hoja:
 
 ```js
 element.addEventListener('change', ({ detail }) => {
   // detail: { sheet: 'Ventas', index: 0, range: 'B3:C4',
-  //           source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'fill' | 'replace' | 'undo' | 'redo',
+  //           source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'resize' | 'hide' | 'show' | 'fill' | 'replace' | 'undo' | 'redo',
   //           cells: [{ ref: 'B3', value: 1200 }, …] }  // vacío por encima de 200 000 celdas
 });
 ```

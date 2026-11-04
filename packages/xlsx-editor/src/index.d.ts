@@ -78,7 +78,7 @@ export interface ChangeDetail {
   range: string;
   /** Every cell of `range` with its new value (`null` when empty); empty above 200 000 cells */
   cells: { ref: string; value: CellValue }[];
-  source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'fill' | 'replace' | 'undo' | 'redo';
+  source: 'edit' | 'clear' | 'paste' | 'cut' | 'move' | 'insert' | 'delete' | 'resize' | 'hide' | 'show' | 'fill' | 'replace' | 'undo' | 'redo';
 }
 
 export interface XlsxEditorEventMap {
