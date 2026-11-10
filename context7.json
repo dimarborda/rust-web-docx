@@ -1,0 +1,36 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "docx-editor and xlsx-editor (rust-web-docx)",
+  "description": "@dimarborda/docx-editor (Word .docx editor for the browser) and @dimarborda/xlsx-editor (Excel .xlsx editor for the browser plus headless engine for Node.js): lossless Rust + WebAssembly engines with APIs built for AI agents.",
+  "branch": "master",
+  "folders": [
+    "packages/docx-editor",
+    "packages/xlsx-editor",
+    "docs/docx-editor/en",
+    "docs/xlsx-editor/en"
+  ],
+  "excludeFolders": [
+    "packages/docx-editor/src",
+    "packages/docx-editor/test",
+    "packages/docx-editor/wasm",
+    "packages/xlsx-editor/src",
+    "packages/xlsx-editor/test",
+    "packages/xlsx-editor/wasm",
+    "docs/docx-editor/es",
+    "docs/xlsx-editor/es"
+  ],
+  "excludeFiles": ["CHANGELOG.md", "LICENSE"],
+  "rules": [
+    "Read the package's AGENTS.md first: node_modules/@dimarborda/docx-editor/AGENTS.md or node_modules/@dimarborda/xlsx-editor/AGENTS.md. Exact signatures are in src/index.d.ts and src/engine.d.ts.",
+    "Edit documents through the API, never by unzipping or rewriting the OOXML: the engines save losslessly and every API edit is one undo step.",
+    "docx-editor is browser only and its container needs a height. Create it with await DocxEditor.create(el) inside useEffect in React/Next.js; importing is SSR-safe.",
+    "docx-editor positions are paragraph indexes that shift after edits: re-read structure(), tables() or markers() after each change; prefer section keys and markers.",
+    "Fill templates with replaceVariables() and fillMarker() (docx) or wb.fillTemplate() (xlsx): {{KEY}} and {key} are fields, [...] or [Complete: hint] is pending content.",
+    "xlsx-editor: use @dimarborda/xlsx-editor/engine in Node.js. Rows and column numbers are 1-based like Excel, sheet indexes are 0-based; ranges are A1 strings.",
+    "xlsx-editor: write formulas in English syntax ({ formula: '=SUM(A1:A3)' }), numbers as numbers and dates as Date in UTC (new Date(Date.UTC(y, m, d))).",
+    "xlsx-editor: summarize a sheet with wb.areas() and wb.area(target) (columns, types, totals, markdown) instead of reading every cell.",
+    "xlsx-editor in the browser: call editor.workbook.checkpoint() before changing editor.workbook from code and editor.reload() after.",
+    "Operations that would break merged cells, tables, filters or array formulas throw and change nothing: catch the error and report its message.",
+    "With a Content-Security-Policy in production, script-src needs 'wasm-unsafe-eval' for both packages."
+  ]
+}
