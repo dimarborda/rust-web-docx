@@ -71,6 +71,16 @@ document.querySelector('xlsx-editor').addEventListener('ready', async ({ detail:
 | Engine: full API, formulas, formats, dates | [engine](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/en/engine.md) | [engine](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/es/engine.md) |
 | Areas and context for AI agents | [agents](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/en/agents.md) | [agents](https://github.com/dimarborda/rust-web-docx/blob/master/docs/xlsx-editor/es/agents.md) |
 
+## For AI coding agents
+
+The package ships [`AGENTS.md`](https://github.com/dimarborda/rust-web-docx/blob/master/packages/xlsx-editor/AGENTS.md): a compact guide to the API, its conventions and pitfalls, written for coding agents. To have your agent load it in a project that uses the package, reference it from your `AGENTS.md` or `CLAUDE.md`:
+
+```md
+@node_modules/@dimarborda/xlsx-editor/AGENTS.md
+```
+
+Both libraries are also summarized at [llms.txt](https://rust-web-docx.dimarborda.workers.dev/llms.txt) and in full at [llms-full.txt](https://rust-web-docx.dimarborda.workers.dev/llms-full.txt).
+
 ## License
 
 MIT

@@ -65,6 +65,16 @@ const bytes = editor.save();                   // Uint8Array of the edited .docx
 
 The library sends your documents nowhere and never executes their content. [Report a vulnerability](https://github.com/dimarborda/rust-web-docx/blob/master/SECURITY.md).
 
+## For AI coding agents
+
+The package ships [`AGENTS.md`](https://github.com/dimarborda/rust-web-docx/blob/master/packages/docx-editor/AGENTS.md): a compact guide to the API, its conventions and pitfalls, written for coding agents. To have your agent load it in a project that uses the package, reference it from your `AGENTS.md` or `CLAUDE.md`:
+
+```md
+@node_modules/@dimarborda/docx-editor/AGENTS.md
+```
+
+Both libraries are also summarized at [llms.txt](https://rust-web-docx.dimarborda.workers.dev/llms.txt) and in full at [llms-full.txt](https://rust-web-docx.dimarborda.workers.dev/llms-full.txt).
+
 ## License
 
 MIT

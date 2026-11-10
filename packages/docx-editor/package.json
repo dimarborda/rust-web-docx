@@ -45,6 +45,7 @@
     "src",
     "wasm",
     "README.md",
+    "AGENTS.md",
     "LICENSE"
   ],
   "dependencies": {
