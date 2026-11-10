@@ -196,5 +196,7 @@ View-only: never saved or printed. Use `color` to distinguish several agents and
 
 ## More
 
+Context7 library ID: `/dimarborda/rust-web-docx` (both packages; use the ID, other libraries share the `docx-editor` name).
+
 Full docs: https://github.com/dimarborda/rust-web-docx/tree/master/docs/docx-editor/en
 (API, guides, integrations, security). Demo: https://rust-web-docx.dimarborda.workers.dev

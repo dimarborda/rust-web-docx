@@ -79,6 +79,8 @@ The package ships [`AGENTS.md`](https://github.com/dimarborda/rust-web-docx/blob
 @node_modules/@dimarborda/xlsx-editor/AGENTS.md
 ```
 
+With the [Context7](https://context7.com) MCP server, ask for the library by its ID, `/dimarborda/rust-web-docx`, rather than by name: other projects are also called `docx-editor`.
+
 Both libraries are also summarized at [llms.txt](https://rust-web-docx.dimarborda.workers.dev/llms.txt) and in full at [llms-full.txt](https://rust-web-docx.dimarborda.workers.dev/llms-full.txt).
 
 ## License

@@ -57,6 +57,8 @@ function llmsTxt() {
 - \`@dimarborda/docx-editor\`: Word (.docx) editor for the browser. Templates and markers, logical sections, tables, images, PDF export, agent activity marks.
 - \`@dimarborda/xlsx-editor\`: Excel (.xlsx) editor for the browser and headless engine (\`/engine\`) for Node.js. Formulas, formats, row/column operations, area context for agents.
 
+Context7 library ID: \`/dimarborda/rust-web-docx\` (both packages; other projects are also named docx-editor, so use the ID).
+
 Each package ships an AGENTS.md next to its package.json; import it from your project's AGENTS.md or CLAUDE.md with \`@node_modules/@dimarborda/<package>/AGENTS.md\`.
 
 ## Agent guides

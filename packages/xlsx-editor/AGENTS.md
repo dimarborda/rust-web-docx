@@ -168,5 +168,7 @@ container needs a height. Events: `ready`, `load`, `sheetchange`, `selectionchan
 
 ## More
 
+Context7 library ID: `/dimarborda/rust-web-docx` (both packages; use the ID, other libraries share the `docx-editor` name).
+
 Full docs: https://github.com/dimarborda/rust-web-docx/tree/master/docs/xlsx-editor/en
 (component, operations, engine, agents).
