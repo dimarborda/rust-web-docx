@@ -83,44 +83,52 @@ fn inspect_single_file(filename: &str) {
         println!("   - Drawings (<w:drawing>): {}", drawing_count);
         println!("   - Numbering / Lists (<w:numPr>): {}", num_count);
         println!("   - Tab characters (<w:tab/>): {}", tab_count);
-        println!("   - Alignments: Justified (both)={}, Center={}, Right={}", jc_both, jc_center, jc_right);
+        println!(
+            "   - Alignments: Justified (both)={}, Center={}, Right={}",
+            jc_both, jc_center, jc_right
+        );
         println!("   - Indentations (<w:ind>): {}", ind_count);
-    // Check relationships
-    for rel_name in &["word/_rels/document.xml.rels", "word/_rels/header1.xml.rels"] {
-        if let Ok(mut rel_file) = archive.by_name(rel_name) {
-            let mut rel_xml = String::new();
-            rel_file.read_to_string(&mut rel_xml).unwrap();
-            println!("   🔗 {}: {}", rel_name, rel_xml);
+        // Check relationships
+        for rel_name in &[
+            "word/_rels/document.xml.rels",
+            "word/_rels/header1.xml.rels",
+        ] {
+            if let Ok(mut rel_file) = archive.by_name(rel_name) {
+                let mut rel_xml = String::new();
+                rel_file.read_to_string(&mut rel_xml).unwrap();
+                println!("   🔗 {}: {}", rel_name, rel_xml);
+            }
         }
-    }
 
-    // Check fontTable.xml
-    if let Ok(mut font_file) = archive.by_name("word/fontTable.xml") {
-        let mut font_xml = String::new();
-        font_file.read_to_string(&mut font_xml).unwrap();
-        println!("   🔤 fontTable.xml: {}", &font_xml[..font_xml.len().min(800)]);
-    }
-
-    // Check theme1.xml
-    if let Ok(mut theme_file) = archive.by_name("word/theme/theme1.xml") {
-        let mut theme_xml = String::new();
-        theme_file.read_to_string(&mut theme_xml).unwrap();
-        if let Some(pos) = theme_xml.find("<a:fontScheme") {
-            let chunk = &theme_xml[pos..theme_xml.len().min(pos + 600)];
-            println!("   🎨 theme1.xml fontScheme:\n{}", chunk);
+        // Check fontTable.xml
+        if let Ok(mut font_file) = archive.by_name("word/fontTable.xml") {
+            let mut font_xml = String::new();
+            font_file.read_to_string(&mut font_xml).unwrap();
+            println!(
+                "   🔤 fontTable.xml: {}",
+                &font_xml[..font_xml.len().min(800)]
+            );
         }
-    }
 
-    // Check styles.xml docDefaults
-    if let Ok(mut styles_file) = archive.by_name("word/styles.xml") {
-        let mut styles_xml = String::new();
-        styles_file.read_to_string(&mut styles_xml).unwrap();
-        if let Some(pos) = styles_xml.find("<w:docDefaults") {
-            let chunk = &styles_xml[pos..styles_xml.len().min(pos + 600)];
-            println!("   📝 styles.xml docDefaults:\n{}", chunk);
+        // Check theme1.xml
+        if let Ok(mut theme_file) = archive.by_name("word/theme/theme1.xml") {
+            let mut theme_xml = String::new();
+            theme_file.read_to_string(&mut theme_xml).unwrap();
+            if let Some(pos) = theme_xml.find("<a:fontScheme") {
+                let chunk = &theme_xml[pos..theme_xml.len().min(pos + 600)];
+                println!("   🎨 theme1.xml fontScheme:\n{}", chunk);
+            }
         }
-    }
 
+        // Check styles.xml docDefaults
+        if let Ok(mut styles_file) = archive.by_name("word/styles.xml") {
+            let mut styles_xml = String::new();
+            styles_file.read_to_string(&mut styles_xml).unwrap();
+            if let Some(pos) = styles_xml.find("<w:docDefaults") {
+                let chunk = &styles_xml[pos..styles_xml.len().min(pos + 600)];
+                println!("   📝 styles.xml docDefaults:\n{}", chunk);
+            }
+        }
     }
 }
 
@@ -130,42 +138,88 @@ fn test_inspect_contrato() {
     let Some(bytes) = common::example("CONTRATO DE PROMESA DE COMPRAVENTA DE BIEN INMUEBLE_firma_64d246aa720735d06b3d89c5_69e8ff615174a2ecfbd6ce80_1777056097303.docx") else { return };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
-    assert!(stats.bg_image_data_url.is_none(), "Contrato should not have background image");
-    assert!(stats.header_footer.header_image_data_url.is_none(), "Contrato should not have header image");
+    assert!(
+        stats.bg_image_data_url.is_none(),
+        "Contrato should not have background image"
+    );
+    assert!(
+        stats.header_footer.header_image_data_url.is_none(),
+        "Contrato should not have header image"
+    );
 
     let paragraphs = modifier.extract_paragraphs().unwrap();
     for (i, p) in paragraphs.iter().enumerate() {
-        if p.text.contains("CLÁUSULA") || p.text.contains("INNprende") || p.text.contains("1581") || p.text.contains("sensibles") {
+        if p.text.contains("CLÁUSULA")
+            || p.text.contains("INNprende")
+            || p.text.contains("1581")
+            || p.text.contains("sensibles")
+        {
             println!("\n=== PARA {} ===", i);
             println!("Text: {:?}", p.text);
-            println!("Style: {:?}, is_heading: {}, bold: {}, font_size: {:?}, font_family: {:?}", p.style, p.is_heading, p.bold, p.font_size, p.font_family);
+            println!(
+                "Style: {:?}, is_heading: {}, bold: {}, font_size: {:?}, font_family: {:?}",
+                p.style, p.is_heading, p.bold, p.font_size, p.font_family
+            );
             println!("Runs count: {}", p.runs.len());
             for (ri, r) in p.runs.iter().enumerate() {
-                println!("  Run {}: bold={}, italic={}, sz={:?}, fam={:?}, text={:?}", ri, r.bold, r.italic, r.font_size, r.font_family, r.text);
+                println!(
+                    "  Run {}: bold={}, italic={}, sz={:?}, fam={:?}, text={:?}",
+                    ri, r.bold, r.italic, r.font_size, r.font_family, r.text
+                );
             }
         }
     }
-    let bdr_left_count = paragraphs.iter().filter(|p| p.borders.left.is_some()).count();
-    let bdr_bottom_count = paragraphs.iter().filter(|p| p.borders.bottom.is_some()).count();
-    assert_eq!(bdr_left_count, 0, "Contrato must have 0 left borders (nil borders must be ignored)");
-    assert_eq!(bdr_bottom_count, 0, "Contrato must have 0 bottom borders (nil borders must be ignored)");
+    let bdr_left_count = paragraphs
+        .iter()
+        .filter(|p| p.borders.left.is_some())
+        .count();
+    let bdr_bottom_count = paragraphs
+        .iter()
+        .filter(|p| p.borders.bottom.is_some())
+        .count();
+    assert_eq!(
+        bdr_left_count, 0,
+        "Contrato must have 0 left borders (nil borders must be ignored)"
+    );
+    assert_eq!(
+        bdr_bottom_count, 0,
+        "Contrato must have 0 bottom borders (nil borders must be ignored)"
+    );
 }
 
 #[test]
 fn test_inspect_costo_eficiencia() {
     inspect_single_file("costo-eficiencia-modelos-llm-rag.docx");
-    let Some(bytes) = common::example("costo-eficiencia-modelos-llm-rag.docx") else { return };
+    let Some(bytes) = common::example("costo-eficiencia-modelos-llm-rag.docx") else {
+        return;
+    };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
-    assert!(stats.bg_image_data_url.is_none(), "Costo-eficiencia should NOT have background image!");
-    assert!(stats.header_footer.header_image_data_url.is_some(), "Costo-eficiencia MUST have header logo image!");
-    let logo = stats.header_footer.header_images.first().expect("the default header has the logo");
+    assert!(
+        stats.bg_image_data_url.is_none(),
+        "Costo-eficiencia should NOT have background image!"
+    );
+    assert!(
+        stats.header_footer.header_image_data_url.is_some(),
+        "Costo-eficiencia MUST have header logo image!"
+    );
+    let logo = stats
+        .header_footer
+        .header_images
+        .first()
+        .expect("the default header has the logo");
     assert!(logo.image.anchored && !logo.image.behind_text);
     assert!((logo.image.width - 185.0).abs() < 1.0, "{:?}", logo.image);
     assert_eq!(stats.page_setup.orientation, "portrait");
     let paragraphs = modifier.extract_paragraphs().unwrap();
-    let bdr_left_count = paragraphs.iter().filter(|p| p.borders.left.is_some()).count();
-    assert!(bdr_left_count > 0, "Costo-eficiencia must have left borders on sections");
+    let bdr_left_count = paragraphs
+        .iter()
+        .filter(|p| p.borders.left.is_some())
+        .count();
+    assert!(
+        bdr_left_count > 0,
+        "Costo-eficiencia must have left borders on sections"
+    );
 
     let mut fonts = std::collections::HashSet::new();
     for p in &paragraphs {
@@ -187,8 +241,10 @@ fn test_inspect_costo_eficiencia() {
         for (r_idx, r) in tbl.rich_rows.iter().enumerate() {
             println!("  Row {} (is_header: {}):", r_idx, r.is_header);
             for (c_idx, c) in r.cells.iter().enumerate() {
-                println!("    Cell {}: text={:?}, bg={:?}, color={}, align={}, bold={}, border={}",
-                    c_idx, c.text, c.bg_color, c.color, c.align, c.bold, c.border_color);
+                println!(
+                    "    Cell {}: text={:?}, bg={:?}, color={}, align={}, bold={}, border={}",
+                    c_idx, c.text, c.bg_color, c.color, c.align, c.bold, c.border_color
+                );
             }
         }
     }
@@ -197,19 +253,33 @@ fn test_inspect_costo_eficiencia() {
 #[test]
 fn test_inspect_plantilla() {
     inspect_single_file("plantilla-ejemplo-vead.docx");
-    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else { return };
+    let Some(bytes) = common::example("plantilla-ejemplo-vead.docx") else {
+        return;
+    };
     let modifier = rust_web_docx::docx_parser::DocxModifier::from_bytes(&bytes).unwrap();
     let stats = modifier.get_statistics().unwrap();
     // The artwork is a picture anchored behind the text of the first paragraph, sized to the
     // page, not a background repeated on every page
-    assert!(stats.bg_image_data_url.is_none(), "No page-wide background: the picture belongs to one page");
+    assert!(
+        stats.bg_image_data_url.is_none(),
+        "No page-wide background: the picture belongs to one page"
+    );
     let first = &modifier.extract_paragraphs().unwrap()[0];
-    let art = first.images.first().expect("the first paragraph anchors the certificate artwork");
+    let art = first
+        .images
+        .first()
+        .expect("the first paragraph anchors the certificate artwork");
     assert!(art.anchored && art.behind_text);
-    assert!((art.width - 1130.1).abs() < 1.0 && (art.height - 811.3).abs() < 1.0, "{:?}", art);
+    assert!(
+        (art.width - 1130.1).abs() < 1.0 && (art.height - 811.3).abs() < 1.0,
+        "{:?}",
+        art
+    );
     let inputs = modifier.layout_inputs().unwrap();
     assert!(inputs.body_images[&art.rel_id].starts_with("data:image/png;base64,iVBOR"));
-    assert!(stats.header_footer.header_image_data_url.is_none(), "Plantilla diploma should NOT have header image!");
+    assert!(
+        stats.header_footer.header_image_data_url.is_none(),
+        "Plantilla diploma should NOT have header image!"
+    );
     assert_eq!(stats.page_setup.orientation, "landscape");
 }
-

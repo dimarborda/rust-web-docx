@@ -16,7 +16,10 @@ fn docx(body: &str) -> DocxModifier {
         let mut zip = ZipWriter::new(&mut buf);
         let opts = SimpleFileOptions::default();
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
             ("word/styles.xml", styles),
         ] {
@@ -29,11 +32,18 @@ fn docx(body: &str) -> DocxModifier {
 }
 
 fn texts(m: &DocxModifier) -> Vec<String> {
-    m.extract_paragraphs().unwrap().into_iter().map(|p| p.text).collect()
+    m.extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect()
 }
 
 fn para(text: &str) -> NewParagraph {
-    NewParagraph { text: text.to_string(), ..Default::default() }
+    NewParagraph {
+        text: text.to_string(),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -46,25 +56,50 @@ fn test_insert_into_blank_document_with_heading_format() {
         align: Some("center".into()),
         ..Default::default()
     };
-    let (first, caret) = m.insert_paragraphs(0, 0, &[title, para("Entre las partes."), para("Primera cláusula.")]).unwrap();
+    let (first, caret) = m
+        .insert_paragraphs(
+            0,
+            0,
+            &[title, para("Entre las partes."), para("Primera cláusula.")],
+        )
+        .unwrap();
 
     assert_eq!(first, 0);
     assert_eq!(caret, (2, "Primera cláusula.".chars().count()));
-    assert_eq!(texts(&m), vec!["CONTRATO DE SERVICIOS", "Entre las partes.", "Primera cláusula."]);
+    assert_eq!(
+        texts(&m),
+        vec![
+            "CONTRATO DE SERVICIOS",
+            "Entre las partes.",
+            "Primera cláusula."
+        ]
+    );
 
     let paragraphs = m.extract_paragraphs().unwrap();
     let heading = &paragraphs[0];
     assert_eq!(heading.align, "center");
-    assert!(heading.runs.iter().all(|r| r.bold && r.font_size == Some(16.0)), "{:?}", heading.runs);
+    assert!(
+        heading
+            .runs
+            .iter()
+            .all(|r| r.bold && r.font_size == Some(16.0)),
+        "{:?}",
+        heading.runs
+    );
     let body = &paragraphs[1];
-    assert!(body.runs.iter().all(|r| !r.bold), "unformatted paragraphs keep the document defaults");
+    assert!(
+        body.runs.iter().all(|r| !r.bold),
+        "unformatted paragraphs keep the document defaults"
+    );
     assert_ne!(body.align, "center");
 }
 
 #[test]
 fn test_insert_in_the_middle_keeps_existing_text_in_its_own_paragraphs() {
     let mut m = docx(r#"<w:p><w:r><w:t>antes después</w:t></w:r></w:p>"#);
-    let (first, caret) = m.insert_paragraphs(0, 6, &[para("uno"), para("dos")]).unwrap();
+    let (first, caret) = m
+        .insert_paragraphs(0, 6, &[para("uno"), para("dos")])
+        .unwrap();
 
     assert_eq!(texts(&m), vec!["antes ", "uno", "dos", "después"]);
     assert_eq!(first, 1);
@@ -75,7 +110,10 @@ fn test_insert_in_the_middle_keeps_existing_text_in_its_own_paragraphs() {
 fn test_insert_at_paragraph_end_and_start() {
     let mut m = docx(r#"<w:p><w:r><w:t>hola</w:t></w:r></w:p>"#);
     let (first, _) = m.insert_paragraphs(0, 4, &[para("al final")]).unwrap();
-    assert_eq!((first, texts(&m)), (1, vec!["hola".to_string(), "al final".to_string()]));
+    assert_eq!(
+        (first, texts(&m)),
+        (1, vec!["hola".to_string(), "al final".to_string()])
+    );
 
     let (first, _) = m.insert_paragraphs(0, 0, &[para("al inicio")]).unwrap();
     assert_eq!(first, 0);
@@ -85,7 +123,8 @@ fn test_insert_at_paragraph_end_and_start() {
 #[test]
 fn test_line_breaks_stay_inside_one_paragraph() {
     let mut m = docx(r#"<w:p/>"#);
-    m.insert_paragraphs(0, 0, &[para("Calle 1\nBogotá"), para("Otro")]).unwrap();
+    m.insert_paragraphs(0, 0, &[para("Calle 1\nBogotá"), para("Otro")])
+        .unwrap();
     let t = texts(&m);
     assert_eq!(t.len(), 2, "{:?}", t);
     assert!(t[0].contains("Calle 1") && t[0].contains("Bogotá"));
@@ -97,13 +136,23 @@ fn test_insert_is_one_undo_step() {
     let original = texts(&m);
 
     m.checkpoint(Some("before".into()));
-    let heading = NewParagraph { text: "Título".into(), bold: Some(true), align: Some("center".into()), ..Default::default() };
-    m.insert_paragraphs(0, 4, &[heading, para("texto")]).unwrap();
+    let heading = NewParagraph {
+        text: "Título".into(),
+        bold: Some(true),
+        align: Some("center".into()),
+        ..Default::default()
+    };
+    m.insert_paragraphs(0, 4, &[heading, para("texto")])
+        .unwrap();
     m.set_selection_after(Some("after".into()));
     assert_eq!(texts(&m).len(), 3);
 
     assert_eq!(m.undo(), Some(Some("before".into())));
-    assert_eq!(texts(&m), original, "text and formatting are undone together");
+    assert_eq!(
+        texts(&m),
+        original,
+        "text and formatting are undone together"
+    );
     assert_eq!(m.undo(), None);
 }
 

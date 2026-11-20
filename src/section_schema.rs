@@ -16,14 +16,19 @@
 use super::section_edit::check_section_key;
 use super::*;
 use ooxml_core::content_types;
-use ooxml_core::rels::{parse_relationships, rels_part_for, resolve_target, with_relationship, without_relationship};
+use ooxml_core::rels::{
+    parse_relationships, rels_part_for, resolve_target, with_relationship, without_relationship,
+};
 
 /// Namespace of the schema part
 pub const SECTION_SCHEMA_NS: &str = "urn:rust-web-docx:sections:1";
 
-const REL_CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
-const REL_CUSTOM_XML_PROPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
-const MIME_CUSTOM_XML_PROPS: &str = "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
+const REL_CUSTOM_XML: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+const REL_CUSTOM_XML_PROPS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
+const MIME_CUSTOM_XML_PROPS: &str =
+    "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
 const DOCUMENT: &str = "word/document.xml";
 
 /// The sections a type of document must have, in order
@@ -58,7 +63,10 @@ impl SectionSchema {
     /// Refuses empty types, invalid or repeated keys and parents that are not listed before
     pub fn check(&self) -> Result<(), String> {
         if self.kind.trim().is_empty() {
-            return Err("El esquema necesita un tipo de documento (type), p. ej. «informe-tecnico».".to_string());
+            return Err(
+                "El esquema necesita un tipo de documento (type), p. ej. «informe-tecnico»."
+                    .to_string(),
+            );
         }
         let mut seen = std::collections::HashSet::new();
         for s in &self.sections {
@@ -113,7 +121,9 @@ impl SectionSchema {
                             sections: Vec::new(),
                         });
                     } else if tag_is(name.as_ref(), "section") {
-                        if let (Some(schema), Some(key)) = (schema.as_mut(), get_attr_value(e, "key")) {
+                        if let (Some(schema), Some(key)) =
+                            (schema.as_mut(), get_attr_value(e, "key"))
+                        {
                             schema.sections.push(SchemaSection {
                                 key,
                                 title: get_attr_value(e, "title"),
@@ -156,18 +166,25 @@ impl DocxModifier {
             .package
             .parts()
             .keys()
-            .filter(|n| n.starts_with("customXml/item") && n.ends_with(".xml") && !n.contains("Props"))
+            .filter(|n| {
+                n.starts_with("customXml/item") && n.ends_with(".xml") && !n.contains("Props")
+            })
             .collect();
         names.sort();
         names
             .into_iter()
-            .find(|n| self.get_file_string(n).is_ok_and(|xml| xml.contains(SECTION_SCHEMA_NS)))
+            .find(|n| {
+                self.get_file_string(n)
+                    .is_ok_and(|xml| xml.contains(SECTION_SCHEMA_NS))
+            })
             .cloned()
     }
 
     /// The document's section schema, or `None`
     pub fn section_schema(&self) -> Result<Option<SectionSchema>, String> {
-        Ok(self.schema_part().and_then(|part| SectionSchema::from_xml(&self.get_file_string(&part).ok()?)))
+        Ok(self
+            .schema_part()
+            .and_then(|part| SectionSchema::from_xml(&self.get_file_string(&part).ok()?)))
     }
 
     /// Stores the section schema in the document (replacing the current one), or removes it
@@ -186,7 +203,9 @@ impl DocxModifier {
     }
 
     fn add_schema_part(&mut self, schema: &SectionSchema) -> Result<(), String> {
-        let n = (1..).find(|n| !self.package.contains(&format!("customXml/item{}.xml", n))).unwrap();
+        let n = (1..)
+            .find(|n| !self.package.contains(&format!("customXml/item{}.xml", n)))
+            .unwrap();
         let item = format!("customXml/item{}.xml", n);
         let props = format!("customXml/itemProps{}.xml", n);
         let item_xml = schema.to_xml();
@@ -212,7 +231,12 @@ impl DocxModifier {
             types = t;
         }
         let item_rels_part = rels_part_for(&item);
-        for (name, xml) in [(item.clone(), item_xml), (props, props_xml), (item_rels_part, item_rels), (doc_rels_part, doc_rels)] {
+        for (name, xml) in [
+            (item.clone(), item_xml),
+            (props, props_xml),
+            (item_rels_part, item_rels),
+            (doc_rels_part, doc_rels),
+        ] {
             self.package.keep_in_order(&name);
             self.put_file(name, xml.into_bytes());
         }
@@ -224,7 +248,12 @@ impl DocxModifier {
         let item_rels_part = rels_part_for(item);
         let props: Vec<String> = self
             .get_file_string(&item_rels_part)
-            .map(|xml| parse_relationships(&xml).into_iter().map(|r| resolve_target(item, &r.target)).collect())
+            .map(|xml| {
+                parse_relationships(&xml)
+                    .into_iter()
+                    .map(|r| resolve_target(item, &r.target))
+                    .collect()
+            })
             .unwrap_or_default();
         let mut types = self.get_file_string(content_types::PART)?;
         for part in &props {

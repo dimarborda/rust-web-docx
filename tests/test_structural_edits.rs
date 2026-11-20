@@ -26,7 +26,10 @@ fn docx_with_styles(body: &str, styles: &str) -> DocxModifier {
         let mut zip = ZipWriter::new(&mut buf);
         let opts = SimpleFileOptions::default();
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
             ("word/styles.xml", styles),
         ] {
@@ -39,7 +42,11 @@ fn docx_with_styles(body: &str, styles: &str) -> DocxModifier {
 }
 
 fn texts(m: &DocxModifier) -> Vec<String> {
-    m.extract_paragraphs().unwrap().into_iter().map(|p| p.text).collect()
+    m.extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect()
 }
 
 fn document(m: &DocxModifier) -> String {
@@ -48,27 +55,40 @@ fn document(m: &DocxModifier) -> String {
 
 #[test]
 fn test_enter_splits_paragraph_keeping_formatting() {
-    let mut m = docx(r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr><w:t>hola mundo</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr><w:t>hola mundo</w:t></w:r></w:p>"#,
+    );
     assert_eq!(m.replace_range(0, 4, 0, 4, "\n").unwrap(), (1, 0));
     assert_eq!(texts(&m), vec!["hola", " mundo"]);
     for p in m.extract_paragraphs().unwrap() {
         assert_eq!(p.align, "center", "both halves keep paragraph properties");
-        assert!(p.runs[0].bold && p.runs[0].color == "FF0000", "and run formatting");
+        assert!(
+            p.runs[0].bold && p.runs[0].color == "FF0000",
+            "and run formatting"
+        );
     }
 }
 
 #[test]
 fn test_enter_at_end_of_heading_continues_with_next_style() {
-    let mut m = docx(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#,
+    );
     m.replace_range(0, 6, 0, 6, "\n").unwrap();
     let ps = m.extract_paragraphs().unwrap();
     assert_eq!(ps[0].style, "Heading1");
     assert_eq!((ps[1].style.as_str(), ps[1].text.as_str()), ("Normal", ""));
 
     // Enter in the middle keeps the heading on both halves
-    let mut m = docx(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#,
+    );
     m.replace_range(0, 3, 0, 3, "\n").unwrap();
-    assert!(m.extract_paragraphs().unwrap().iter().all(|p| p.style == "Heading1"));
+    assert!(m
+        .extract_paragraphs()
+        .unwrap()
+        .iter()
+        .all(|p| p.style == "Heading1"));
 }
 
 #[test]
@@ -80,10 +100,26 @@ fn test_split_keeps_unique_things_unique() {
     ));
     m.replace_range(0, 2, 0, 2, "\n").unwrap();
     let xml = document(&m);
-    assert_eq!(xml.matches("<w:drawing>").count(), 1, "the image is not duplicated");
-    assert_eq!(xml.matches("<w:bookmarkStart").count(), 1, "bookmark ids stay unique");
-    assert_eq!(xml.matches("w14:paraId=").count(), 1, "paragraph ids stay unique");
-    assert_eq!(xml.matches("<w:type w:val=\"nextPage\"/>").count(), 1, "one section break");
+    assert_eq!(
+        xml.matches("<w:drawing>").count(),
+        1,
+        "the image is not duplicated"
+    );
+    assert_eq!(
+        xml.matches("<w:bookmarkStart").count(),
+        1,
+        "bookmark ids stay unique"
+    );
+    assert_eq!(
+        xml.matches("w14:paraId=").count(),
+        1,
+        "paragraph ids stay unique"
+    );
+    assert_eq!(
+        xml.matches("<w:type w:val=\"nextPage\"/>").count(),
+        1,
+        "one section break"
+    );
 
     // The section break ends the section after the second half; the image follows its text
     let second_start = xml.find("<w:p>").expect("second paragraph lost its ids");
@@ -100,14 +136,19 @@ fn test_backspace_and_delete_join_paragraphs() {
     let mut m = docx(body);
     assert_eq!(m.replace_range(0, 3, 1, 0, "").unwrap(), (0, 3));
     let ps = m.extract_paragraphs().unwrap();
-    assert_eq!((ps.len(), ps[0].text.as_str(), ps[0].align.as_str()), (1, "unodos", "right"));
+    assert_eq!(
+        (ps.len(), ps[0].text.as_str(), ps[0].align.as_str()),
+        (1, "unodos", "right")
+    );
     // As in Word, joined text takes the surviving paragraph's style (no more heading bold)
     // but keeps its direct formatting (italic)
     let fmt: Vec<(bool, bool)> = ps[0].runs.iter().map(|r| (r.bold, r.italic)).collect();
     assert_eq!(fmt, vec![(false, false), (false, true)]);
 
     // Deleting an empty line in front of a heading leaves the heading
-    let mut m = docx(r#"<w:p><w:pPr><w:jc w:val="right"/></w:pPr></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>dos</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:pPr><w:jc w:val="right"/></w:pPr></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>dos</w:t></w:r></w:p>"#,
+    );
     m.merge_with_next(0).unwrap();
     let ps = m.extract_paragraphs().unwrap();
     assert_eq!((ps.len(), ps[0].style.as_str()), (1, "Heading1"));
@@ -115,24 +156,42 @@ fn test_backspace_and_delete_join_paragraphs() {
 
 #[test]
 fn test_multi_paragraph_selection_delete_removes_what_is_between() {
-    let mut m = docx(r#"<w:p><w:r><w:t>primero</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>medio</w:t></w:r></w:p><w:p><w:r><w:t>último</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:r><w:t>primero</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>medio</w:t></w:r></w:p><w:p><w:r><w:t>último</w:t></w:r></w:p>"#,
+    );
     // Paragraph numbers are document-wide: 0 primero, 1 celda (in the table), 2 medio, 3 último
     assert_eq!(m.replace_range(0, 4, 3, 2, "X").unwrap(), (0, 5));
     assert_eq!(texts(&m), vec!["primXtimo"]);
-    assert!(m.extract_elements().unwrap().iter().all(|e| matches!(e, DocumentElement::Paragraph(_))), "the table inside the selection is gone");
+    assert!(
+        m.extract_elements()
+            .unwrap()
+            .iter()
+            .all(|e| matches!(e, DocumentElement::Paragraph(_))),
+        "the table inside the selection is gone"
+    );
 
     // Joining across a table is refused (Backspace must not eat the table)
-    let mut m = docx(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#,
+    );
     assert!(m.merge_with_next(0).is_err());
 }
 
 #[test]
 fn test_paste_with_newlines_creates_paragraphs() {
     let mut m = docx(r#"<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>[]</w:t></w:r></w:p>"#);
-    let end = m.replace_range(0, 1, 0, 1, "uno\ndos\u{000B}bis\ntres").unwrap();
+    let end = m
+        .replace_range(0, 1, 0, 1, "uno\ndos\u{000B}bis\ntres")
+        .unwrap();
     assert_eq!(end, (2, 4));
     assert_eq!(texts(&m), vec!["[uno", "dos\nbis", "tres]"]);
-    assert!(m.extract_paragraphs().unwrap().iter().all(|p| p.runs.iter().all(|r| r.italic)), "pasted text takes the caret's formatting");
+    assert!(
+        m.extract_paragraphs()
+            .unwrap()
+            .iter()
+            .all(|p| p.runs.iter().all(|r| r.italic)),
+        "pasted text takes the caret's formatting"
+    );
 }
 
 #[test]
@@ -183,19 +242,31 @@ fn test_structural_edits_export_valid_documents() {
     assert!(texts(&m).len() < before + 3);
 
     // A selection from the body into the middle of a table cell cannot be cut out
-    let mut m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+    let mut m = docx(
+        r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>celda</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
     assert!(m.replace_range(0, 2, 1, 2, "").is_err());
 }
 
 #[test]
 fn test_table_cell_paragraphs_are_editable_like_any_other() {
-    let m = docx(r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>uno</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>después</w:t></w:r></w:p>"#);
+    let m = docx(
+        r#"<w:p><w:r><w:t>antes</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>uno</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>después</w:t></w:r></w:p>"#,
+    );
     let table_paragraphs = || match &m.extract_elements().unwrap()[1] {
-        DocumentElement::Table(t) => t.rich_rows[0].cells.iter().flat_map(|c| c.paragraphs.clone()).collect::<Vec<_>>(),
+        DocumentElement::Table(t) => t.rich_rows[0]
+            .cells
+            .iter()
+            .flat_map(|c| c.paragraphs.clone())
+            .collect::<Vec<_>>(),
         _ => panic!("expected a table"),
     };
     let cells = table_paragraphs();
-    assert_eq!(cells.iter().map(|p| p.index).collect::<Vec<_>>(), vec![1, 2], "cells continue the numbering");
+    assert_eq!(
+        cells.iter().map(|p| p.index).collect::<Vec<_>>(),
+        vec![1, 2],
+        "cells continue the numbering"
+    );
     let _ = cells;
 
     // Typing, Enter and formatting work inside cells through the same primitives
@@ -207,16 +278,35 @@ fn test_table_cell_paragraphs_are_editable_like_any_other() {
         DocumentElement::Table(t) => t.rich_rows[0]
             .cells
             .iter()
-            .flat_map(|c| c.paragraphs.iter().map(|p| (p.index, p.text.clone(), p.runs.first().is_some_and(|r| r.bold))))
+            .flat_map(|c| {
+                c.paragraphs.iter().map(|p| {
+                    (
+                        p.index,
+                        p.text.clone(),
+                        p.runs.first().is_some_and(|r| r.bold),
+                    )
+                })
+            })
             .collect(),
         _ => panic!("expected a table"),
     };
     assert_eq!(
         cell_texts,
-        vec![(1, "uno".into(), true), (2, " dos".into(), true), (3, "vacía".into(), false)],
+        vec![
+            (1, "uno".into(), true),
+            (2, " dos".into(), true),
+            (3, "vacía".into(), false)
+        ],
         "Enter split the first cell's paragraph inside the cell"
     );
-    assert_eq!(m.extract_paragraphs().unwrap().iter().map(|p| p.index).collect::<Vec<_>>(), vec![0, 4]);
+    assert_eq!(
+        m.extract_paragraphs()
+            .unwrap()
+            .iter()
+            .map(|p| p.index)
+            .collect::<Vec<_>>(),
+        vec![0, 4]
+    );
 
     // Cells never merge with each other or with the body
     assert!(m.merge_with_next(2).is_err());
@@ -225,11 +315,16 @@ fn test_table_cell_paragraphs_are_editable_like_any_other() {
 
 #[test]
 fn test_enter_at_end_keeps_typing_in_the_same_format() {
-    let mut m = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:b/></w:rPr><w:t>código</w:t></w:r></w:p>"#);
+    let mut m = docx(
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:b/></w:rPr><w:t>código</w:t></w:r></w:p>"#,
+    );
     m.replace_range(0, 6, 0, 6, "\n").unwrap();
     m.replace_range(1, 0, 1, 0, "más").unwrap();
     let run = &m.extract_paragraphs().unwrap()[1].runs[0];
-    assert_eq!((run.text.as_str(), run.bold, run.font_family.as_deref()), ("más", true, Some("Consolas")));
+    assert_eq!(
+        (run.text.as_str(), run.bold, run.font_family.as_deref()),
+        ("más", true, Some("Consolas"))
+    );
 }
 
 #[test]
@@ -247,13 +342,21 @@ fn test_table_borders_follow_style_table_and_cell() {
           <w:insideH w:val="single" w:sz="4" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:color="auto"/>
         </w:tblBorders></w:tblPr></w:style>
     </w:styles>"#;
-    let cell = |text: &str, borders: &str| format!(r#"<w:tc><w:tcPr>{}</w:tcPr><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>"#, borders, text);
+    let cell = |text: &str, borders: &str| {
+        format!(
+            r#"<w:tc><w:tcPr>{}</w:tcPr><w:p><w:r><w:t>{}</w:t></w:r></w:p></w:tc>"#,
+            borders, text
+        )
+    };
     let body = format!(
         r#"<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblBorders><w:insideV w:val="none"/></w:tblBorders></w:tblPr>
            <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
            <w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl><w:p/>"#,
         cell("a1", ""),
-        cell("b1", r#"<w:tcBorders><w:bottom w:val="double" w:sz="12" w:color="FF0000"/></w:tcBorders>"#),
+        cell(
+            "b1",
+            r#"<w:tcBorders><w:bottom w:val="double" w:sz="12" w:color="FF0000"/></w:tcBorders>"#
+        ),
         cell("a2", ""),
         cell("b2", ""),
     );
@@ -261,26 +364,50 @@ fn test_table_borders_follow_style_table_and_cell() {
 
     // The style supplies the borders, the table removes the inside verticals
     let table = m.extract_tables().unwrap().remove(0);
-    let visible = |b: &Option<rust_web_docx::docx_parser::BorderInfo>| b.as_ref().is_some_and(|b| b.is_visible());
+    let visible = |b: &Option<rust_web_docx::docx_parser::BorderInfo>| {
+        b.as_ref().is_some_and(|b| b.is_visible())
+    };
     assert!(visible(&table.borders.top) && visible(&table.borders.inside_h));
-    assert!(!visible(&table.borders.inside_v), "explicit none overrides the style");
-    assert!(table.rich_rows.iter().all(|r| !r.is_header), "no row is a header without tblHeader");
+    assert!(
+        !visible(&table.borders.inside_v),
+        "explicit none overrides the style"
+    );
+    assert!(
+        table.rich_rows.iter().all(|r| !r.is_header),
+        "no row is a header without tblHeader"
+    );
 
     // What the layout draws for each cell side
     let elements = m.extract_elements().unwrap();
-    let layout = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0);
+    let layout = LayoutEngine::new().compute_layout(
+        &elements,
+        "FFFFFF",
+        &PageSetup::default(),
+        &HeaderFooterInfo::default(),
+        None,
+        None,
+        0.0,
+    );
     let cells: Vec<_> = layout.pages[0]
         .items
         .iter()
         .filter_map(|i| match i {
-            RenderCommand::TableCell { row, col, borders, .. } => Some(((*row, *col), borders.clone())),
+            RenderCommand::TableCell {
+                row, col, borders, ..
+            } => Some(((*row, *col), borders.clone())),
             _ => None,
         })
         .collect();
     let at = |r: usize, c: usize| cells.iter().find(|(k, _)| *k == (r, c)).unwrap().1.clone();
     let a1 = at(0, 0);
-    assert!(a1.top.is_some() && a1.left.is_some() && a1.bottom.is_some(), "outer + insideH borders");
-    assert!(a1.right.is_none(), "no inside vertical border between columns");
+    assert!(
+        a1.top.is_some() && a1.left.is_some() && a1.bottom.is_some(),
+        "outer + insideH borders"
+    );
+    assert!(
+        a1.right.is_none(),
+        "no inside vertical border between columns"
+    );
     let b1 = at(0, 1);
     let own = b1.bottom.expect("the cell's own bottom border");
     assert_eq!((own.val.as_str(), own.color.as_str()), ("double", "FF0000"));
@@ -296,9 +423,18 @@ fn test_unstyled_document_uses_word_defaults() {
     );
     for p in m.extract_paragraphs().unwrap() {
         let run = &p.runs[0];
-        assert_eq!((run.font_family.as_deref(), run.font_size), (Some("Times New Roman"), Some(10.0)));
-        assert!(!run.bold, "an undefined Heading1 style adds nothing, as in Word");
+        assert_eq!(
+            (run.font_family.as_deref(), run.font_size),
+            (Some("Times New Roman"), Some(10.0))
+        );
+        assert!(
+            !run.bold,
+            "an undefined Heading1 style adds nothing, as in Word"
+        );
         assert_eq!(run.color, "");
-        assert_eq!((p.space_before, p.space_after, p.line_spacing), (0.0, 0.0, None));
+        assert_eq!(
+            (p.space_before, p.space_after, p.line_spacing),
+            (0.0, 0.0, None)
+        );
     }
 }

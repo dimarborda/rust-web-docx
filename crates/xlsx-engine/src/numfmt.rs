@@ -30,9 +30,33 @@ impl Locale {
             Locale {
                 decimal: ',',
                 group: '.',
-                months: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
-                months_short: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
-                days: ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
+                months: [
+                    "enero",
+                    "febrero",
+                    "marzo",
+                    "abril",
+                    "mayo",
+                    "junio",
+                    "julio",
+                    "agosto",
+                    "septiembre",
+                    "octubre",
+                    "noviembre",
+                    "diciembre",
+                ],
+                months_short: [
+                    "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov",
+                    "dic",
+                ],
+                days: [
+                    "domingo",
+                    "lunes",
+                    "martes",
+                    "miércoles",
+                    "jueves",
+                    "viernes",
+                    "sábado",
+                ],
                 days_short: ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"],
                 true_text: "VERDADERO",
                 false_text: "FALSO",
@@ -43,9 +67,33 @@ impl Locale {
             Locale {
                 decimal: '.',
                 group: ',',
-                months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
-                months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
-                days: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+                months: [
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ],
+                months_short: [
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
+                ],
+                days: [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ],
                 days_short: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
                 true_text: "TRUE",
                 false_text: "FALSE",
@@ -160,7 +208,9 @@ struct Section {
 
 impl Section {
     fn is_date(&self) -> bool {
-        self.toks.iter().any(|t| matches!(t, Tok::Date(..) | Tok::Elapsed(..) | Tok::AmPm(_)))
+        self.toks
+            .iter()
+            .any(|t| matches!(t, Tok::Date(..) | Tok::Elapsed(..) | Tok::AmPm(_)))
     }
     fn has_at(&self) -> bool {
         self.toks.contains(&Tok::At)
@@ -247,7 +297,11 @@ fn parse_section(code: &str) -> Section {
     };
     while i < chars.len() {
         let c = chars[i];
-        let rest: String = chars[i..].iter().take(5).collect::<String>().to_ascii_lowercase();
+        let rest: String = chars[i..]
+            .iter()
+            .take(5)
+            .collect::<String>()
+            .to_ascii_lowercase();
         match c {
             '"' => {
                 let mut text = String::new();
@@ -282,19 +336,27 @@ fn parse_section(code: &str) -> Section {
                     s.color = Some(color.to_string());
                 } else if lower.starts_with("color") {
                     let n: usize = lower[5..].parse().unwrap_or(0);
-                    s.color = crate::theme::indexed_color(n.saturating_sub(1)).map(|c| format!("#{}", c));
+                    s.color =
+                        crate::theme::indexed_color(n.saturating_sub(1)).map(|c| format!("#{}", c));
                 } else if let Some(currency) = inner.strip_prefix('$') {
                     let symbol = currency.split('-').next().unwrap_or("");
                     if !symbol.is_empty() {
                         lit(&mut s.toks, symbol.to_string());
                     }
                 } else if inner.starts_with(['<', '>', '=']) {
-                    let op_len = inner.chars().take_while(|c| matches!(c, '<' | '>' | '=')).count();
+                    let op_len = inner
+                        .chars()
+                        .take_while(|c| matches!(c, '<' | '>' | '='))
+                        .count();
                     if let Ok(n) = inner[op_len..].trim().parse::<f64>() {
                         s.condition = Some((inner[..op_len].to_string(), n));
                     }
-                } else if !lower.is_empty() && lower.chars().all(|ch| ch == lower.chars().next().unwrap()) && matches!(lower.chars().next(), Some('h' | 'm' | 's')) {
-                    s.toks.push(Tok::Elapsed(lower.chars().next().unwrap(), lower.len()));
+                } else if !lower.is_empty()
+                    && lower.chars().all(|ch| ch == lower.chars().next().unwrap())
+                    && matches!(lower.chars().next(), Some('h' | 'm' | 's'))
+                {
+                    s.toks
+                        .push(Tok::Elapsed(lower.chars().next().unwrap(), lower.len()));
                 }
             }
             '0' | '#' | '?' => s.toks.push(Tok::Digit(c)),
@@ -315,7 +377,13 @@ fn parse_section(code: &str) -> Section {
                 s.toks.push(Tok::AmPm(false));
                 i += 2;
             }
-            _ if rest.starts_with("gener") && chars[i..].iter().take(7).collect::<String>().eq_ignore_ascii_case("general") => {
+            _ if rest.starts_with("gener")
+                && chars[i..]
+                    .iter()
+                    .take(7)
+                    .collect::<String>()
+                    .eq_ignore_ascii_case("general") =>
+            {
                 s.toks.push(Tok::General);
                 i += 6;
             }
@@ -364,7 +432,10 @@ fn resolve_minutes(toks: &mut [Tok]) {
 
 /// The text Excel shows for `value` with the format `code`
 pub fn format(value: Value, code: &str, locale: &Locale, date1904: bool) -> Formatted {
-    let sections: Vec<Section> = split_sections(code).iter().map(|s| parse_section(s)).collect();
+    let sections: Vec<Section> = split_sections(code)
+        .iter()
+        .map(|s| parse_section(s))
+        .collect();
     match value {
         Value::Bool(b) => Formatted::plain(locale.bool_text(b).to_string()),
         Value::Error(e) => Formatted::plain(e.to_string()),
@@ -375,7 +446,10 @@ pub fn format(value: Value, code: &str, locale: &Locale, date1904: bool) -> Form
                 sections.iter().find(|s| s.has_at())
             };
             match section {
-                Some(s) => Formatted { text: render_text(s, t), color: s.color.clone() },
+                Some(s) => Formatted {
+                    text: render_text(s, t),
+                    color: s.color.clone(),
+                },
                 None => Formatted::plain(t.to_string()),
             }
         }
@@ -389,7 +463,11 @@ pub fn format(value: Value, code: &str, locale: &Locale, date1904: bool) -> Form
                     .or_else(|| numeric.iter().position(|s| s.condition.is_none()))
                     .unwrap_or(0);
                 // A negative value shown by a later section loses its sign, like Excel's
-                (&numeric[chosen], if chosen > 0 { v.abs() } else { v }, chosen == 0)
+                (
+                    &numeric[chosen],
+                    if chosen > 0 { v.abs() } else { v },
+                    chosen == 0,
+                )
             } else if v < 0.0 && numeric.len() >= 2 {
                 (&numeric[1], -v, false)
             } else if v == 0.0 && numeric.len() >= 3 {
@@ -401,7 +479,9 @@ pub fn format(value: Value, code: &str, locale: &Locale, date1904: bool) -> Form
                 String::new()
             } else if section.is_date() {
                 render_date(section, v, locale, date1904)
-            } else if section.toks.contains(&Tok::General) && !section.toks.iter().any(|t| matches!(t, Tok::Digit(_))) {
+            } else if section.toks.contains(&Tok::General)
+                && !section.toks.iter().any(|t| matches!(t, Tok::Digit(_)))
+            {
                 let general = general(v.abs(), locale);
                 let mut out = String::new();
                 if v < 0.0 && signed {
@@ -418,7 +498,10 @@ pub fn format(value: Value, code: &str, locale: &Locale, date1904: bool) -> Form
             } else {
                 render_number(section, v, signed, locale)
             };
-            Formatted { text, color: section.color.clone() }
+            Formatted {
+                text,
+                color: section.color.clone(),
+            }
         }
     }
 }
@@ -446,7 +529,11 @@ pub fn general(v: f64, locale: &Locale) -> String {
     if !(1e-9..1e11).contains(&a) {
         return format!("{}{}", sign, scientific_general(a, locale));
     }
-    let int_digits = if a >= 1.0 { (a.log10().floor() as i32 + 1).max(1) } else { 1 };
+    let int_digits = if a >= 1.0 {
+        (a.log10().floor() as i32 + 1).max(1)
+    } else {
+        1
+    };
     let decimals = (10 - int_digits).max(0) as usize;
     let (ip, mut fp) = decimal_parts(a, decimals);
     while fp.ends_with('0') {
@@ -472,8 +559,17 @@ fn scientific_general(a: f64, locale: &Locale) -> String {
     while fp.ends_with('0') {
         fp.pop();
     }
-    let mantissa = if fp.is_empty() { ip } else { format!("{}{}{}", ip, locale.decimal, fp) };
-    format!("{}E{}{:02}", mantissa, if exp < 0 { '-' } else { '+' }, exp.abs())
+    let mantissa = if fp.is_empty() {
+        ip
+    } else {
+        format!("{}{}{}", ip, locale.decimal, fp)
+    };
+    format!(
+        "{}E{}{:02}",
+        mantissa,
+        if exp < 0 { '-' } else { '+' },
+        exp.abs()
+    )
 }
 
 /// Integer and decimal digits of `x` (≥ 0) rounded half up to `decimals` places, working on its
@@ -517,7 +613,10 @@ fn decimal_parts(x: f64, decimals: usize) -> (String, String) {
     let ip = String::from_utf8(kept[..int_len].to_vec()).unwrap();
     let ip = ip.trim_start_matches('0');
     let ip = if ip.is_empty() { "0" } else { ip };
-    (ip.to_string(), String::from_utf8(kept[int_len..].to_vec()).unwrap())
+    (
+        ip.to_string(),
+        String::from_utf8(kept[int_len..].to_vec()).unwrap(),
+    )
 }
 
 fn group_digits(digits: &str, sep: char) -> String {
@@ -554,28 +653,71 @@ fn render_number(s: &Section, v: f64, signed: bool, locale: &Locale) -> String {
 
     // Commas right after the last digit placeholder scale by 1000 each; commas between
     // integer placeholders group thousands
-    let last_digit = toks[..mantissa_end].iter().rposition(|t| matches!(t, Tok::Digit(_)));
+    let last_digit = toks[..mantissa_end]
+        .iter()
+        .rposition(|t| matches!(t, Tok::Digit(_)));
     let scaling = match last_digit {
-        Some(last) => toks[last + 1..mantissa_end].iter().take_while(|t| **t == Tok::Comma).count() as i32,
+        Some(last) => toks[last + 1..mantissa_end]
+            .iter()
+            .take_while(|t| **t == Tok::Comma)
+            .count() as i32,
         None => 0,
     };
-    let last_int_digit = toks[..int_end].iter().rposition(|t| matches!(t, Tok::Digit(_)));
-    let grouping = toks[..int_end].iter().enumerate().any(|(i, t)| *t == Tok::Comma && last_int_digit.is_some_and(|l| i < l));
+    let last_int_digit = toks[..int_end]
+        .iter()
+        .rposition(|t| matches!(t, Tok::Digit(_)));
+    let grouping = toks[..int_end]
+        .iter()
+        .enumerate()
+        .any(|(i, t)| *t == Tok::Comma && last_int_digit.is_some_and(|l| i < l));
     v /= 1000f64.powi(scaling);
 
-    let int_slots: Vec<(usize, char)> = toks[..int_end].iter().enumerate().filter_map(|(i, t)| if let Tok::Digit(c) = t { Some((i, *c)) } else { None }).collect();
+    let int_slots: Vec<(usize, char)> = toks[..int_end]
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            if let Tok::Digit(c) = t {
+                Some((i, *c))
+            } else {
+                None
+            }
+        })
+        .collect();
     let dec_slots: Vec<(usize, char)> = match point_at {
-        Some(p) => toks[p + 1..mantissa_end].iter().enumerate().filter_map(|(i, t)| if let Tok::Digit(c) = t { Some((p + 1 + i, *c)) } else { None }).collect(),
+        Some(p) => toks[p + 1..mantissa_end]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                if let Tok::Digit(c) = t {
+                    Some((p + 1 + i, *c))
+                } else {
+                    None
+                }
+            })
+            .collect(),
         None => Vec::new(),
     };
     let exp_slots: Vec<char> = match exp_at {
-        Some(e) => toks[e + 1..].iter().filter_map(|t| if let Tok::Digit(c) = t { Some(*c) } else { None }).collect(),
+        Some(e) => toks[e + 1..]
+            .iter()
+            .filter_map(|t| {
+                if let Tok::Digit(c) = t {
+                    Some(*c)
+                } else {
+                    None
+                }
+            })
+            .collect(),
         None => Vec::new(),
     };
 
     let mut exponent = 0i32;
     let (ip, fp) = if exp_at.is_some() {
-        let step = if int_slots.len() > 1 && int_slots.iter().any(|(_, c)| *c == '#') { int_slots.len() as i32 } else { 1 };
+        let step = if int_slots.len() > 1 && int_slots.iter().any(|(_, c)| *c == '#') {
+            int_slots.len() as i32
+        } else {
+            1
+        };
         if v != 0.0 {
             exponent = (v.log10().floor() as i32).div_euclid(step) * step;
         }
@@ -594,8 +736,16 @@ fn render_number(s: &Section, v: f64, signed: bool, locale: &Locale) -> String {
     // Integer digits per placeholder, right to left; extra digits go to the first one
     let mut int_out: Vec<String> = vec![String::new(); int_slots.len()];
     if grouping {
-        let zeros_from = int_slots.iter().position(|(_, c)| *c == '0').map(|p| int_slots.len() - p).unwrap_or(0);
-        let padded = format!("{}{}", "0".repeat(zeros_from.saturating_sub(int_digits.len())), int_digits);
+        let zeros_from = int_slots
+            .iter()
+            .position(|(_, c)| *c == '0')
+            .map(|p| int_slots.len() - p)
+            .unwrap_or(0);
+        let padded = format!(
+            "{}{}",
+            "0".repeat(zeros_from.saturating_sub(int_digits.len())),
+            int_digits
+        );
         if let Some(first) = int_out.first_mut() {
             *first = group_digits(&padded, locale.group);
         }
@@ -658,7 +808,11 @@ fn render_number(s: &Section, v: f64, signed: bool, locale: &Locale) -> String {
                 if !exp_written {
                     let digits = exponent.abs().to_string();
                     let pad = exp_slots.iter().filter(|c| **c == '0').count();
-                    out.push_str(&format!("{}{}", "0".repeat(pad.saturating_sub(digits.len())), digits));
+                    out.push_str(&format!(
+                        "{}{}",
+                        "0".repeat(pad.saturating_sub(digits.len())),
+                        digits
+                    ));
                     exp_written = true;
                 }
             }
@@ -692,18 +846,30 @@ fn render_number(s: &Section, v: f64, signed: bool, locale: &Locale) -> String {
 fn render_fraction(toks: &[Tok], slash: usize, v: f64, negative: bool) -> String {
     let den_digits: String = toks[slash + 1..]
         .iter()
-        .take_while(|t| matches!(t, Tok::Digit(_)) || matches!(t, Tok::Lit(l) if l.chars().all(|c| c.is_ascii_digit())))
+        .take_while(|t| {
+            matches!(t, Tok::Digit(_))
+                || matches!(t, Tok::Lit(l) if l.chars().all(|c| c.is_ascii_digit()))
+        })
         .map(|t| match t {
             Tok::Digit(c) => c.to_string(),
             Tok::Lit(l) => l.clone(),
             _ => String::new(),
         })
         .collect();
-    let fixed: Option<u64> = if den_digits.chars().all(|c| c.is_ascii_digit()) && !den_digits.is_empty() { den_digits.parse().ok() } else { None };
+    let fixed: Option<u64> =
+        if den_digits.chars().all(|c| c.is_ascii_digit()) && !den_digits.is_empty() {
+            den_digits.parse().ok()
+        } else {
+            None
+        };
     let max_den = fixed.unwrap_or_else(|| 10u64.pow(den_digits.len().clamp(1, 4) as u32) - 1);
     // Numerator placeholders are the run right before the slash; digits before them, if any,
     // are the whole part
-    let num_start = toks[..slash].iter().rposition(|t| !matches!(t, Tok::Digit(_))).map(|p| p + 1).unwrap_or(0);
+    let num_start = toks[..slash]
+        .iter()
+        .rposition(|t| !matches!(t, Tok::Digit(_)))
+        .map(|p| p + 1)
+        .unwrap_or(0);
     let has_whole = toks[..num_start].iter().any(|t| matches!(t, Tok::Digit(_)));
     let mut whole = if has_whole { v.trunc() } else { 0.0 };
     let frac = v - whole;
@@ -762,8 +928,18 @@ fn render_date(s: &Section, serial: f64, locale: &Locale, date1904: bool) -> Str
     // Fractions of a second shown after the seconds (`ss.00`)
     let mut sub_digits = 0;
     for (i, t) in s.toks.iter().enumerate() {
-        if *t == Tok::Point && i > 0 && matches!(s.toks[..i].iter().rev().find(|t| !matches!(t, Tok::Lit(_))), Some(Tok::Date('s', _)) | Some(Tok::Elapsed('s', _))) {
-            sub_digits = s.toks[i + 1..].iter().take_while(|t| **t == Tok::Digit('0')).count().min(3);
+        if *t == Tok::Point
+            && i > 0
+            && matches!(
+                s.toks[..i].iter().rev().find(|t| !matches!(t, Tok::Lit(_))),
+                Some(Tok::Date('s', _)) | Some(Tok::Elapsed('s', _))
+            )
+        {
+            sub_digits = s.toks[i + 1..]
+                .iter()
+                .take_while(|t| **t == Tok::Digit('0'))
+                .count()
+                .min(3);
         }
     }
     let unit = 10f64.powi(3 - sub_digits as i32);
@@ -809,7 +985,14 @@ fn render_date(s: &Section, serial: f64, locale: &Locale, date1904: bool) -> Str
                 2 => out.push_str(&format!("{:02}", month)),
                 3 => out.push_str(locale.months_short[month as usize - 1]),
                 4 => out.push_str(locale.months[month as usize - 1]),
-                _ => out.push_str(&locale.months[month as usize - 1].chars().next().unwrap().to_uppercase().to_string()),
+                _ => out.push_str(
+                    &locale.months[month as usize - 1]
+                        .chars()
+                        .next()
+                        .unwrap()
+                        .to_uppercase()
+                        .to_string(),
+                ),
             },
             Tok::Date('M', n) => {
                 if *n == 1 {
@@ -930,13 +1113,27 @@ mod tests {
         assert_eq!(es(1234.5, "[$€-C0A] #,##0.00"), "€ 1.234,50");
         assert_eq!(en(-1234.0, "$#,##0_);($#,##0)"), "($1,234)");
         assert_eq!(en(1234.0, "$#,##0_);($#,##0)"), "$1,234 ");
-        let red = format(Value::Number(-3.0), "0.0;[Red]-0.0", &Locale::from_tag("en"), false);
-        assert_eq!(red, Formatted { text: "-3.0".to_string(), color: Some("#FF0000".to_string()) });
+        let red = format(
+            Value::Number(-3.0),
+            "0.0;[Red]-0.0",
+            &Locale::from_tag("en"),
+            false,
+        );
+        assert_eq!(
+            red,
+            Formatted {
+                text: "-3.0".to_string(),
+                color: Some("#FF0000".to_string())
+            }
+        );
         assert_eq!(en(0.0, "0;-0;\"cero\""), "cero");
         assert_eq!(en(0.0, "0;-0;;@"), "");
         assert_eq!(en(150.0, "[>100]\"alto\";[<=100]\"bajo\""), "alto");
         assert_eq!(en(50.0, "[>100]\"alto\";[<=100]\"bajo\""), "bajo");
-        assert_eq!(en(0.0, r#"_(* #,##0_);_(* \(#,##0\);_(* "-"_);_(@_)"#), " - ");
+        assert_eq!(
+            en(0.0, r#"_(* #,##0_);_(* \(#,##0\);_(* "-"_);_(@_)"#),
+            " - "
+        );
     }
 
     #[test]
@@ -955,10 +1152,22 @@ mod tests {
     fn text_bool_and_errors() {
         let l = Locale::from_tag("es");
         assert_eq!(format(Value::Text("hola"), "0.00", &l, false).text, "hola");
-        assert_eq!(format(Value::Text("hola"), "\"Sr. \"@", &l, false).text, "Sr. hola");
-        assert_eq!(format(Value::Text("x"), "0;-0;0;\"[\"@\"]\"", &l, false).text, "[x]");
-        assert_eq!(format(Value::Bool(true), "General", &l, false).text, "VERDADERO");
-        assert_eq!(format(Value::Error("#DIV/0!"), "0.00", &l, false).text, "#DIV/0!");
+        assert_eq!(
+            format(Value::Text("hola"), "\"Sr. \"@", &l, false).text,
+            "Sr. hola"
+        );
+        assert_eq!(
+            format(Value::Text("x"), "0;-0;0;\"[\"@\"]\"", &l, false).text,
+            "[x]"
+        );
+        assert_eq!(
+            format(Value::Bool(true), "General", &l, false).text,
+            "VERDADERO"
+        );
+        assert_eq!(
+            format(Value::Error("#DIV/0!"), "0.00", &l, false).text,
+            "#DIV/0!"
+        );
     }
 
     #[test]
@@ -966,7 +1175,10 @@ mod tests {
         // 2026-01-15 is serial 46037; 2026-10-17 is 46312 (a Saturday)
         assert_eq!(es(46037.0, "dd/mm/yyyy"), "15/01/2026");
         assert_eq!(en(46037.0, "m/d/yy"), "1/15/26");
-        assert_eq!(es(46312.0, "dddd d \"de\" mmmm \"de\" yyyy"), "sábado 17 de octubre de 2026");
+        assert_eq!(
+            es(46312.0, "dddd d \"de\" mmmm \"de\" yyyy"),
+            "sábado 17 de octubre de 2026"
+        );
         assert_eq!(en(46312.0, "ddd, mmm d"), "Sat, Oct 17");
         assert_eq!(en(46023.520833333336, "m/d/yy h:mm"), "1/1/26 12:30");
         assert_eq!(en(0.75, "h:mm AM/PM"), "6:00 PM");
@@ -975,9 +1187,28 @@ mod tests {
         assert_eq!(en(0.0104166666, "mm:ss"), "15:00");
         assert_eq!(en(60.0, "yyyy-mm-dd"), "1900-02-29");
         assert_eq!(en(-1.0, "dd/mm/yyyy"), "########");
-        assert_eq!(es(46037.0, builtin_code(14, &Locale::from_tag("es"))), "15/01/2026");
-        assert_eq!(en(46037.0, builtin_code(14, &Locale::from_tag("en"))), "1/15/2026");
-        assert_eq!(en(46037.0 - 1462.0, "yyyy-mm-dd"), "2022-01-14", "1900 system serial read as 1900");
-        assert_eq!(format(Value::Number(46037.0 - 1462.0), "yyyy-mm-dd", &Locale::from_tag("en"), true).text, "2026-01-15");
+        assert_eq!(
+            es(46037.0, builtin_code(14, &Locale::from_tag("es"))),
+            "15/01/2026"
+        );
+        assert_eq!(
+            en(46037.0, builtin_code(14, &Locale::from_tag("en"))),
+            "1/15/2026"
+        );
+        assert_eq!(
+            en(46037.0 - 1462.0, "yyyy-mm-dd"),
+            "2022-01-14",
+            "1900 system serial read as 1900"
+        );
+        assert_eq!(
+            format(
+                Value::Number(46037.0 - 1462.0),
+                "yyyy-mm-dd",
+                &Locale::from_tag("en"),
+                true
+            )
+            .text,
+            "2026-01-15"
+        );
     }
 }

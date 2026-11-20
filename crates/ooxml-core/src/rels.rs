@@ -24,13 +24,18 @@ pub fn parse_relationships(xml: &str) -> Vec<Relationship> {
     let mut reader = Reader::from_str(xml);
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) if tag_is(e.name().as_ref(), "Relationship") => {
-                if let (Some(id), Some(target)) = (get_attr_value(e, "Id"), get_attr_value(e, "Target")) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if tag_is(e.name().as_ref(), "Relationship") =>
+            {
+                if let (Some(id), Some(target)) =
+                    (get_attr_value(e, "Id"), get_attr_value(e, "Target"))
+                {
                     rels.push(Relationship {
                         id,
                         rel_type: get_attr_value(e, "Type").unwrap_or_default(),
                         target,
-                        external: get_attr_value(e, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External")),
+                        external: get_attr_value(e, "TargetMode")
+                            .is_some_and(|m| m.eq_ignore_ascii_case("External")),
                     });
                 }
             }
@@ -61,7 +66,13 @@ pub fn rels_part_for(part: &str) -> String {
 pub fn resolve_target(source_part: &str, target: &str) -> String {
     let (base, rest) = match target.strip_prefix('/') {
         Some(absolute) => ("", absolute),
-        None => (source_part.rfind('/').map(|i| &source_part[..i]).unwrap_or(""), target),
+        None => (
+            source_part
+                .rfind('/')
+                .map(|i| &source_part[..i])
+                .unwrap_or(""),
+            target,
+        ),
     };
     let mut segments: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
     for segment in rest.split('/') {
@@ -78,7 +89,11 @@ pub fn resolve_target(source_part: &str, target: &str) -> String {
 
 /// The relationships part with a new relationship appended, and the id it was given (`rIdN`
 /// one past the highest numbered id)
-pub fn with_relationship(xml: &str, rel_type: &str, target: &str) -> Result<(String, String), String> {
+pub fn with_relationship(
+    xml: &str,
+    rel_type: &str,
+    target: &str,
+) -> Result<(String, String), String> {
     let next = parse_relationships(xml)
         .iter()
         .filter_map(|r| r.id.strip_prefix("rId").and_then(|n| n.parse::<u32>().ok()))
@@ -97,7 +112,9 @@ pub fn with_relationship(xml: &str, rel_type: &str, target: &str) -> Result<(Str
 
 /// The relationships part without the relationship `id`
 pub fn without_relationship(xml: &str, id: &str) -> Result<String, String> {
-    remove_elements(xml, "Relationship", |e| get_attr_value(e, "Id").as_deref() == Some(id))
+    remove_elements(xml, "Relationship", |e| {
+        get_attr_value(e, "Id").as_deref() == Some(id)
+    })
 }
 
 /// Targets of a relationships part by relationship id
@@ -150,20 +167,43 @@ mod tests {
         assert!(type_is(&rels[0].rel_type, "worksheet") && !rels[0].external);
         assert!(rels[1].external);
 
-        let (added, id) = with_relationship(xml, "http://a/relationships/sharedStrings", "sharedStrings.xml").unwrap();
+        let (added, id) = with_relationship(
+            xml,
+            "http://a/relationships/sharedStrings",
+            "sharedStrings.xml",
+        )
+        .unwrap();
         assert_eq!(id, "rId8");
         assert_eq!(parse_relationships(&added)[2].target, "sharedStrings.xml");
         let removed = without_relationship(&added, "rId1").unwrap();
-        assert_eq!(parse_relationships(&removed).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["rId7", "rId8"]);
+        assert_eq!(
+            parse_relationships(&removed)
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["rId7", "rId8"]
+        );
     }
 
     #[test]
     fn resolves_targets_and_rels_parts() {
-        assert_eq!(rels_part_for("xl/workbook.xml"), "xl/_rels/workbook.xml.rels");
+        assert_eq!(
+            rels_part_for("xl/workbook.xml"),
+            "xl/_rels/workbook.xml.rels"
+        );
         assert_eq!(rels_part_for("doc.xml"), "_rels/doc.xml.rels");
-        assert_eq!(resolve_target("xl/workbook.xml", "worksheets/sheet1.xml"), "xl/worksheets/sheet1.xml");
-        assert_eq!(resolve_target("xl/worksheets/sheet1.xml", "../drawings/d1.xml"), "xl/drawings/d1.xml");
-        assert_eq!(resolve_target("xl/workbook.xml", "/xl/styles.xml"), "xl/styles.xml");
+        assert_eq!(
+            resolve_target("xl/workbook.xml", "worksheets/sheet1.xml"),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            resolve_target("xl/worksheets/sheet1.xml", "../drawings/d1.xml"),
+            "xl/drawings/d1.xml"
+        );
+        assert_eq!(
+            resolve_target("xl/workbook.xml", "/xl/styles.xml"),
+            "xl/styles.xml"
+        );
         assert_eq!(resolve_target("", "xl/workbook.xml"), "xl/workbook.xml");
     }
 }

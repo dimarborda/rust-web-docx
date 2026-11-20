@@ -20,12 +20,19 @@ pub fn example(name: &str) -> Option<Vec<u8>> {
 
 /// Every .docx in `examples/` as (file name, bytes), sorted by name
 pub fn all_examples() -> Vec<(String, Vec<u8>)> {
-    let Ok(dir) = fs::read_dir("examples") else { return Vec::new() };
+    let Ok(dir) = fs::read_dir("examples") else {
+        return Vec::new();
+    };
     let mut out: Vec<(String, Vec<u8>)> = dir
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("docx"))
-        .filter_map(|p| Some((p.file_name()?.to_string_lossy().to_string(), fs::read(&p).ok()?)))
+        .filter_map(|p| {
+            Some((
+                p.file_name()?.to_string_lossy().to_string(),
+                fs::read(&p).ok()?,
+            ))
+        })
         .collect();
     out.sort();
     out

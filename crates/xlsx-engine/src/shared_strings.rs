@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use ooxml_core::xml::{append_child, element_ranges, get_attr_value, prefix_of, root_element, set_attr};
+use ooxml_core::xml::{
+    append_child, element_ranges, get_attr_value, prefix_of, root_element, set_attr,
+};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -27,12 +29,20 @@ pub struct SharedStrings {
 impl SharedStrings {
     pub fn parse(xml: &str) -> Result<SharedStrings, String> {
         let mut table = SharedStrings::default();
-        for range in element_ranges(xml, "si", |_| true).map_err(|e| format!("Las cadenas compartidas no son {}", e))? {
+        for range in element_ranges(xml, "si", |_| true)
+            .map_err(|e| format!("Las cadenas compartidas no son {}", e))?
+        {
             let item = &xml[range];
             let spans = text_spans(item, "si")?;
-            let text: String = spans.iter().map(|s| decode(&item[s.content.clone()])).collect();
+            let text: String = spans
+                .iter()
+                .map(|s| decode(&item[s.content.clone()]))
+                .collect();
             if spans.len() == 1 && element_ranges(item, "r", |_| true)?.is_empty() {
-                table.plain.entry(text.clone()).or_insert(table.items.len() as u32);
+                table
+                    .plain
+                    .entry(text.clone())
+                    .or_insert(table.items.len() as u32);
             }
             table.items.push(text);
         }
@@ -40,7 +50,10 @@ impl SharedStrings {
     }
 
     pub fn get(&self, index: usize) -> Option<&str> {
-        self.items.get(index).or_else(|| self.added.get(index.wrapping_sub(self.items.len()))).map(String::as_str)
+        self.items
+            .get(index)
+            .or_else(|| self.added.get(index.wrapping_sub(self.items.len())))
+            .map(String::as_str)
     }
 
     /// Index of `text` in the table, adding it when no plain entry holds it yet
@@ -62,17 +75,24 @@ impl SharedStrings {
     /// The part with the added strings appended and its counters updated; the existing entries
     /// stay as written
     pub fn write(&self, xml: &str) -> Result<String, String> {
-        let (root_at, root) = root_element(xml).ok_or("Las cadenas compartidas no tienen elemento raíz.")?;
+        let (root_at, root) =
+            root_element(xml).ok_or("Las cadenas compartidas no tienen elemento raíz.")?;
         let prefix = prefix_of(&root).to_string();
         let mut out = xml.to_string();
         if !self.added.is_empty() {
-            let items: String = self.added.iter().map(|t| format!("<{p}si>{}</{p}si>", t_element(&prefix, t), p = prefix)).collect();
+            let items: String = self
+                .added
+                .iter()
+                .map(|t| format!("<{p}si>{}</{p}si>", t_element(&prefix, t), p = prefix))
+                .collect();
             out = append_child(&out, &root, &items)?;
         }
         let tag_attr = |name: &str| -> Option<u64> {
             let mut reader = Reader::from_str(&xml[root_at..]);
             match reader.read_event() {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, name).and_then(|v| v.parse().ok()),
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    get_attr_value(&e, name).and_then(|v| v.parse().ok())
+                }
                 _ => None,
             }
         };
@@ -81,7 +101,11 @@ impl SharedStrings {
             root_part = set_attr(&root_part, "count", &(count + self.new_refs).to_string());
         }
         if tag_attr("uniqueCount").is_some() {
-            root_part = set_attr(&root_part, "uniqueCount", &(self.items.len() + self.added.len()).to_string());
+            root_part = set_attr(
+                &root_part,
+                "uniqueCount",
+                &(self.items.len() + self.added.len()).to_string(),
+            );
         }
         Ok(format!("{}{}", &out[..root_at], root_part))
     }
@@ -109,13 +133,27 @@ mod tests {
         assert_eq!(table.intern("Nuevo <1>"), 3);
         assert_eq!(table.get(3), Some("Nuevo <1>"));
         let xml = table.write(SST).unwrap();
-        assert!(xml.starts_with(r#"<sst xmlns="m" count="6" uniqueCount="4">"#), "{}", xml);
-        assert!(xml.ends_with("<si><t>Nuevo &lt;1&gt;</t></si></sst>"), "{}", xml);
+        assert!(
+            xml.starts_with(r#"<sst xmlns="m" count="6" uniqueCount="4">"#),
+            "{}",
+            xml
+        );
+        assert!(
+            xml.ends_with("<si><t>Nuevo &lt;1&gt;</t></si></sst>"),
+            "{}",
+            xml
+        );
         assert_eq!(SharedStrings::parse(&xml).unwrap().items[3], "Nuevo <1>");
 
         let mut empty = SharedStrings::parse(EMPTY_SST).unwrap();
         assert_eq!(empty.intern(" x"), 0);
         let xml = empty.write(EMPTY_SST).unwrap();
-        assert!(xml.contains(r#"count="1" uniqueCount="1"><si><t xml:space="preserve"> x</t></si></sst>"#), "{}", xml);
+        assert!(
+            xml.contains(
+                r#"count="1" uniqueCount="1"><si><t xml:space="preserve"> x</t></si></sst>"#
+            ),
+            "{}",
+            xml
+        );
     }
 }

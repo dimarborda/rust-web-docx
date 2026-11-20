@@ -27,7 +27,10 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
 use ooxml_core::rels::{parse_relationships, rels_part_for, resolve_target, type_is};
-use ooxml_core::xml::{element_ranges, escape_xml, get_attr_value, remove_attr, remove_elements, set_attr, tag_is, unescape_text};
+use ooxml_core::xml::{
+    element_ranges, escape_xml, get_attr_value, remove_attr, remove_elements, set_attr, tag_is,
+    unescape_text,
+};
 
 use crate::areas::parse_table;
 use crate::cell_ref::{column_name, CellRange, CellRef, MAX_COL, MAX_ROW};
@@ -86,14 +89,27 @@ impl LineMove {
         if count == 0 {
             return Err(format!("Hay que mover al menos una {}.", axis.noun()));
         }
-        let last = first.checked_add(count - 1).filter(|l| first >= 1 && *l <= limit);
+        let last = first
+            .checked_add(count - 1)
+            .filter(|l| first >= 1 && *l <= limit);
         let Some(last) = last else {
-            return Err(format!("Las {} {}s desde la {} se salen de la hoja.", count, axis.noun(), first));
+            return Err(format!(
+                "Las {} {}s desde la {} se salen de la hoja.",
+                count,
+                axis.noun(),
+                first
+            ));
         };
         if before == 0 || before > limit + 1 {
             return Err(format!("El destino {} está fuera de la hoja.", before));
         }
-        Ok(LineMove { axis, first, last, before, kind: EditKind::Move })
+        Ok(LineMove {
+            axis,
+            first,
+            last,
+            before,
+            kind: EditKind::Move,
+        })
     }
 
     /// `count` new lines before the line `before`
@@ -103,9 +119,21 @@ impl LineMove {
             return Err(format!("Hay que insertar al menos una {}.", axis.noun()));
         }
         if before == 0 || before as u64 + count as u64 - 1 > limit as u64 {
-            return Err(format!("No caben {} {}s nuevas en la {} {}.", count, axis.noun(), axis.noun(), before));
+            return Err(format!(
+                "No caben {} {}s nuevas en la {} {}.",
+                count,
+                axis.noun(),
+                axis.noun(),
+                before
+            ));
         }
-        Ok(LineMove { axis, first: limit - count + 1, last: limit, before, kind: EditKind::Insert })
+        Ok(LineMove {
+            axis,
+            first: limit - count + 1,
+            last: limit,
+            before,
+            kind: EditKind::Insert,
+        })
     }
 
     /// The lines from `first` go away
@@ -206,7 +234,11 @@ impl LineMove {
         };
         let (f, l) = (after_removal(first, false), after_removal(last, true));
         // …and put back
-        let at = if self.before > self.last { self.before - count } else { self.before };
+        let at = if self.before > self.last {
+            self.before - count
+        } else {
+            self.before
+        };
         let limit = self.axis.limit();
         if at <= f {
             ((f + count).min(limit), (l + count).min(limit))
@@ -219,7 +251,11 @@ impl LineMove {
 
     /// The lines `first..=last` where they end up, in order, as runs of adjacent lines
     fn pieces(&self, first: u32, last: u32) -> Vec<(u32, u32)> {
-        let mut cuts: Vec<u32> = self.boundaries().into_iter().filter(|b| first < *b && *b <= last).collect();
+        let mut cuts: Vec<u32> = self
+            .boundaries()
+            .into_iter()
+            .filter(|b| first < *b && *b <= last)
+            .collect();
         cuts.sort_unstable();
         cuts.dedup();
         let mut start = first;
@@ -244,8 +280,14 @@ impl LineMove {
 
     fn at(&self, cell: CellRef) -> CellRef {
         match self.axis {
-            Axis::Rows => CellRef { row: self.line(cell.row), col: cell.col },
-            Axis::Cols => CellRef { row: cell.row, col: self.line(cell.col) },
+            Axis::Rows => CellRef {
+                row: self.line(cell.row),
+                col: cell.col,
+            },
+            Axis::Cols => CellRef {
+                row: cell.row,
+                col: self.line(cell.col),
+            },
         }
     }
 
@@ -258,8 +300,26 @@ impl LineMove {
 
     fn with_bounds(&self, range: &CellRange, first: u32, last: u32) -> CellRange {
         match self.axis {
-            Axis::Rows => CellRange { first: CellRef { row: first, col: range.first.col }, last: CellRef { row: last, col: range.last.col } },
-            Axis::Cols => CellRange { first: CellRef { row: range.first.row, col: first }, last: CellRef { row: range.last.row, col: last } },
+            Axis::Rows => CellRange {
+                first: CellRef {
+                    row: first,
+                    col: range.first.col,
+                },
+                last: CellRef {
+                    row: last,
+                    col: range.last.col,
+                },
+            },
+            Axis::Cols => CellRange {
+                first: CellRef {
+                    row: range.first.row,
+                    col: first,
+                },
+                last: CellRef {
+                    row: range.last.row,
+                    col: last,
+                },
+            },
         }
     }
 
@@ -291,8 +351,17 @@ pub(crate) enum RefKind {
 
 impl RefKind {
     fn text(&self) -> String {
-        let pos = |p: &Pos| format!("{}{}{}{}", if p.col_abs { "$" } else { "" }, column_name(p.col), if p.row_abs { "$" } else { "" }, p.row);
-        let col = |(c, abs): &(u32, bool)| format!("{}{}", if *abs { "$" } else { "" }, column_name(*c));
+        let pos = |p: &Pos| {
+            format!(
+                "{}{}{}{}",
+                if p.col_abs { "$" } else { "" },
+                column_name(p.col),
+                if p.row_abs { "$" } else { "" },
+                p.row
+            )
+        };
+        let col =
+            |(c, abs): &(u32, bool)| format!("{}{}", if *abs { "$" } else { "" }, column_name(*c));
         let row = |(r, abs): &(u32, bool)| format!("{}{}", if *abs { "$" } else { "" }, r);
         match self {
             RefKind::Cell(p) => pos(p),
@@ -309,7 +378,11 @@ fn parse_row(word: &str) -> Option<(u32, bool)> {
         Some(rest) => (true, rest),
         None => (false, word),
     };
-    if digits.is_empty() || digits.len() > 7 || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    if digits.is_empty()
+        || digits.len() > 7
+        || digits.starts_with('0')
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
     let row: u32 = digits.parse().ok()?;
@@ -333,7 +406,10 @@ fn ref_pair(a: &str, b: &str) -> Option<RefKind> {
 /// (when any), whether that sheet is outside the plain sheets of this workbook (`[1]Hoja!`,
 /// `Hoja1:Hoja3!`) and the reference, and returns the new text of the reference or `None` to leave
 /// it as written. Texts, table references and everything else are copied as they are.
-pub(crate) fn rewrite_refs(formula: &str, rewrite: &mut impl FnMut(Option<&str>, bool, &RefKind) -> Option<String>) -> String {
+pub(crate) fn rewrite_refs(
+    formula: &str,
+    rewrite: &mut impl FnMut(Option<&str>, bool, &RefKind) -> Option<String>,
+) -> String {
     let chars: Vec<char> = formula.chars().collect();
     let mut out = String::with_capacity(formula.len());
     let mut sheet: Option<String> = None;
@@ -412,7 +488,8 @@ pub(crate) fn rewrite_refs(formula: &str, rewrite: &mut impl FnMut(Option<&str>,
                 // An error literal such as #REF! (or the # of a spilled range)
                 out.push(c);
                 i += 1;
-                while i < chars.len() && (chars[i].is_alphanumeric() || "/!?_.".contains(chars[i])) {
+                while i < chars.len() && (chars[i].is_alphanumeric() || "/!?_.".contains(chars[i]))
+                {
                     out.push(chars[i]);
                     i += 1;
                 }
@@ -491,16 +568,28 @@ pub(crate) fn shift_formula(formula: &str, rows: i64, cols: i64) -> String {
         (shifted >= 1 && shifted <= limit as i64).then_some(shifted as u32)
     };
     let pos = |p: Pos| -> Option<Pos> {
-        Some(Pos { row: line(p.row, p.row_abs, rows, MAX_ROW)?, col: line(p.col, p.col_abs, cols, MAX_COL)?, ..p })
+        Some(Pos {
+            row: line(p.row, p.row_abs, rows, MAX_ROW)?,
+            col: line(p.col, p.col_abs, cols, MAX_COL)?,
+            ..p
+        })
     };
     rewrite_refs(formula, &mut |_, _, kind| {
         let shifted = match *kind {
             RefKind::Cell(p) => pos(p).map(RefKind::Cell),
             RefKind::Range(p, q) => pos(p).zip(pos(q)).map(|(p, q)| RefKind::Range(p, q)),
-            RefKind::Cols(a, b) => line(a.0, a.1, cols, MAX_COL).zip(line(b.0, b.1, cols, MAX_COL)).map(|(x, y)| RefKind::Cols((x, a.1), (y, b.1))),
-            RefKind::Rows(a, b) => line(a.0, a.1, rows, MAX_ROW).zip(line(b.0, b.1, rows, MAX_ROW)).map(|(x, y)| RefKind::Rows((x, a.1), (y, b.1))),
+            RefKind::Cols(a, b) => line(a.0, a.1, cols, MAX_COL)
+                .zip(line(b.0, b.1, cols, MAX_COL))
+                .map(|(x, y)| RefKind::Cols((x, a.1), (y, b.1))),
+            RefKind::Rows(a, b) => line(a.0, a.1, rows, MAX_ROW)
+                .zip(line(b.0, b.1, rows, MAX_ROW))
+                .map(|(x, y)| RefKind::Rows((x, a.1), (y, b.1))),
         };
-        Some(shifted.map(|k| k.text()).unwrap_or_else(|| "#REF!".to_string()))
+        Some(
+            shifted
+                .map(|k| k.text())
+                .unwrap_or_else(|| "#REF!".to_string()),
+        )
     })
 }
 
@@ -515,8 +604,14 @@ fn moved_ref(kind: &RefKind, mv: &LineMove) -> Option<RefKind> {
         }
     };
     match (*kind, mv.axis) {
-        (RefKind::Cell(p), Axis::Rows) => Some(RefKind::Cell(Pos { row: mv.line(p.row), ..p })),
-        (RefKind::Cell(p), Axis::Cols) => Some(RefKind::Cell(Pos { col: mv.line(p.col), ..p })),
+        (RefKind::Cell(p), Axis::Rows) => Some(RefKind::Cell(Pos {
+            row: mv.line(p.row),
+            ..p
+        })),
+        (RefKind::Cell(p), Axis::Cols) => Some(RefKind::Cell(Pos {
+            col: mv.line(p.col),
+            ..p
+        })),
         (RefKind::Range(p, q), Axis::Rows) => {
             let (a, b) = ends(p.row, q.row);
             Some(RefKind::Range(Pos { row: a, ..p }, Pos { row: b, ..q }))
@@ -617,16 +712,62 @@ impl Target<'_> {
             }
             let moved = match (kind, mv.axis) {
                 // Absolute at both ends: a plain range of lines
-                (RefKind::Range(p, q), Axis::Rows) if p.row_abs && q.row_abs => return on_target.then(|| moved_ref(&kind, mv).map(|k| k.text())).flatten(),
-                (RefKind::Range(p, q), Axis::Cols) if p.col_abs && q.col_abs => return on_target.then(|| moved_ref(&kind, mv).map(|k| k.text())).flatten(),
-                (RefKind::Cols(p, q), Axis::Cols) if p.1 && q.1 => return on_target.then(|| moved_ref(&kind, mv).map(|k| k.text())).flatten(),
-                (RefKind::Rows(p, q), Axis::Rows) if p.1 && q.1 => return on_target.then(|| moved_ref(&kind, mv).map(|k| k.text())).flatten(),
-                (RefKind::Cell(p), Axis::Rows) => RefKind::Cell(Pos { row: line(p.row, p.row_abs, on_target), ..p }),
-                (RefKind::Cell(p), Axis::Cols) => RefKind::Cell(Pos { col: line(p.col, p.col_abs, on_target), ..p }),
-                (RefKind::Range(p, q), Axis::Rows) => RefKind::Range(Pos { row: line(p.row, p.row_abs, on_target), ..p }, Pos { row: line(q.row, q.row_abs, on_target), ..q }),
-                (RefKind::Range(p, q), Axis::Cols) => RefKind::Range(Pos { col: line(p.col, p.col_abs, on_target), ..p }, Pos { col: line(q.col, q.col_abs, on_target), ..q }),
-                (RefKind::Cols(p, q), Axis::Cols) => RefKind::Cols((line(p.0, p.1, on_target), p.1), (line(q.0, q.1, on_target), q.1)),
-                (RefKind::Rows(p, q), Axis::Rows) => RefKind::Rows((line(p.0, p.1, on_target), p.1), (line(q.0, q.1, on_target), q.1)),
+                (RefKind::Range(p, q), Axis::Rows) if p.row_abs && q.row_abs => {
+                    return on_target
+                        .then(|| moved_ref(&kind, mv).map(|k| k.text()))
+                        .flatten()
+                }
+                (RefKind::Range(p, q), Axis::Cols) if p.col_abs && q.col_abs => {
+                    return on_target
+                        .then(|| moved_ref(&kind, mv).map(|k| k.text()))
+                        .flatten()
+                }
+                (RefKind::Cols(p, q), Axis::Cols) if p.1 && q.1 => {
+                    return on_target
+                        .then(|| moved_ref(&kind, mv).map(|k| k.text()))
+                        .flatten()
+                }
+                (RefKind::Rows(p, q), Axis::Rows) if p.1 && q.1 => {
+                    return on_target
+                        .then(|| moved_ref(&kind, mv).map(|k| k.text()))
+                        .flatten()
+                }
+                (RefKind::Cell(p), Axis::Rows) => RefKind::Cell(Pos {
+                    row: line(p.row, p.row_abs, on_target),
+                    ..p
+                }),
+                (RefKind::Cell(p), Axis::Cols) => RefKind::Cell(Pos {
+                    col: line(p.col, p.col_abs, on_target),
+                    ..p
+                }),
+                (RefKind::Range(p, q), Axis::Rows) => RefKind::Range(
+                    Pos {
+                        row: line(p.row, p.row_abs, on_target),
+                        ..p
+                    },
+                    Pos {
+                        row: line(q.row, q.row_abs, on_target),
+                        ..q
+                    },
+                ),
+                (RefKind::Range(p, q), Axis::Cols) => RefKind::Range(
+                    Pos {
+                        col: line(p.col, p.col_abs, on_target),
+                        ..p
+                    },
+                    Pos {
+                        col: line(q.col, q.col_abs, on_target),
+                        ..q
+                    },
+                ),
+                (RefKind::Cols(p, q), Axis::Cols) => RefKind::Cols(
+                    (line(p.0, p.1, on_target), p.1),
+                    (line(q.0, q.1, on_target), q.1),
+                ),
+                (RefKind::Rows(p, q), Axis::Rows) => RefKind::Rows(
+                    (line(p.0, p.1, on_target), p.1),
+                    (line(q.0, q.1, on_target), q.1),
+                ),
                 _ => return None,
             };
             (moved != kind).then(|| moved.text())
@@ -659,7 +800,11 @@ fn moved_sqref(text: &str, mv: &LineMove) -> String {
             Ok(range) if mv.kind == EditKind::Insert => out.push(mv.moved_span(&range).to_string()),
             Ok(range) => {
                 let (first, last) = mv.bounds(&range);
-                out.extend(mv.pieces(first, last).into_iter().map(|(a, b)| mv.with_bounds(&range, a, b).to_string()));
+                out.extend(
+                    mv.pieces(first, last)
+                        .into_iter()
+                        .map(|(a, b)| mv.with_bounds(&range, a, b).to_string()),
+                );
             }
             Err(_) => out.push(token.to_string()),
         }
@@ -671,10 +816,17 @@ fn moved_sqref(text: &str, mv: &LineMove) -> String {
 fn sqref_delta(text: &str, mv: &LineMove) -> i64 {
     let mut before = u32::MAX;
     let mut after = u32::MAX;
-    for range in text.split_whitespace().filter_map(|t| CellRange::parse(t).ok()) {
+    for range in text
+        .split_whitespace()
+        .filter_map(|t| CellRange::parse(t).ok())
+    {
         let (first, last) = mv.bounds(&range);
         before = before.min(first);
-        after = mv.pieces(first, last).into_iter().map(|p| p.0).fold(after, u32::min);
+        after = mv
+            .pieces(first, last)
+            .into_iter()
+            .map(|p| p.0)
+            .fold(after, u32::min);
     }
     if before == u32::MAX || after == u32::MAX {
         0
@@ -695,7 +847,13 @@ enum ShapeMove {
 }
 
 /// A table or filter over `range`, with `header` and `totals` rows that must stay in place
-fn shape_move(what: &str, range: &CellRange, header: u32, totals: u32, mv: &LineMove) -> Result<ShapeMove, String> {
+fn shape_move(
+    what: &str,
+    range: &CellRange,
+    header: u32,
+    totals: u32,
+    mv: &LineMove,
+) -> Result<ShapeMove, String> {
     let (first, last) = mv.bounds(range);
     if !mv.crosses(first, last) {
         return Ok(ShapeMove::Rigid);
@@ -707,7 +865,12 @@ fn shape_move(what: &str, range: &CellRange, header: u32, totals: u32, mv: &Line
     if mv.inside(body_first, body_last) {
         return Ok(ShapeMove::Inner);
     }
-    Err(format!("No se puede mover: la {} rompería {} {}.", mv.axis.noun(), what, range))
+    Err(format!(
+        "No se puede mover: la {} rompería {} {}.",
+        mv.axis.noun(),
+        what,
+        range
+    ))
 }
 
 // ---------- The moved sheet ----------
@@ -721,7 +884,11 @@ struct FormulaEdit {
 
 /// The `<f>` of the cells whose formula changes. A shared formula stands for many cells: when any
 /// of them changes or moves, its cells get a formula of their own.
-fn formula_edits(parsed: &SheetXml, host_is_target: bool, target: Target) -> HashMap<CellRef, FormulaEdit> {
+fn formula_edits(
+    parsed: &SheetXml,
+    host_is_target: bool,
+    target: Target,
+) -> HashMap<CellRef, FormulaEdit> {
     let mut masters: HashMap<u32, (CellRef, &str)> = HashMap::new();
     let cells = || parsed.rows.iter().flat_map(|r| &r.cells);
     for cell in cells() {
@@ -739,25 +906,47 @@ fn formula_edits(parsed: &SheetXml, host_is_target: bool, target: Target) -> Has
     for cell in cells() {
         let Some(f) = &cell.formula else { continue };
         if f.kind.as_deref() == Some("shared") {
-            if let Some((si, (anchor, text))) = f.shared_index.and_then(|si| masters.get(&si).map(|m| (si, *m))) {
-                let own = shift_formula(text, cell.at.row as i64 - anchor.row as i64, cell.at.col as i64 - anchor.col as i64);
+            if let Some((si, (anchor, text))) = f
+                .shared_index
+                .and_then(|si| masters.get(&si).map(|m| (si, *m)))
+            {
+                let own = shift_formula(
+                    text,
+                    cell.at.row as i64 - anchor.row as i64,
+                    cell.at.col as i64 - anchor.col as i64,
+                );
                 let mapped = target.formula(&own, host_is_target);
                 let changed = mapped != own || moves(cell.at);
-                groups.entry(si).or_default().push((cell.at, mapped, changed));
+                groups
+                    .entry(si)
+                    .or_default()
+                    .push((cell.at, mapped, changed));
                 continue;
             }
         }
         if !f.text.trim().is_empty() {
             let mapped = target.formula(&f.text, host_is_target);
             if mapped != f.text {
-                edits.insert(cell.at, FormulaEdit { text: Some(mapped), unshare: false });
+                edits.insert(
+                    cell.at,
+                    FormulaEdit {
+                        text: Some(mapped),
+                        unshare: false,
+                    },
+                );
             }
         }
     }
     for members in groups.into_values() {
         if members.iter().any(|m| m.2) {
             for (at, text, _) in members {
-                edits.insert(at, FormulaEdit { text: Some(text), unshare: true });
+                edits.insert(
+                    at,
+                    FormulaEdit {
+                        text: Some(text),
+                        unshare: true,
+                    },
+                );
             }
         }
     }
@@ -766,12 +955,19 @@ fn formula_edits(parsed: &SheetXml, host_is_target: bool, target: Target) -> Has
 
 /// `xml` with the shared formulas whose first cell will be overwritten written out in each of
 /// their cells, since the others read it from there. The rest of the sheet stays as it is.
-pub(crate) fn without_shared_sources(xml: String, overwritten: impl Fn(CellRef) -> bool) -> Result<String, String> {
+pub(crate) fn without_shared_sources(
+    xml: String,
+    overwritten: impl Fn(CellRef) -> bool,
+) -> Result<String, String> {
     let parsed = SheetXml::parse(&xml)?;
     let cells = || parsed.rows.iter().flat_map(|r| &r.cells);
     let mut masters: HashMap<u32, (CellRef, &str)> = HashMap::new();
     for cell in cells() {
-        if let Some(f) = cell.formula.as_ref().filter(|f| f.shared_master && overwritten(cell.at)) {
+        if let Some(f) = cell
+            .formula
+            .as_ref()
+            .filter(|f| f.shared_master && overwritten(cell.at))
+        {
             if let Some(si) = f.shared_index {
                 masters.insert(si, (cell.at, &f.text));
             }
@@ -783,18 +979,38 @@ pub(crate) fn without_shared_sources(xml: String, overwritten: impl Fn(CellRef) 
     }
     let mut edits = std::collections::BTreeMap::new();
     for cell in cells() {
-        let Some(f) = cell.formula.as_ref().filter(|f| f.kind.as_deref() == Some("shared")) else { continue };
-        let Some((anchor, text)) = f.shared_index.and_then(|si| masters.get(&si)) else { continue };
-        let own = shift_formula(text, cell.at.row as i64 - anchor.row as i64, cell.at.col as i64 - anchor.col as i64);
-        let edit = FormulaEdit { text: Some(own), unshare: true };
-        edits.insert(cell.at, Some(with_formula(&xml[cell.range.clone()], &edit)?));
+        let Some(f) = cell
+            .formula
+            .as_ref()
+            .filter(|f| f.kind.as_deref() == Some("shared"))
+        else {
+            continue;
+        };
+        let Some((anchor, text)) = f.shared_index.and_then(|si| masters.get(&si)) else {
+            continue;
+        };
+        let own = shift_formula(
+            text,
+            cell.at.row as i64 - anchor.row as i64,
+            cell.at.col as i64 - anchor.col as i64,
+        );
+        let edit = FormulaEdit {
+            text: Some(own),
+            unshare: true,
+        };
+        edits.insert(
+            cell.at,
+            Some(with_formula(&xml[cell.range.clone()], &edit)?),
+        );
     }
     Ok(parsed.splice(&edits))
 }
 
 /// A `<c>` element with its `<f>` changed
 fn with_formula(cell: &str, edit: &FormulaEdit) -> Result<String, String> {
-    let Some(range) = element_ranges(cell, "f", |_| true)?.into_iter().next() else { return Ok(cell.to_string()) };
+    let Some(range) = element_ranges(cell, "f", |_| true)?.into_iter().next() else {
+        return Ok(cell.to_string());
+    };
     let mut f = cell[range.clone()].to_string();
     if edit.unshare {
         for attr in ["t", "ref", "si"] {
@@ -804,37 +1020,66 @@ fn with_formula(cell: &str, edit: &FormulaEdit) -> Result<String, String> {
     if let Some(text) = &edit.text {
         let tag_end = f.find('>').map(|i| i + 1).unwrap_or(f.len());
         let self_closing = f[..tag_end].ends_with("/>");
-        let open = if self_closing { format!("{}>", f[..tag_end - 2].trim_end()) } else { f[..tag_end].to_string() };
-        let name_end = open.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(open.len());
+        let open = if self_closing {
+            format!("{}>", f[..tag_end - 2].trim_end())
+        } else {
+            f[..tag_end].to_string()
+        };
+        let name_end = open
+            .find(|c: char| c.is_whitespace() || c == '>')
+            .unwrap_or(open.len());
         f = format!("{}{}</{}>", open, escape_xml(text), &open[1..name_end]);
     }
-    Ok(format!("{}{}{}", &cell[..range.start], f, &cell[range.end..]))
+    Ok(format!(
+        "{}{}{}",
+        &cell[..range.start],
+        f,
+        &cell[range.end..]
+    ))
 }
 
 /// The attributes of an `<f>` that hold ranges of the sheet: an array or data table cannot be torn
 fn moved_formula_attrs(cell: &str, node: &CellNode, mv: &LineMove) -> Result<String, String> {
-    let Some(f) = &node.formula else { return Ok(cell.to_string()) };
+    let Some(f) = &node.formula else {
+        return Ok(cell.to_string());
+    };
     if !matches!(f.kind.as_deref(), Some("array") | Some("dataTable")) {
         return Ok(cell.to_string());
     }
-    let Some(range) = element_ranges(cell, "f", |_| true)?.into_iter().next() else { return Ok(cell.to_string()) };
+    let Some(range) = element_ranges(cell, "f", |_| true)?.into_iter().next() else {
+        return Ok(cell.to_string());
+    };
     let mut element = cell[range.clone()].to_string();
     let attrs: Vec<(&str, String)> = {
         let mut reader = Reader::from_str(&element);
         match reader.read_event() {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => ["ref", "r1", "r2"].iter().filter_map(|a| get_attr_value(&e, a).map(|v| (*a, v))).collect(),
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => ["ref", "r1", "r2"]
+                .iter()
+                .filter_map(|a| get_attr_value(&e, a).map(|v| (*a, v)))
+                .collect(),
             _ => Vec::new(),
         }
     };
     for (name, value) in attrs {
-        let Ok(area) = CellRange::parse(&value) else { continue };
+        let Ok(area) = CellRange::parse(&value) else {
+            continue;
+        };
         let (first, last) = mv.bounds(&area);
         if mv.crosses(first, last) {
-            return Err(format!("No se puede mover: la {} rompería la fórmula matricial de {}.", mv.axis.noun(), area));
+            return Err(format!(
+                "No se puede mover: la {} rompería la fórmula matricial de {}.",
+                mv.axis.noun(),
+                area
+            ));
         }
         element = set_attr(&element, name, &mv.rigid(&area).to_string());
     }
-    Ok(format!("{}{}{}", &cell[..range.start], element, &cell[range.end..]))
+    Ok(format!(
+        "{}{}{}",
+        &cell[..range.start],
+        element,
+        &cell[range.end..]
+    ))
 }
 
 /// The `<sheetData>` content of the moved sheet
@@ -870,15 +1115,27 @@ fn moved_rows(parsed: &SheetXml, target: Target) -> Result<(String, Option<CellR
                 let mut cells = String::new();
                 for cell in &row.cells {
                     if let Some(style) = &cell.style_attr {
-                        let at = CellRef { row: number, col: cell.at.col };
+                        let at = CellRef {
+                            row: number,
+                            col: cell.at.col,
+                        };
                         used = grow(used, at);
-                        cells.push_str(&format!(r#"<{}c r="{}" s="{}"/>"#, prefix, at, escape_xml(style)));
+                        cells.push_str(&format!(
+                            r#"<{}c r="{}" s="{}"/>"#,
+                            prefix,
+                            at,
+                            escape_xml(style)
+                        ));
                     }
                 }
                 rows.push((number, format!("{}{}</{}row>", tag, cells, prefix)));
             }
         }
-        let number = if mv.axis == Axis::Rows { mv.line(row.number) } else { row.number };
+        let number = if mv.axis == Axis::Rows {
+            mv.line(row.number)
+        } else {
+            row.number
+        };
         let mut tag = xml[row.start_tag.clone()].to_string();
         if number != row.number || !row.has_ref {
             tag = set_attr(&tag, "r", &number.to_string());
@@ -896,11 +1153,19 @@ fn moved_rows(parsed: &SheetXml, target: Target) -> Result<(String, Option<CellR
                 continue;
             }
             // New columns take the format of the cell to their left
-            if let (Axis::Cols, true, Some(style)) = (mv.axis, source == Some(cell.at.col), &cell.style_attr) {
+            if let (Axis::Cols, true, Some(style)) =
+                (mv.axis, source == Some(cell.at.col), &cell.style_attr)
+            {
                 for col in mv.before..mv.before + mv.count() {
-                    let at = CellRef { row: row.number, col };
+                    let at = CellRef {
+                        row: row.number,
+                        col,
+                    };
                     used = grow(used, at);
-                    cells.push((col, format!(r#"<{}c r="{}" s="{}"/>"#, prefix, at, escape_xml(style))));
+                    cells.push((
+                        col,
+                        format!(r#"<{}c r="{}" s="{}"/>"#, prefix, at, escape_xml(style)),
+                    ));
                 }
             }
             let at = mv.at(cell.at);
@@ -915,26 +1180,44 @@ fn moved_rows(parsed: &SheetXml, target: Target) -> Result<(String, Option<CellR
             used = grow(used, at);
             cells.push((at.col, text));
         }
-        if mv.axis == Axis::Cols && (cells.len() != row.cells.len() || row.cells.iter().any(|c| mv.at(c.at) != c.at)) {
+        if mv.axis == Axis::Cols
+            && (cells.len() != row.cells.len() || row.cells.iter().any(|c| mv.at(c.at) != c.at))
+        {
             tag = remove_attr(&tag, "spans");
             cells.sort_by_key(|(col, _)| *col);
         }
-        let tail = row.cells.last().map(|c| c.range.end).unwrap_or(row.start_tag.end);
+        let tail = row
+            .cells
+            .last()
+            .map(|c| c.range.end)
+            .unwrap_or(row.start_tag.end);
         let body: String = cells.into_iter().map(|(_, text)| text).collect();
-        rows.push((number, format!("{}{}{}", tag, body, &xml[tail..row.range.end])));
+        rows.push((
+            number,
+            format!("{}{}{}", tag, body, &xml[tail..row.range.end]),
+        ));
     }
     rows.sort_by_key(|(number, _)| *number);
     Ok((rows.into_iter().map(|(_, text)| text).collect(), used))
 }
 
 /// Inserting pushes the last lines off the sheet: only if they hold no values
-fn refuse_pushing_off<'c>(cells: impl Iterator<Item = &'c CellNode>, mv: &LineMove) -> Result<(), String> {
+fn refuse_pushing_off<'c>(
+    cells: impl Iterator<Item = &'c CellNode>,
+    mv: &LineMove,
+) -> Result<(), String> {
     if mv.kind != EditKind::Insert {
         return Ok(());
     }
     for cell in cells {
-        if cell.formula.is_some() || cell.inline.is_some() || cell.value.as_deref().is_some_and(|v| !v.is_empty()) {
-            return Err(format!("No se puede insertar: la celda {} tiene datos y se saldría de la hoja.", cell.at));
+        if cell.formula.is_some()
+            || cell.inline.is_some()
+            || cell.value.as_deref().is_some_and(|v| !v.is_empty())
+        {
+            return Err(format!(
+                "No se puede insertar: la celda {} tiene datos y se saldría de la hoja.",
+                cell.at
+            ));
         }
     }
     Ok(())
@@ -943,7 +1226,10 @@ fn refuse_pushing_off<'c>(cells: impl Iterator<Item = &'c CellNode>, mv: &LineMo
 /// The frozen lines of a sheet in `head` grow or shrink when lines are inserted or deleted in them
 fn moved_pane(head: &str, mv: &LineMove) -> Result<String, String> {
     let Some(range) = element_ranges(head, "pane", |e| {
-        matches!(get_attr_value(e, "state").as_deref(), Some("frozen") | Some("frozenSplit"))
+        matches!(
+            get_attr_value(e, "state").as_deref(),
+            Some("frozen") | Some("frozenSplit")
+        )
     })?
     .into_iter()
     .next() else {
@@ -961,7 +1247,11 @@ fn moved_pane(head: &str, mv: &LineMove) -> Result<String, String> {
             _ => None,
         }
     };
-    let Some(split) = read(attr).and_then(|v| v.parse::<f64>().ok()).map(|v| v as u32).filter(|v| *v > 0) else {
+    let Some(split) = read(attr)
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v as u32)
+        .filter(|v| *v > 0)
+    else {
         return Ok(head.to_string());
     };
     let new_split = match mv.kind {
@@ -973,19 +1263,40 @@ fn moved_pane(head: &str, mv: &LineMove) -> Result<String, String> {
     if new_split == split {
         return Ok(head.to_string());
     }
-    let other = read(if mv.axis == Axis::Rows { "xSplit" } else { "ySplit" }).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+    let other = read(if mv.axis == Axis::Rows {
+        "xSplit"
+    } else {
+        "ySplit"
+    })
+    .and_then(|v| v.parse::<f64>().ok())
+    .unwrap_or(0.0);
     if new_split == 0 && other == 0.0 {
         return Ok(format!("{}{}", &head[..range.start], &head[range.end..]));
     }
-    let mut written = if new_split == 0 { remove_attr(element, attr) } else { set_attr(element, attr, &new_split.to_string()) };
+    let mut written = if new_split == 0 {
+        remove_attr(element, attr)
+    } else {
+        set_attr(element, attr, &new_split.to_string())
+    };
     if let Some(corner) = read("topLeftCell").and_then(|r| CellRef::parse(&r).ok()) {
         let corner = match mv.axis {
-            Axis::Rows => CellRef { row: new_split + 1, col: corner.col },
-            Axis::Cols => CellRef { row: corner.row, col: new_split + 1 },
+            Axis::Rows => CellRef {
+                row: new_split + 1,
+                col: corner.col,
+            },
+            Axis::Cols => CellRef {
+                row: corner.row,
+                col: new_split + 1,
+            },
         };
         written = set_attr(&written, "topLeftCell", &corner.to_string());
     }
-    Ok(format!("{}{}{}", &head[..range.start], written, &head[range.end..]))
+    Ok(format!(
+        "{}{}{}",
+        &head[..range.start],
+        written,
+        &head[range.end..]
+    ))
 }
 
 /// Takes out of a worksheet what a deletion left without cells (marked with an empty range), and
@@ -1001,17 +1312,25 @@ fn without_removed(xml: String) -> Result<String, String> {
         ("ignoredError", "sqref", Some("ignoredErrors")),
         ("autoFilter", "ref", None),
     ] {
-        let written = remove_elements(&xml, item, |e| get_attr_value(e, attr).as_deref() == Some(""))?;
+        let written = remove_elements(&xml, item, |e| {
+            get_attr_value(e, attr).as_deref() == Some("")
+        })?;
         if written == xml {
             continue;
         }
         xml = written;
         if let Some(list) = list {
-            let Some(range) = element_ranges(&xml, list, |_| true)?.into_iter().next() else { continue };
+            let Some(range) = element_ranges(&xml, list, |_| true)?.into_iter().next() else {
+                continue;
+            };
             let left = element_ranges(&xml[range.clone()], item, |_| true)?.len();
             let element = if left == 0 {
                 String::new()
-            } else if xml[range.clone()].split('>').next().is_some_and(|tag| tag.contains("count=")) {
+            } else if xml[range.clone()]
+                .split('>')
+                .next()
+                .is_some_and(|tag| tag.contains("count="))
+            {
                 set_attr(&xml[range.clone()], "count", &left.to_string())
             } else {
                 xml[range.clone()].to_string()
@@ -1024,7 +1343,9 @@ fn without_removed(xml: String) -> Result<String, String> {
 
 /// The `<cols>` of a sheet whose columns move, in `head` (the sheet up to its data)
 fn moved_cols(head: &str, mv: &LineMove) -> Result<String, String> {
-    let Some(range) = element_ranges(head, "cols", |_| true)?.into_iter().next() else { return Ok(head.to_string()) };
+    let Some(range) = element_ranges(head, "cols", |_| true)?.into_iter().next() else {
+        return Ok(head.to_string());
+    };
     let text = &head[range.clone()];
     let tag_end = text.find('>').map(|i| i + 1).unwrap_or(text.len());
     if text[..tag_end].ends_with("/>") {
@@ -1037,7 +1358,8 @@ fn moved_cols(head: &str, mv: &LineMove) -> Result<String, String> {
             let mut reader = Reader::from_str(element);
             match reader.read_event() {
                 Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                    let n = |a: &str| get_attr_value(&e, a).and_then(|v| v.trim().parse::<u32>().ok());
+                    let n =
+                        |a: &str| get_attr_value(&e, a).and_then(|v| v.trim().parse::<u32>().ok());
                     (n("min").unwrap_or(0), n("max").unwrap_or(0))
                 }
                 _ => (0, 0),
@@ -1047,19 +1369,40 @@ fn moved_cols(head: &str, mv: &LineMove) -> Result<String, String> {
             continue;
         }
         for (a, b) in mv.pieces(min, max.min(MAX_COL)) {
-            cols.push((a, set_attr(&set_attr(element, "min", &a.to_string()), "max", &b.to_string())));
+            cols.push((
+                a,
+                set_attr(
+                    &set_attr(element, "min", &a.to_string()),
+                    "max",
+                    &b.to_string(),
+                ),
+            ));
         }
         // New columns are as wide as the one to their left
         if mv.format_source().is_some_and(|c| (min..=max).contains(&c)) {
             let (a, b) = (mv.before, mv.before + mv.count() - 1);
             let copy = remove_attr(element, "hidden");
-            cols.push((a, set_attr(&set_attr(&copy, "min", &a.to_string()), "max", &b.to_string())));
+            cols.push((
+                a,
+                set_attr(
+                    &set_attr(&copy, "min", &a.to_string()),
+                    "max",
+                    &b.to_string(),
+                ),
+            ));
         }
     }
     cols.sort_by_key(|(min, _)| *min);
     let close = text.rfind("</").unwrap_or(text.len());
     let body: String = cols.into_iter().map(|(_, element)| element).collect();
-    Ok(format!("{}{}{}{}{}", &head[..range.start], &text[..tag_end], body, &text[close..], &head[range.end..]))
+    Ok(format!(
+        "{}{}{}{}{}",
+        &head[..range.start],
+        &text[..tag_end],
+        body,
+        &text[close..],
+        &head[range.end..]
+    ))
 }
 
 /// A merged range after a move, or the refusal: it may only keep its shape. Lines inserted or
@@ -1080,7 +1423,11 @@ fn moved_merge(merge: &CellRange, mv: &LineMove) -> Result<Option<CellRange>, St
     if mv.first > first && mv.last <= last && mv.before > first && mv.before <= last + 1 {
         return Ok(Some(*merge));
     }
-    Err(format!("No se puede mover: la {} rompería las celdas combinadas {}.", mv.axis.noun(), merge))
+    Err(format!(
+        "No se puede mover: la {} rompería las celdas combinadas {}.",
+        mv.axis.noun(),
+        merge
+    ))
 }
 
 fn attr_of(e: &BytesStart, name: &str) -> Option<String> {
@@ -1104,7 +1451,9 @@ fn moved_tail(tail: &str, host_is_target: bool, target: Target) -> Result<String
     let mut open: Option<(&'static str, usize)> = None;
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("La hoja no es XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("La hoja no es XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
@@ -1112,12 +1461,25 @@ fn moved_tail(tail: &str, host_is_target: bool, target: Target) -> Result<String
                 let name = e.name();
                 let name = name.as_ref();
                 if host_is_target {
-                    let mut set = |attr: &str, value: String| edits.push((before..after, set_attr(&tail[before..after], attr, &value)));
+                    let mut set = |attr: &str, value: String| {
+                        edits.push((before..after, set_attr(&tail[before..after], attr, &value)))
+                    };
                     if tag_is(name, "mergeCell") {
-                        if let Some(merge) = attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()) {
-                            set("ref", moved_merge(&merge, mv)?.map(|m| m.to_string()).unwrap_or_default());
+                        if let Some(merge) =
+                            attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok())
+                        {
+                            set(
+                                "ref",
+                                moved_merge(&merge, mv)?
+                                    .map(|m| m.to_string())
+                                    .unwrap_or_default(),
+                            );
                         }
-                    } else if tag_is(name, "conditionalFormatting") || tag_is(name, "dataValidation") || tag_is(name, "protectedRange") || tag_is(name, "ignoredError") {
+                    } else if tag_is(name, "conditionalFormatting")
+                        || tag_is(name, "dataValidation")
+                        || tag_is(name, "protectedRange")
+                        || tag_is(name, "ignoredError")
+                    {
                         if let Some(sqref) = attr_of(e, "sqref") {
                             delta = sqref_delta(&sqref, mv);
                             set("sqref", moved_sqref(&sqref, mv));
@@ -1128,32 +1490,51 @@ fn moved_tail(tail: &str, host_is_target: bool, target: Target) -> Result<String
                             element = set_attr(&element, "ref", &moved_sqref(&reference, mv));
                         }
                         if let Some(location) = attr_of(e, "location") {
-                            element = set_attr(&element, "location", &target.formula(&location, true));
+                            element =
+                                set_attr(&element, "location", &target.formula(&location, true));
                         }
                         edits.push((before..after, element));
                     } else if tag_is(name, "autoFilter") {
-                        if let Some(range) = attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()) {
+                        if let Some(range) =
+                            attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok())
+                        {
                             if mv.kind != EditKind::Move {
                                 let (first, last) = mv.bounds(&range);
                                 if mv.axis == Axis::Cols && mv.crosses(first, last) {
                                     filter_first = Some((first, mv.span(first, last).0));
                                 }
-                                set("ref", if mv.removes_all(first, last) { String::new() } else { mv.moved_span(&range).to_string() });
-                            } else if shape_move("el filtro", &range, 1, 0, mv)? == ShapeMove::Rigid {
+                                set(
+                                    "ref",
+                                    if mv.removes_all(first, last) {
+                                        String::new()
+                                    } else {
+                                        mv.moved_span(&range).to_string()
+                                    },
+                                );
+                            } else if shape_move("el filtro", &range, 1, 0, mv)? == ShapeMove::Rigid
+                            {
                                 set("ref", mv.rigid(&range).to_string());
                             } else if mv.axis == Axis::Cols {
                                 filter_first = Some((range.first.col, range.first.col));
                             }
                         }
                     } else if tag_is(name, "filterColumn") {
-                        if let (Some((first, new_first)), Some(id)) = (filter_first, attr_of(e, "colId").and_then(|v| v.parse::<u32>().ok())) {
+                        if let (Some((first, new_first)), Some(id)) = (
+                            filter_first,
+                            attr_of(e, "colId").and_then(|v| v.parse::<u32>().ok()),
+                        ) {
                             if mv.removes(first + id) {
-                                return Err("No se puede eliminar: la columna tiene un filtro aplicado.".to_string());
+                                return Err(
+                                    "No se puede eliminar: la columna tiene un filtro aplicado."
+                                        .to_string(),
+                                );
                             }
                             set("colId", (mv.line(first + id) - new_first).to_string());
                         }
                     } else if tag_is(name, "sortState") || tag_is(name, "sortCondition") {
-                        if let Some(range) = attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()) {
+                        if let Some(range) =
+                            attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok())
+                        {
                             set("ref", mv.moved_span(&range).to_string());
                         }
                     } else if tag_is(name, "cellWatch") || tag_is(name, "inputCells") {
@@ -1163,7 +1544,13 @@ fn moved_tail(tail: &str, host_is_target: bool, target: Target) -> Result<String
                     }
                 }
                 if matches!(event, Event::Start(_)) {
-                    for (element, kind) in [("formula", "formula"), ("formula1", "formula"), ("formula2", "formula"), ("f", "f"), ("sqref", "sqref")] {
+                    for (element, kind) in [
+                        ("formula", "formula"),
+                        ("formula1", "formula"),
+                        ("formula2", "formula"),
+                        ("f", "f"),
+                        ("sqref", "sqref"),
+                    ] {
                         if tag_is(name, element) {
                             open = Some((kind, after));
                         }
@@ -1184,7 +1571,9 @@ fn moved_tail(tail: &str, host_is_target: bool, target: Target) -> Result<String
                     let written = match kind {
                         "formula" if host_is_target => target.anchored_formula(&text, delta),
                         // Nothing marks these for removal: without cells they keep their text
-                        "sqref" if host_is_target => Some(moved_sqref(&text, mv)).filter(|t| !t.is_empty()).unwrap_or_else(|| text.to_string()),
+                        "sqref" if host_is_target => Some(moved_sqref(&text, mv))
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or_else(|| text.to_string()),
                         "sqref" => text.to_string(),
                         _ => target.formula(&text, host_is_target),
                     };
@@ -1205,21 +1594,39 @@ fn moved_sheet(xml: &str, target: Target) -> Result<String, String> {
     let Some(inner) = parsed.data_inner() else {
         // No cells at all: only what is around them
         let end = parsed.data_end();
-        let mut head = if target.mv.axis == Axis::Cols { moved_cols(&xml[..end], target.mv)? } else { xml[..end].to_string() };
+        let mut head = if target.mv.axis == Axis::Cols {
+            moved_cols(&xml[..end], target.mv)?
+        } else {
+            xml[..end].to_string()
+        };
         head = moved_pane(&head, target.mv)?;
-        return without_removed(format!("{}{}", head, moved_tail(&xml[end..], true, target)?));
+        return without_removed(format!(
+            "{}{}",
+            head,
+            moved_tail(&xml[end..], true, target)?
+        ));
     };
     let (rows, used) = moved_rows(&parsed, target)?;
     let mut head = xml[..inner.start].to_string();
     if target.mv.axis == Axis::Cols {
         head = moved_cols(&head, target.mv)?;
     }
-    if let (Some(range), Some(used)) = (element_ranges(&head, "dimension", |_| true)?.into_iter().next(), used) {
+    if let (Some(range), Some(used)) = (
+        element_ranges(&head, "dimension", |_| true)?
+            .into_iter()
+            .next(),
+        used,
+    ) {
         let element = set_attr(&head[range.clone()], "ref", &used.to_string());
         head.replace_range(range, &element);
     }
     head = moved_pane(&head, target.mv)?;
-    without_removed(format!("{}{}{}", head, rows, moved_tail(&xml[inner.end..], true, target)?))
+    without_removed(format!(
+        "{}{}{}",
+        head,
+        rows,
+        moved_tail(&xml[inner.end..], true, target)?
+    ))
 }
 
 /// A worksheet that does not move but may refer to the one that does
@@ -1253,7 +1660,9 @@ fn moved_table(xml: &str, host_is_target: bool, target: Target) -> Result<Option
     let mv = target.mv;
     let mut written = xml.to_string();
     if host_is_target {
-        let Some((name, range, header, totals, _)) = parse_table(xml) else { return Ok(None) };
+        let Some((name, range, header, totals, _)) = parse_table(xml) else {
+            return Ok(None);
+        };
         let shape = if mv.kind == EditKind::Move {
             shape_move(&format!("la tabla {},", name), &range, header, totals, mv)?
         } else {
@@ -1266,15 +1675,25 @@ fn moved_table(xml: &str, host_is_target: bool, target: Target) -> Result<Option
             let mut reader = Reader::from_str(xml);
             loop {
                 let before = reader.buffer_position() as usize;
-                let event = reader.read_event().map_err(|e| format!("La tabla no es XML válido: {}", e))?;
+                let event = reader
+                    .read_event()
+                    .map_err(|e| format!("La tabla no es XML válido: {}", e))?;
                 let after = reader.buffer_position() as usize;
                 match &event {
                     Event::Eof => break,
                     Event::Start(e) | Event::Empty(e) => {
                         let tag = e.name();
-                        let is_area = ["table", "autoFilter", "sortState", "sortCondition"].iter().any(|n| tag_is(tag.as_ref(), n));
-                        if let Some(area) = is_area.then(|| attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok())).flatten() {
-                            edits.push((before..after, set_attr(&xml[before..after], "ref", &mv.rigid(&area).to_string())));
+                        let is_area = ["table", "autoFilter", "sortState", "sortCondition"]
+                            .iter()
+                            .any(|n| tag_is(tag.as_ref(), n));
+                        if let Some(area) = is_area
+                            .then(|| attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()))
+                            .flatten()
+                        {
+                            edits.push((
+                                before..after,
+                                set_attr(&xml[before..after], "ref", &mv.rigid(&area).to_string()),
+                            ));
                         }
                     }
                     _ => {}
@@ -1285,45 +1704,84 @@ fn moved_table(xml: &str, host_is_target: bool, target: Target) -> Result<Option
             written = table_columns_reordered(xml, &range, mv)?;
         }
     }
-    let (written, _) = rewrite_texts(&written, &["calculatedColumnFormula", "totalsRowFormula"], &|f| target.formula(f, host_is_target))?;
+    let (written, _) = rewrite_texts(
+        &written,
+        &["calculatedColumnFormula", "totalsRowFormula"],
+        &|f| target.formula(f, host_is_target),
+    )?;
     Ok((written != xml).then_some(written))
 }
 
 /// How a table takes lines inserted or deleted, or the refusal
-fn resized_table(name: &str, range: &CellRange, header: u32, totals: u32, mv: &LineMove) -> Result<ShapeMove, String> {
+fn resized_table(
+    name: &str,
+    range: &CellRange,
+    header: u32,
+    totals: u32,
+    mv: &LineMove,
+) -> Result<ShapeMove, String> {
     let (first, last) = mv.bounds(range);
     if mv.removes_all(first, last) {
-        return Err(format!("No se puede eliminar: la {} contiene toda la tabla {}.", mv.axis.noun(), name));
+        return Err(format!(
+            "No se puede eliminar: la {} contiene toda la tabla {}.",
+            mv.axis.noun(),
+            name
+        ));
     }
     if !mv.crosses(first, last) {
         return Ok(ShapeMove::Rigid);
     }
     if mv.axis == Axis::Cols {
-        return Err(format!("No se pueden insertar ni eliminar columnas dentro de la tabla {}.", name));
+        return Err(format!(
+            "No se pueden insertar ni eliminar columnas dentro de la tabla {}.",
+            name
+        ));
     }
     if mv.kind == EditKind::Delete {
         let (body_first, body_last) = (first + header, last.saturating_sub(totals));
         if mv.first < body_first || mv.last > body_last {
-            return Err(format!("No se puede eliminar el encabezado ni los totales de la tabla {}.", name));
+            return Err(format!(
+                "No se puede eliminar el encabezado ni los totales de la tabla {}.",
+                name
+            ));
         }
         if mv.first == body_first && mv.last == body_last {
-            return Err(format!("No se pueden eliminar todas las filas de datos de la tabla {}.", name));
+            return Err(format!(
+                "No se pueden eliminar todas las filas de datos de la tabla {}.",
+                name
+            ));
         }
     } else if mv.before < first + header {
-        return Err(format!("No se puede insertar dentro del encabezado de la tabla {}.", name));
+        return Err(format!(
+            "No se puede insertar dentro del encabezado de la tabla {}.",
+            name
+        ));
     }
     Ok(ShapeMove::Resized)
 }
 
 /// The table with its rows counted again: the filter reaches the last row of data
-fn table_resized(xml: &str, range: &CellRange, totals: u32, mv: &LineMove) -> Result<String, String> {
+fn table_resized(
+    xml: &str,
+    range: &CellRange,
+    totals: u32,
+    mv: &LineMove,
+) -> Result<String, String> {
     let resized = mv.moved_span(range);
-    let filter = CellRange { first: resized.first, last: CellRef { row: resized.last.row - totals, col: resized.last.col } };
+    let filter = CellRange {
+        first: resized.first,
+        last: CellRef {
+            row: resized.last.row - totals,
+            col: resized.last.col,
+        },
+    };
     let mut edits = Vec::new();
     let mut reader = Reader::from_str(xml);
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("La tabla no es XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("La tabla no es XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
@@ -1335,12 +1793,17 @@ fn table_resized(xml: &str, range: &CellRange, totals: u32, mv: &LineMove) -> Re
                 } else if tag_is(tag, "autoFilter") {
                     Some(filter.to_string())
                 } else if tag_is(tag, "sortState") || tag_is(tag, "sortCondition") {
-                    attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()).map(|r| mv.moved_span(&r).to_string())
+                    attr_of(e, "ref")
+                        .and_then(|r| CellRange::parse(&r).ok())
+                        .map(|r| mv.moved_span(&r).to_string())
                 } else {
                     None
                 };
                 if let Some(written) = written {
-                    edits.push((before..after, set_attr(&xml[before..after], "ref", &written)));
+                    edits.push((
+                        before..after,
+                        set_attr(&xml[before..after], "ref", &written),
+                    ));
                 }
             }
             _ => {}
@@ -1356,19 +1819,30 @@ fn table_columns_reordered(xml: &str, range: &CellRange, mv: &LineMove) -> Resul
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     for (index, slot) in slots.iter().enumerate() {
         let new_index = (mv.line(first + index as u32) - first) as usize;
-        let destination = slots.get(new_index).ok_or("Las columnas de la tabla no coinciden con su rango.")?;
+        let destination = slots
+            .get(new_index)
+            .ok_or("Las columnas de la tabla no coinciden con su rango.")?;
         edits.push((destination.clone(), xml[slot.clone()].to_string()));
     }
     let mut reader = Reader::from_str(xml);
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("La tabla no es XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("La tabla no es XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) if tag_is(e.name().as_ref(), "filterColumn") => {
                 if let Some(id) = attr_of(e, "colId").and_then(|v| v.parse::<u32>().ok()) {
-                    edits.push((before..after, set_attr(&xml[before..after], "colId", &(mv.line(first + id) - first).to_string())));
+                    edits.push((
+                        before..after,
+                        set_attr(
+                            &xml[before..after],
+                            "colId",
+                            &(mv.line(first + id) - first).to_string(),
+                        ),
+                    ));
                 }
             }
             _ => {}
@@ -1393,7 +1867,9 @@ fn moved_drawing(xml: &str, mv: &LineMove) -> Result<Option<String>, String> {
     let mut open: Option<usize> = None;
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("El dibujo no es XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("El dibujo no es XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
@@ -1417,13 +1893,19 @@ fn moved_drawing(xml: &str, mv: &LineMove) -> Result<Option<String>, String> {
                 if tag_is(name, "from") || tag_is(name, "to") {
                     corner = None;
                 } else if let Some(start) = open.take() {
-                    let Ok(value) = xml[start..before].trim().parse::<u32>() else { continue };
+                    let Ok(value) = xml[start..before].trim().parse::<u32>() else {
+                        continue;
+                    };
                     if absolute {
                         continue;
                     }
                     if corner == Some(true) {
                         // What was anchored in deleted lines stays, in the line that takes their place
-                        let line = if mv.removes(value + 1) { mv.first } else { mv.line(value + 1) };
+                        let line = if mv.removes(value + 1) {
+                            mv.first
+                        } else {
+                            mv.line(value + 1)
+                        };
                         shift = line as i64 - (value as i64 + 1);
                     }
                     if shift != 0 {
@@ -1443,7 +1925,11 @@ fn moved_cell_refs(xml: &str, name: &str, mv: &LineMove) -> Result<Option<String
         Axis::Rows => mv.removes(at.row),
         Axis::Cols => mv.removes(at.col),
     };
-    let kept = remove_elements(xml, name, |e| attr_of(e, "ref").and_then(|r| CellRef::parse(&r).ok()).is_some_and(removed))?;
+    let kept = remove_elements(xml, name, |e| {
+        attr_of(e, "ref")
+            .and_then(|r| CellRef::parse(&r).ok())
+            .is_some_and(removed)
+    })?;
     let changed = kept != xml;
     let xml = kept.as_str();
     let mut reader = Reader::from_str(xml);
@@ -1451,15 +1937,22 @@ fn moved_cell_refs(xml: &str, name: &str, mv: &LineMove) -> Result<Option<String
     let mut edits = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("Los comentarios no son XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("Los comentarios no son XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) if tag_is(e.name().as_ref(), name) => {
-                let Some(at) = attr_of(e, "ref").and_then(|r| CellRef::parse(&r).ok()) else { continue };
+                let Some(at) = attr_of(e, "ref").and_then(|r| CellRef::parse(&r).ok()) else {
+                    continue;
+                };
                 let moved = mv.at(at);
                 if moved != at {
-                    edits.push((before..after, set_attr(&xml[before..after], "ref", &moved.to_string())));
+                    edits.push((
+                        before..after,
+                        set_attr(&xml[before..after], "ref", &moved.to_string()),
+                    ));
                 }
             }
             _ => {}
@@ -1479,13 +1972,17 @@ fn moved_vml(xml: &str, mv: &LineMove) -> Option<String> {
     let mut from = 0;
     while let Some(at) = xml[from..].find(open) {
         let start = from + at + open.len();
-        let Some(length) = xml[start..].find(close) else { break };
+        let Some(length) = xml[start..].find(close) else {
+            break;
+        };
         let end = start + length;
         if let Ok(value) = xml[start..end].trim().parse::<u32>() {
             if mv.removes(value + 1) {
                 // The note goes with its cell: the whole shape around these elements
                 const CLOSE: &str = "</v:shape>";
-                if let (Some(shape), Some(length)) = (xml[..start].rfind("<v:shape"), xml[end..].find(CLOSE)) {
+                if let (Some(shape), Some(length)) =
+                    (xml[..start].rfind("<v:shape"), xml[end..].find(CLOSE))
+                {
                     edits.push((shape..end + length + CLOSE.len(), String::new()));
                     from = end + length + CLOSE.len();
                     continue;
@@ -1505,12 +2002,24 @@ impl Workbook {
     /// Moves the rows `first..first + count` before the row `before` (numbered as they are now):
     /// see the module documentation. Returns where the first of them ends up. Nothing changes when
     /// the move is refused.
-    pub fn move_rows(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, String> {
+    pub fn move_rows(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        count: u32,
+        before: u32,
+    ) -> Result<u32, String> {
         self.move_lines(sheet, LineMove::new(Axis::Rows, first, count, before)?)
     }
 
     /// Moves the columns `first..first + count` before the column `before` (see `move_rows`)
-    pub fn move_columns(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, String> {
+    pub fn move_columns(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        count: u32,
+        before: u32,
+    ) -> Result<u32, String> {
         self.move_lines(sheet, LineMove::new(Axis::Cols, first, count, before)?)
     }
 
@@ -1542,7 +2051,10 @@ impl Workbook {
         }
         let sheets = self.sheets()?;
         let name = sheets[sheet].name.clone();
-        let target = Target { name: &name, mv: &mv };
+        let target = Target {
+            name: &name,
+            mv: &mv,
+        };
         let rels = |part: &str| -> Vec<(String, String)> {
             self.package
                 .get_string(&rels_part_for(part))
@@ -1560,7 +2072,10 @@ impl Workbook {
         }
 
         // Everything is worked out first, so a refusal leaves the workbook untouched
-        let mut changes: Vec<(String, String)> = vec![(part.clone(), moved_sheet(&self.package.get_string(&part)?, target)?)];
+        let mut changes: Vec<(String, String)> = vec![(
+            part.clone(),
+            moved_sheet(&self.package.get_string(&part)?, target)?,
+        )];
         for (index, info) in sheets.iter().enumerate() {
             if info.kind != SheetKind::Worksheet || !self.package.contains(&info.part) {
                 continue;
@@ -1570,8 +2085,13 @@ impl Workbook {
                     changes.push((info.part.clone(), xml));
                 }
             }
-            for (_, table) in rels(&info.part).into_iter().filter(|(kind, _)| type_is(kind, "table")) {
-                if let Some(xml) = moved_table(&self.package.get_string(&table)?, index == sheet, target)? {
+            for (_, table) in rels(&info.part)
+                .into_iter()
+                .filter(|(kind, _)| type_is(kind, "table"))
+            {
+                if let Some(xml) =
+                    moved_table(&self.package.get_string(&table)?, index == sheet, target)?
+                {
                     changes.push((table, xml));
                 }
             }
@@ -1592,13 +2112,20 @@ impl Workbook {
                 changes.push((related.clone(), xml));
             }
         }
-        let (workbook, _) = rewrite_texts(&self.workbook_xml()?, &["definedName"], &|f| target.formula(f, false))?;
+        let (workbook, _) = rewrite_texts(&self.workbook_xml()?, &["definedName"], &|f| {
+            target.formula(f, false)
+        })?;
         changes.push((self.workbook_part.clone(), workbook));
         let mut others: Vec<String> = self
             .package
             .parts()
             .keys()
-            .filter(|p| p.ends_with(".xml") && !p.contains("/_rels/") && (p.starts_with("xl/charts/") || p.starts_with("xl/pivotCache/pivotCacheDefinition")))
+            .filter(|p| {
+                p.ends_with(".xml")
+                    && !p.contains("/_rels/")
+                    && (p.starts_with("xl/charts/")
+                        || p.starts_with("xl/pivotCache/pivotCacheDefinition"))
+            })
             .cloned()
             .collect();
         others.sort();
@@ -1629,14 +2156,26 @@ fn moved_pivot_source(xml: &str, target: Target) -> Result<String, String> {
     let mut reader = Reader::from_str(xml);
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("La caché no es XML válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("La caché no es XML válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match &event {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) if tag_is(e.name().as_ref(), "worksheetSource") => {
                 let on_target = attr_of(e, "sheet").is_some_and(|s| target.names(Some(&s), false));
-                if let (true, Some(range)) = (on_target, attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok())) {
-                    edits.push((before..after, set_attr(&xml[before..after], "ref", &target.mv.moved_span(&range).to_string())));
+                if let (true, Some(range)) = (
+                    on_target,
+                    attr_of(e, "ref").and_then(|r| CellRange::parse(&r).ok()),
+                ) {
+                    edits.push((
+                        before..after,
+                        set_attr(
+                            &xml[before..after],
+                            "ref",
+                            &target.mv.moved_span(&range).to_string(),
+                        ),
+                    ));
                 }
             }
             _ => {}
@@ -1672,7 +2211,8 @@ mod tests {
         let at = xml.find("</sheetData>").unwrap() + "</sheetData>".len();
         let end = xml.rfind("</worksheet>").unwrap();
         let written = format!("{}{}{}", &xml[..at], tail, &xml[end..]);
-        wb.package.put("xl/worksheets/sheet1.xml".into(), written.into_bytes());
+        wb.package
+            .put("xl/worksheets/sheet1.xml".into(), written.into_bytes());
     }
 
     fn formula_at(wb: &Workbook, sheet: usize, at: &str) -> String {
@@ -1695,7 +2235,9 @@ mod tests {
         // Rows 4–5 before row 2: 2, 3 go down
         let up = rows_mv(4, 2, 2);
         assert_eq!([1, 2, 3, 4, 5, 6].map(|i| up.line(i)), [1, 4, 5, 2, 3, 6]);
-        assert!(rows_mv(2, 2, 3).is_noop() && rows_mv(2, 2, 4).is_noop() && rows_mv(2, 2, 2).is_noop());
+        assert!(
+            rows_mv(2, 2, 3).is_noop() && rows_mv(2, 2, 4).is_noop() && rows_mv(2, 2, 2).is_noop()
+        );
         assert!(!rows_mv(2, 2, 5).is_noop());
         assert!(LineMove::new(Axis::Rows, 0, 1, 2).is_err());
         assert!(LineMove::new(Axis::Rows, 1, 0, 2).is_err());
@@ -1728,19 +2270,28 @@ mod tests {
     fn rewrites_every_kind_of_reference_and_nothing_else() {
         let wb_name = "Datos";
         let mv = rows_mv(2, 1, 5);
-        let target = Target { name: wb_name, mv: &mv };
+        let target = Target {
+            name: wb_name,
+            mv: &mv,
+        };
         let cases = [
             ("A2*2", "A4*2"),
             ("$A$2+A$3+$A3", "$A$4+A$2+$A2"),
             ("SUM(A1:B9)", "SUM(A1:B9)"),
             ("SUM(A2:A3)", "SUM(A2:A2)"),
-            (r#"IF(A2="A2","A2",LOG10(A2))"#, r#"IF(A4="A2","A2",LOG10(A4))"#),
+            (
+                r#"IF(A2="A2","A2",LOG10(A2))"#,
+                r#"IF(A4="A2","A2",LOG10(A4))"#,
+            ),
             ("Datos!A2+Otra!A2", "Datos!A4+Otra!A2"),
             ("'Datos'!A2", "'Datos'!A4"),
             ("datos!A2", "datos!A4"),
             ("[1]Datos!A2", "[1]Datos!A2"),
             ("Datos:Otra!A2", "Datos:Otra!A2"),
-            ("Tabla1[A2]+Tabla1[[#This Row],[B3]]", "Tabla1[A2]+Tabla1[[#This Row],[B3]]"),
+            (
+                "Tabla1[A2]+Tabla1[[#This Row],[B3]]",
+                "Tabla1[A2]+Tabla1[[#This Row],[B3]]",
+            ),
             ("SUM(A:C)", "SUM(A:C)"),
             ("SUM(2:2)+SUM($2:$3)", "SUM(4:4)+SUM($2:$2)"),
             ("#REF!+A2", "#REF!+A4"),
@@ -1755,13 +2306,22 @@ mod tests {
         assert_eq!(target.formula("A2+Datos!A2", false), "A2+Datos!A4");
 
         let cols = LineMove::new(Axis::Cols, 1, 1, 4).unwrap();
-        let target = Target { name: wb_name, mv: &cols };
-        assert_eq!(target.formula("A1+B$1+SUM(A:A)+SUM($B:$C)+SUM(1:1)", true), "C1+A$1+SUM(C:C)+SUM($A:$B)+SUM(1:1)");
+        let target = Target {
+            name: wb_name,
+            mv: &cols,
+        };
+        assert_eq!(
+            target.formula("A1+B$1+SUM(A:A)+SUM($B:$C)+SUM(1:1)", true),
+            "C1+A$1+SUM(C:C)+SUM($A:$B)+SUM(1:1)"
+        );
     }
 
     #[test]
     fn shifts_shared_formulas_as_text() {
-        assert_eq!(shift_formula("A1+$B$1+Otra!C2+[1]H!A1+SUM(A:A)", 2, 1), "B3+$B$1+Otra!D4+[1]H!B3+SUM(B:B)");
+        assert_eq!(
+            shift_formula("A1+$B$1+Otra!C2+[1]H!A1+SUM(A:A)", 2, 1),
+            "B3+$B$1+Otra!D4+[1]H!B3+SUM(B:B)"
+        );
         assert_eq!(shift_formula("A1", -1, 0), "#REF!");
     }
 
@@ -1772,18 +2332,52 @@ mod tests {
             0,
             "A1",
             vec![
-                vec![Some(CellInput::Text("Producto".into())), Some(CellInput::Text("Total".into()))],
-                vec![Some(CellInput::Text("uno".into())), number(1.0), formula("B2*10")],
-                vec![Some(CellInput::Text("dos".into())), number(2.0), formula("B3*10")],
-                vec![Some(CellInput::Text("tres".into())), number(3.0), formula("B4*10")],
-                vec![Some(CellInput::Text("suma".into())), formula("SUM(B2:B4)"), formula("C2+C4")],
+                vec![
+                    Some(CellInput::Text("Producto".into())),
+                    Some(CellInput::Text("Total".into())),
+                ],
+                vec![
+                    Some(CellInput::Text("uno".into())),
+                    number(1.0),
+                    formula("B2*10"),
+                ],
+                vec![
+                    Some(CellInput::Text("dos".into())),
+                    number(2.0),
+                    formula("B3*10"),
+                ],
+                vec![
+                    Some(CellInput::Text("tres".into())),
+                    number(3.0),
+                    formula("B4*10"),
+                ],
+                vec![
+                    Some(CellInput::Text("suma".into())),
+                    formula("SUM(B2:B4)"),
+                    formula("C2+C4"),
+                ],
             ],
         )
         .unwrap();
-        wb.set_format(0, "A4:B4", &crate::format::Format { bold: Some(true), ..Default::default() }).unwrap();
+        wb.set_format(
+            0,
+            "A4:B4",
+            &crate::format::Format {
+                bold: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let xml = sheet_xml(&wb).replace(r#"<row r="4""#, r#"<row r="4" ht="30" customHeight="1""#);
-        wb.package.put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
-        let style = wb.cell_views(0, &crate::numfmt::Locale::from_tag("es")).unwrap().into_iter().find(|c| c.row == 4 && c.col == 1).unwrap().style;
+        wb.package
+            .put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
+        let style = wb
+            .cell_views(0, &crate::numfmt::Locale::from_tag("es"))
+            .unwrap()
+            .into_iter()
+            .find(|c| c.row == 4 && c.col == 1)
+            .unwrap()
+            .style;
 
         wb.checkpoint(None);
         assert_eq!(wb.move_rows(0, 4, 1, 2).unwrap(), 2);
@@ -1800,11 +2394,26 @@ mod tests {
         assert_eq!(formula_at(&wb, 0, "C5"), "C3+C2");
         assert_eq!(value(&wb, "C5"), CellValue::Number(40.0));
         let xml = sheet_xml(&wb);
-        assert!(xml.contains(r#"<row r="2" ht="30" customHeight="1""#), "{}", xml);
-        let moved = wb.cell_views(0, &crate::numfmt::Locale::from_tag("es")).unwrap().into_iter().find(|c| c.row == 2 && c.col == 1).unwrap().style;
+        assert!(
+            xml.contains(r#"<row r="2" ht="30" customHeight="1""#),
+            "{}",
+            xml
+        );
+        let moved = wb
+            .cell_views(0, &crate::numfmt::Locale::from_tag("es"))
+            .unwrap()
+            .into_iter()
+            .find(|c| c.row == 2 && c.col == 1)
+            .unwrap()
+            .style;
         assert_eq!(moved, style);
         // Rows stay in order in the file
-        let numbers: Vec<u32> = SheetXml::parse(&xml).unwrap().rows.iter().map(|r| r.number).collect();
+        let numbers: Vec<u32> = SheetXml::parse(&xml)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.number)
+            .collect();
         assert!(numbers.windows(2).all(|w| w[0] < w[1]), "{:?}", numbers);
 
         // One undo step, and back the same
@@ -1815,17 +2424,29 @@ mod tests {
         assert_eq!(value(&wb, "A2"), CellValue::Text("tres".into()));
         // Still a workbook after a round trip
         let again = Workbook::from_bytes(&wb.to_bytes().unwrap()).unwrap();
-        assert_eq!(again.cell(0, "A2").unwrap().value, CellValue::Text("tres".into()));
+        assert_eq!(
+            again.cell(0, "A2").unwrap().value,
+            CellValue::Text("tres".into())
+        );
     }
 
     #[test]
     fn moves_columns_with_their_widths_and_references() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0), number(2.0), number(3.0), formula("A1+B1*C1")], vec![number(4.0), formula("A2*2")]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![
+                vec![number(1.0), number(2.0), number(3.0), formula("A1+B1*C1")],
+                vec![number(4.0), formula("A2*2")],
+            ],
+        )
+        .unwrap();
         wb.set_column_width(0, 1, 1, 30.0).unwrap();
         wb.set_column_width(0, 3, 16_384, 12.0).unwrap();
         let xml = sheet_xml(&wb).replace(r#"<row r="1""#, r#"<row r="1" spans="1:4""#);
-        wb.package.put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
+        wb.package
+            .put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
 
         // A goes after C: B C A D
         assert_eq!(wb.move_columns(0, 1, 1, 4).unwrap(), 3);
@@ -1839,7 +2460,13 @@ mod tests {
         let xml = sheet_xml(&wb);
         assert!(!xml.contains("spans"), "{}", xml);
         let layout = wb.sheet_layout(0).unwrap();
-        let width_of = |c: u32| layout.cols.iter().find(|(a, b, ..)| *a <= c && c <= *b).and_then(|x| x.2);
+        let width_of = |c: u32| {
+            layout
+                .cols
+                .iter()
+                .find(|(a, b, ..)| *a <= c && c <= *b)
+                .and_then(|x| x.2)
+        };
         assert_eq!(width_of(3), Some(30.0));
         assert_eq!(width_of(2), Some(12.0));
         assert_eq!(width_of(4), Some(12.0));
@@ -1854,7 +2481,10 @@ mod tests {
         let data = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><f t="shared" ref="B1:B3" si="0">A1*2</f><v>2</v></c></row><row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>4</v></c></row><row r="3"><c r="A3"><v>3</v></c><c r="B3"><f t="shared" si="0"/><v>6</v></c></row></sheetData>"#;
         let start = xml.find("<sheetData").unwrap();
         let end = xml.find("</worksheet>").unwrap();
-        wb.package.put("xl/worksheets/sheet1.xml".into(), format!("{}{}{}", &xml[..start], data, &xml[end..]).into_bytes());
+        wb.package.put(
+            "xl/worksheets/sheet1.xml".into(),
+            format!("{}{}{}", &xml[..start], data, &xml[end..]).into_bytes(),
+        );
 
         wb.move_rows(0, 3, 1, 1).unwrap();
         assert_eq!(formula_at(&wb, 0, "B1"), "A1*2");
@@ -1869,8 +2499,14 @@ mod tests {
     fn other_sheets_and_names_follow() {
         let mut wb = blank();
         wb.add_sheet("Resumen", None).unwrap();
-        wb.set_values(0, "A1", vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)]]).unwrap();
-        wb.set_values(1, "A1", vec![vec![formula("Hoja1!A3*2"), formula("A1")]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)]],
+        )
+        .unwrap();
+        wb.set_values(1, "A1", vec![vec![formula("Hoja1!A3*2"), formula("A1")]])
+            .unwrap();
         let xml = wb.workbook_xml().unwrap().replace("</sheets>", r#"</sheets><definedNames><definedName name="Ultima">Hoja1!$A$3</definedName><definedName name="Otra">Resumen!$A$3</definedName></definedNames>"#);
         wb.package.put(wb.workbook_part.clone(), xml.into_bytes());
         wb.package.put("xl/charts/chart1.xml".into(), br#"<c:chartSpace xmlns:c="c"><c:f>Hoja1!$A$1:$A$2</c:f><c:f>Resumen!$A$1</c:f></c:chartSpace>"#.to_vec());
@@ -1883,14 +2519,31 @@ mod tests {
         assert!(book.contains(">Hoja1!$A$1<"), "{}", book);
         assert!(book.contains(">Resumen!$A$3<"), "{}", book);
         let chart = wb.package.get_string("xl/charts/chart1.xml").unwrap();
-        assert!(chart.contains("<c:f>Hoja1!$A$2:$A$3</c:f><c:f>Resumen!$A$1</c:f>"), "{}", chart);
+        assert!(
+            chart.contains("<c:f>Hoja1!$A$2:$A$3</c:f><c:f>Resumen!$A$1</c:f>"),
+            "{}",
+            chart
+        );
     }
 
     #[test]
     fn refuses_to_tear_merged_cells_and_arrays() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)], vec![number(4.0)]]).unwrap();
-        with_tail(&mut wb, r#"<mergeCells count="2"><mergeCell ref="A2:B3"/><mergeCell ref="C1:F1"/></mergeCells>"#);
+        wb.set_values(
+            0,
+            "A1",
+            vec![
+                vec![number(1.0)],
+                vec![number(2.0)],
+                vec![number(3.0)],
+                vec![number(4.0)],
+            ],
+        )
+        .unwrap();
+        with_tail(
+            &mut wb,
+            r#"<mergeCells count="2"><mergeCell ref="A2:B3"/><mergeCell ref="C1:F1"/></mergeCells>"#,
+        );
         let before = sheet_xml(&wb);
         wb.checkpoint(None);
         let error = wb.move_rows(0, 3, 1, 1).unwrap_err();
@@ -1901,12 +2554,19 @@ mod tests {
 
         // The whole merge moves
         wb.move_rows(0, 2, 2, 6).unwrap();
-        assert!(sheet_xml(&wb).contains(r#"<mergeCell ref="A4:B5"/>"#), "{}", sheet_xml(&wb));
+        assert!(
+            sheet_xml(&wb).contains(r#"<mergeCell ref="A4:B5"/>"#),
+            "{}",
+            sheet_xml(&wb)
+        );
         assert!(sheet_xml(&wb).contains(r#"<mergeCell ref="C1:F1"/>"#));
         // Columns under a merged title, not its first one
         wb.move_columns(0, 4, 1, 6).unwrap();
         assert!(sheet_xml(&wb).contains(r#"<mergeCell ref="C1:F1"/>"#));
-        assert!(wb.move_columns(0, 3, 1, 6).is_err(), "its first column holds the value");
+        assert!(
+            wb.move_columns(0, 3, 1, 6).is_err(),
+            "its first column holds the value"
+        );
         assert!(wb.move_columns(0, 8, 1, 4).is_err(), "from outside");
 
         let mut wb = blank();
@@ -1914,18 +2574,34 @@ mod tests {
         let start = xml.find("<sheetData").unwrap();
         let end = xml.find("</worksheet>").unwrap();
         let data = r#"<sheetData><row r="1"><c r="A1"><f t="array" ref="A1:A2">B1:B2*2</f><v>0</v></c></row><row r="2"><c r="A2"><v>0</v></c></row><row r="3"><c r="B3"><f t="array" ref="B3">SUM(A1:A2*2)</f><v>0</v></c></row></sheetData>"#;
-        wb.package.put("xl/worksheets/sheet1.xml".into(), format!("{}{}{}", &xml[..start], data, &xml[end..]).into_bytes());
+        wb.package.put(
+            "xl/worksheets/sheet1.xml".into(),
+            format!("{}{}{}", &xml[..start], data, &xml[end..]).into_bytes(),
+        );
         assert!(wb.move_rows(0, 1, 1, 4).unwrap_err().contains("matricial"));
         wb.move_rows(0, 3, 1, 1).unwrap();
         let xml = sheet_xml(&wb);
-        assert!(xml.contains(r#"<f t="array" ref="B1">SUM(A2:A3*2)</f>"#), "{}", xml);
-        assert!(xml.contains(r#"<f t="array" ref="A2:A3">B2:B3*2</f>"#), "{}", xml);
+        assert!(
+            xml.contains(r#"<f t="array" ref="B1">SUM(A2:A3*2)</f>"#),
+            "{}",
+            xml
+        );
+        assert!(
+            xml.contains(r#"<f t="array" ref="A2:A3">B2:B3*2</f>"#),
+            "{}",
+            xml
+        );
     }
 
     #[test]
     fn formats_validations_and_links_follow_their_cells() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)]],
+        )
+        .unwrap();
         with_tail(
             &mut wb,
             r#"<conditionalFormatting sqref="A1:C5"><cfRule type="expression" priority="1"><formula>$A1&gt;$F$2</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="A2"><cfRule type="expression" priority="2"><formula>A2&gt;0</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" sqref="D2"><formula1>$F$1:$F$3</formula1></dataValidation></dataValidations><hyperlinks><hyperlink ref="B2" location="Hoja1!A2"/></hyperlinks>"#,
@@ -1935,21 +2611,43 @@ mod tests {
         // The rule keeps its rows; its relative reference still looks at each row's own A
         assert!(xml.contains(r#"sqref="A1:C5"><cfRule type="expression" priority="1"><formula>$A1&gt;$F$3</formula>"#), "{}", xml);
         // The rule of A2 goes with the cell, looking at it from there
-        assert!(xml.contains(r#"sqref="A3"><cfRule type="expression" priority="2"><formula>A3&gt;0</formula>"#), "{}", xml);
+        assert!(
+            xml.contains(
+                r#"sqref="A3"><cfRule type="expression" priority="2"><formula>A3&gt;0</formula>"#
+            ),
+            "{}",
+            xml
+        );
         // $F$1:$F$3 holds the same lines
-        assert!(xml.contains(r#"sqref="D3"><formula1>$F$1:$F$3</formula1>"#), "{}", xml);
-        assert!(xml.contains(r#"<hyperlink ref="B3" location="Hoja1!A3"/>"#), "{}", xml);
+        assert!(
+            xml.contains(r#"sqref="D3"><formula1>$F$1:$F$3</formula1>"#),
+            "{}",
+            xml
+        );
+        assert!(
+            xml.contains(r#"<hyperlink ref="B3" location="Hoja1!A3"/>"#),
+            "{}",
+            xml
+        );
 
         // A rule over rows that scatter is split
         let mut wb = blank();
         wb.set_value(0, "A1", CellInput::Number(1.0)).unwrap();
-        with_tail(&mut wb, r#"<conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>A1&gt;0</formula></cfRule></conditionalFormatting>"#);
+        with_tail(
+            &mut wb,
+            r#"<conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>A1&gt;0</formula></cfRule></conditionalFormatting>"#,
+        );
         wb.move_rows(0, 2, 1, 10).unwrap();
-        assert!(sheet_xml(&wb).contains(r#"sqref="A1:A2 A9""#), "{}", sheet_xml(&wb));
+        assert!(
+            sheet_xml(&wb).contains(r#"sqref="A1:A2 A9""#),
+            "{}",
+            sheet_xml(&wb)
+        );
     }
 
     fn with_table(wb: &mut Workbook, table: &str) {
-        wb.package.put("xl/tables/table1.xml".into(), table.as_bytes().to_vec());
+        wb.package
+            .put("xl/tables/table1.xml".into(), table.as_bytes().to_vec());
         wb.package.put(
             "xl/worksheets/_rels/sheet1.xml.rels".into(),
             br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#.to_vec(),
@@ -1963,28 +2661,58 @@ mod tests {
         let mut wb = blank();
         with_table(&mut wb, TABLE);
         wb.set_value(0, "A1", CellInput::Number(1.0)).unwrap();
-        for (first, count, before) in [(2, 1, 4), (3, 1, 10), (10, 1, 4), (5, 1, 3), (4, 1, 6), (3, 1, 2)] {
+        for (first, count, before) in [
+            (2, 1, 4),
+            (3, 1, 10),
+            (10, 1, 4),
+            (5, 1, 3),
+            (4, 1, 6),
+            (3, 1, 2),
+        ] {
             let error = wb.move_rows(0, first, count, before).unwrap_err();
-            assert!(error.contains("la tabla T"), "{} {} {}: {}", first, count, before, error);
+            assert!(
+                error.contains("la tabla T"),
+                "{} {} {}: {}",
+                first,
+                count,
+                before,
+                error
+            );
         }
-        assert!(wb.move_columns(0, 3, 1, 9).unwrap_err().contains("la tabla T"));
+        assert!(wb
+            .move_columns(0, 3, 1, 9)
+            .unwrap_err()
+            .contains("la tabla T"));
 
         // Data rows change places inside it: the table stays
         wb.move_rows(0, 4, 1, 3).unwrap();
-        assert_eq!(wb.package.get_string("xl/tables/table1.xml").unwrap().replace("F4*2", "F3*2"), TABLE);
+        assert_eq!(
+            wb.package
+                .get_string("xl/tables/table1.xml")
+                .unwrap()
+                .replace("F4*2", "F3*2"),
+            TABLE
+        );
 
         // Columns in the table: the order of tableColumn and the filter's positions follow
         wb.move_columns(0, 2, 1, 5).unwrap();
         let table = wb.package.get_string("xl/tables/table1.xml").unwrap();
         assert!(table.contains(r#"ref="B2:D5""#), "{}", table);
-        let order: Vec<_> = ["name=\"b\"", "name=\"c\"", "name=\"a\""].iter().map(|n| table.find(n).unwrap()).collect();
+        let order: Vec<_> = ["name=\"b\"", "name=\"c\"", "name=\"a\""]
+            .iter()
+            .map(|n| table.find(n).unwrap())
+            .collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{}", table);
         assert!(table.contains(r#"<filterColumn colId="2"/>"#), "{}", table);
 
         // The whole table
         wb.move_rows(0, 2, 4, 1).unwrap();
         let table = wb.package.get_string("xl/tables/table1.xml").unwrap();
-        assert!(table.contains(r#"ref="B1:D4""#) && table.contains(r#"<autoFilter ref="B1:D3">"#), "{}", table);
+        assert!(
+            table.contains(r#"ref="B1:D4""#) && table.contains(r#"<autoFilter ref="B1:D3">"#),
+            "{}",
+            table
+        );
     }
 
     #[test]
@@ -1996,7 +2724,11 @@ mod tests {
             br#"<xdr:wsDr xmlns:xdr="d"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:row>4</xdr:row></xdr:to></xdr:twoCellAnchor><xdr:twoCellAnchor editAs="absolute"><xdr:from><xdr:row>2</xdr:row></xdr:from><xdr:to><xdr:row>4</xdr:row></xdr:to></xdr:twoCellAnchor></xdr:wsDr>"#.to_vec(),
         );
         wb.package.put("xl/comments1.xml".into(), br#"<comments xmlns="m"><commentList><comment ref="B3" authorId="0"/><comment ref="B9" authorId="0"/></commentList></comments>"#.to_vec());
-        wb.package.put("xl/drawings/vmlDrawing1.vml".into(), b"<xml><x:ClientData><x:Row>2</x:Row><x:Column>1</x:Column></x:ClientData></xml>".to_vec());
+        wb.package.put(
+            "xl/drawings/vmlDrawing1.vml".into(),
+            b"<xml><x:ClientData><x:Row>2</x:Row><x:Column>1</x:Column></x:ClientData></xml>"
+                .to_vec(),
+        );
         wb.package.put(
             "xl/worksheets/_rels/sheet1.xml.rels".into(),
             br#"<Relationships xmlns="r"><Relationship Id="rId1" Type="x/drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="x/comments" Target="../comments1.xml"/><Relationship Id="rId3" Type="x/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/></Relationships>"#.to_vec(),
@@ -2006,11 +2738,23 @@ mod tests {
         assert!(drawing.contains("<xdr:col>1</xdr:col><xdr:row>0</xdr:row></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:row>2</xdr:row>"), "{}", drawing);
         assert!(drawing.contains(r#"editAs="absolute"><xdr:from><xdr:row>2</xdr:row></xdr:from><xdr:to><xdr:row>4</xdr:row>"#), "{}", drawing);
         let comments = wb.package.get_string("xl/comments1.xml").unwrap();
-        assert!(comments.contains(r#"<comment ref="B1" authorId="0"/><comment ref="B9" authorId="0"/>"#), "{}", comments);
-        assert!(wb.package.get_string("xl/drawings/vmlDrawing1.vml").unwrap().contains("<x:Row>0</x:Row><x:Column>1</x:Column>"));
+        assert!(
+            comments
+                .contains(r#"<comment ref="B1" authorId="0"/><comment ref="B9" authorId="0"/>"#),
+            "{}",
+            comments
+        );
+        assert!(wb
+            .package
+            .get_string("xl/drawings/vmlDrawing1.vml")
+            .unwrap()
+            .contains("<x:Row>0</x:Row><x:Column>1</x:Column>"));
 
         let mut wb = blank();
-        wb.package.put("xl/pivotTables/pivotTable1.xml".into(), b"<pivotTableDefinition/>".to_vec());
+        wb.package.put(
+            "xl/pivotTables/pivotTable1.xml".into(),
+            b"<pivotTableDefinition/>".to_vec(),
+        );
         wb.package.put(
             "xl/worksheets/_rels/sheet1.xml.rels".into(),
             br#"<Relationships xmlns="r"><Relationship Id="rId1" Type="x/pivotTable" Target="../pivotTables/pivotTable1.xml"/></Relationships>"#.to_vec(),
@@ -2021,11 +2765,32 @@ mod tests {
     #[test]
     fn inserts_rows_growing_ranges_and_taking_the_format_above() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0), number(10.0)], vec![number(2.0), number(20.0)], vec![number(3.0), formula("SUM(B1:B2)+A2")]]).unwrap();
-        wb.set_format(0, "A2:B2", &crate::format::Format { bold: Some(true), ..Default::default() }).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![
+                vec![number(1.0), number(10.0)],
+                vec![number(2.0), number(20.0)],
+                vec![number(3.0), formula("SUM(B1:B2)+A2")],
+            ],
+        )
+        .unwrap();
+        wb.set_format(
+            0,
+            "A2:B2",
+            &crate::format::Format {
+                bold: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let xml = sheet_xml(&wb).replace(r#"<row r="2""#, r#"<row r="2" ht="30" customHeight="1""#);
-        wb.package.put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
-        with_tail(&mut wb, r#"<mergeCells count="1"><mergeCell ref="D1:D3"/></mergeCells><conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>$A$2&gt;0</formula></cfRule></conditionalFormatting>"#);
+        wb.package
+            .put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
+        with_tail(
+            &mut wb,
+            r#"<mergeCells count="1"><mergeCell ref="D1:D3"/></mergeCells><conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>$A$2&gt;0</formula></cfRule></conditionalFormatting>"#,
+        );
 
         wb.checkpoint(None);
         assert_eq!(wb.insert_rows(0, 2, 2).unwrap(), 2);
@@ -2036,25 +2801,65 @@ mod tests {
         let xml = sheet_xml(&wb);
         assert!(xml.contains(r#"<mergeCell ref="D1:D5"/>"#), "{}", xml);
         assert!(xml.contains(r#"sqref="A1:A5"><cfRule type="expression" priority="1"><formula>$A$4&gt;0</formula>"#), "{}", xml);
-        let numbers: Vec<u32> = SheetXml::parse(&xml).unwrap().rows.iter().map(|r| r.number).collect();
+        let numbers: Vec<u32> = SheetXml::parse(&xml)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.number)
+            .collect();
         assert_eq!(numbers, [1, 2, 3, 4, 5]);
 
         // At the first row there is no format to take
         let mut other = blank();
-        other.set_format(0, "A1", &crate::format::Format { bold: Some(true), ..Default::default() }).unwrap();
+        other
+            .set_format(
+                0,
+                "A1",
+                &crate::format::Format {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         other.insert_rows(0, 1, 1).unwrap();
-        assert!(!sheet_xml(&other).contains(r#"<c r="A1""#), "{}", sheet_xml(&other));
+        assert!(
+            !sheet_xml(&other).contains(r#"<c r="A1""#),
+            "{}",
+            sheet_xml(&other)
+        );
 
         // Below the row of height 30: they take it, as the format of the row above
         let mut wb2 = blank();
-        wb2.set_values(0, "A1", vec![vec![number(1.0)], vec![number(2.0)]]).unwrap();
-        wb2.set_format(0, "A1", &crate::format::Format { bold: Some(true), ..Default::default() }).unwrap();
-        let xml = sheet_xml(&wb2).replace(r#"<row r="1""#, r#"<row r="1" ht="30" customHeight="1""#);
-        wb2.package.put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
+        wb2.set_values(0, "A1", vec![vec![number(1.0)], vec![number(2.0)]])
+            .unwrap();
+        wb2.set_format(
+            0,
+            "A1",
+            &crate::format::Format {
+                bold: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let xml =
+            sheet_xml(&wb2).replace(r#"<row r="1""#, r#"<row r="1" ht="30" customHeight="1""#);
+        wb2.package
+            .put("xl/worksheets/sheet1.xml".into(), xml.into_bytes());
         wb2.insert_rows(0, 2, 1).unwrap();
         let xml = sheet_xml(&wb2);
-        let style = SheetXml::parse(&xml).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().style;
-        assert!(xml.contains(&format!(r#"<row r="2" ht="30" customHeight="1"><c r="A2" s="{}"/></row>"#, style)), "{}", xml);
+        let style = SheetXml::parse(&xml)
+            .unwrap()
+            .cell(CellRef::parse("A1").unwrap())
+            .unwrap()
+            .style;
+        assert!(
+            xml.contains(&format!(
+                r#"<row r="2" ht="30" customHeight="1"><c r="A2" s="{}"/></row>"#,
+                style
+            )),
+            "{}",
+            xml
+        );
         assert_eq!(value(&wb2, "A2"), CellValue::Empty);
         assert_eq!(value(&wb2, "A3"), CellValue::Number(2.0));
 
@@ -2065,15 +2870,35 @@ mod tests {
     #[test]
     fn inserts_columns_with_the_width_on_their_left() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0), number(2.0), formula("A1+B1")]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![number(1.0), number(2.0), formula("A1+B1")]],
+        )
+        .unwrap();
         wb.set_column_width(0, 2, 2, 25.0).unwrap();
         wb.set_column_width(0, 3, 16_384, 9.0).unwrap();
         assert_eq!(wb.insert_columns(0, 3, 2).unwrap(), 3);
         assert_eq!(formula_at(&wb, 0, "E1"), "A1+B1");
         assert_eq!(value(&wb, "E1"), CellValue::Number(3.0));
         let layout = wb.sheet_layout(0).unwrap();
-        let width_of = |c: u32| layout.cols.iter().find(|(a, b, ..)| *a <= c && c <= *b).and_then(|x| x.2);
-        assert_eq!([width_of(2), width_of(3), width_of(4), width_of(5), width_of(16_384)], [Some(25.0), Some(25.0), Some(25.0), Some(9.0), Some(9.0)]);
+        let width_of = |c: u32| {
+            layout
+                .cols
+                .iter()
+                .find(|(a, b, ..)| *a <= c && c <= *b)
+                .and_then(|x| x.2)
+        };
+        assert_eq!(
+            [
+                width_of(2),
+                width_of(3),
+                width_of(4),
+                width_of(5),
+                width_of(16_384)
+            ],
+            [Some(25.0), Some(25.0), Some(25.0), Some(9.0), Some(9.0)]
+        );
 
         // Values at the end of the sheet would fall off
         wb.set_value(0, "XFD1", CellInput::Number(1.0)).unwrap();
@@ -2088,10 +2913,26 @@ mod tests {
         wb.set_values(
             0,
             "A1",
-            vec![vec![number(1.0)], vec![number(2.0)], vec![number(3.0)], vec![number(4.0)], vec![formula("SUM(A1:A4)"), formula("A2*2"), formula("SUM(A2:A3)"), formula("A4*2")]],
+            vec![
+                vec![number(1.0)],
+                vec![number(2.0)],
+                vec![number(3.0)],
+                vec![number(4.0)],
+                vec![
+                    formula("SUM(A1:A4)"),
+                    formula("A2*2"),
+                    formula("SUM(A2:A3)"),
+                    formula("A4*2"),
+                ],
+            ],
         )
         .unwrap();
-        wb.set_values(1, "A1", vec![vec![formula("Hoja1!A2"), formula("Hoja1!A4+1")]]).unwrap();
+        wb.set_values(
+            1,
+            "A1",
+            vec![vec![formula("Hoja1!A2"), formula("Hoja1!A4+1")]],
+        )
+        .unwrap();
         let xml = wb.workbook_xml().unwrap().replace("</sheets>", r#"</sheets><definedNames><definedName name="Dos">Hoja1!$A$2</definedName></definedNames>"#);
         wb.package.put(wb.workbook_part.clone(), xml.into_bytes());
         with_tail(
@@ -2114,8 +2955,18 @@ mod tests {
         let xml = sheet_xml(&wb);
         let empty_attr = format!("ref={0}{0}", '"');
         assert!(!xml.contains(&empty_attr), "{}", xml);
-        assert!(xml.contains(r#"<mergeCells count="1"><mergeCell ref="F5:F7"/></mergeCells>"#), "{}", xml);
-        assert!(!xml.contains("conditionalFormatting") && !xml.contains("dataValidations") && !xml.contains("hyperlinks"), "{}", xml);
+        assert!(
+            xml.contains(r#"<mergeCells count="1"><mergeCell ref="F5:F7"/></mergeCells>"#),
+            "{}",
+            xml
+        );
+        assert!(
+            !xml.contains("conditionalFormatting")
+                && !xml.contains("dataValidations")
+                && !xml.contains("hyperlinks"),
+            "{}",
+            xml
+        );
         let again = Workbook::from_bytes(&wb.to_bytes().unwrap()).unwrap();
         assert_eq!(again.cell(0, "A2").unwrap().value, CellValue::Number(4.0));
 
@@ -2127,7 +2978,17 @@ mod tests {
     #[test]
     fn deleting_keeps_ranges_comments_and_columns_right() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![number(1.0), number(2.0), number(3.0), formula("SUM(A1:C1)+SUM(B:B)")]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![
+                number(1.0),
+                number(2.0),
+                number(3.0),
+                formula("SUM(A1:C1)+SUM(B:B)"),
+            ]],
+        )
+        .unwrap();
         wb.set_column_width(0, 2, 2, 25.0).unwrap();
         wb.package.put("xl/comments1.xml".into(), br#"<comments xmlns="m"><commentList><comment ref="B1" authorId="0"/><comment ref="C1" authorId="0"/></commentList></comments>"#.to_vec());
         wb.package.put(
@@ -2141,10 +3002,27 @@ mod tests {
         wb.delete_columns(0, 2, 1).unwrap();
         assert_eq!(value(&wb, "B1"), CellValue::Number(3.0));
         assert_eq!(formula_at(&wb, 0, "C1"), "SUM(A1:B1)+SUM(#REF!)");
-        assert!(wb.sheet_layout(0).unwrap().cols.is_empty(), "{:?}", wb.sheet_layout(0).unwrap().cols);
-        assert_eq!(wb.package.get_string("xl/comments1.xml").unwrap(), r#"<comments xmlns="m"><commentList><comment ref="B1" authorId="0"/></commentList></comments>"#);
-        let vml = wb.package.get_string("xl/drawings/vmlDrawing1.vml").unwrap();
-        assert!(!vml.contains(r#"id="a""#) && vml.contains(r#"<v:shape id="b"><x:ClientData><x:Row>0</x:Row><x:Column>1</x:Column>"#), "{}", vml);
+        assert!(
+            wb.sheet_layout(0).unwrap().cols.is_empty(),
+            "{:?}",
+            wb.sheet_layout(0).unwrap().cols
+        );
+        assert_eq!(
+            wb.package.get_string("xl/comments1.xml").unwrap(),
+            r#"<comments xmlns="m"><commentList><comment ref="B1" authorId="0"/></commentList></comments>"#
+        );
+        let vml = wb
+            .package
+            .get_string("xl/drawings/vmlDrawing1.vml")
+            .unwrap();
+        assert!(
+            !vml.contains(r#"id="a""#)
+                && vml.contains(
+                    r#"<v:shape id="b"><x:ClientData><x:Row>0</x:Row><x:Column>1</x:Column>"#
+                ),
+            "{}",
+            vml
+        );
 
         // Deleting at the very end works too
         let mut wb = blank();
@@ -2163,14 +3041,27 @@ mod tests {
         assert!(wb.delete_rows(0, 2, 1).unwrap_err().contains("encabezado"));
         assert!(wb.delete_rows(0, 5, 1).unwrap_err().contains("totales"));
         assert!(wb.delete_rows(0, 3, 2).unwrap_err().contains("todas"));
-        assert!(wb.delete_rows(0, 2, 4).unwrap_err().contains("toda la tabla"));
+        assert!(wb
+            .delete_rows(0, 2, 4)
+            .unwrap_err()
+            .contains("toda la tabla"));
         assert!(wb.insert_columns(0, 3, 1).unwrap_err().contains("columnas"));
         assert!(wb.delete_columns(0, 3, 1).unwrap_err().contains("columnas"));
 
         wb.insert_rows(0, 4, 2).unwrap();
-        assert!(table(&wb).contains(r#"ref="B2:D7""#) && table(&wb).contains(r#"<autoFilter ref="B2:D6">"#), "{}", table(&wb));
+        assert!(
+            table(&wb).contains(r#"ref="B2:D7""#)
+                && table(&wb).contains(r#"<autoFilter ref="B2:D6">"#),
+            "{}",
+            table(&wb)
+        );
         wb.delete_rows(0, 4, 1).unwrap();
-        assert!(table(&wb).contains(r#"ref="B2:D6""#) && table(&wb).contains(r#"<autoFilter ref="B2:D5">"#), "{}", table(&wb));
+        assert!(
+            table(&wb).contains(r#"ref="B2:D6""#)
+                && table(&wb).contains(r#"<autoFilter ref="B2:D5">"#),
+            "{}",
+            table(&wb)
+        );
         // Before it or beside it, it moves whole
         wb.insert_rows(0, 1, 1).unwrap();
         assert!(table(&wb).contains(r#"ref="B3:D7""#), "{}", table(&wb));
@@ -2186,13 +3077,25 @@ mod tests {
         let start = xml.find("<sheetData").unwrap();
         let view = r#"<sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>"#;
         let head = match (xml.find("<sheetViews"), xml.find("</sheetViews>")) {
-            (Some(a), Some(b)) => format!("{}{}{}", &xml[..a], view, &xml[b + "</sheetViews>".len()..start]),
+            (Some(a), Some(b)) => format!(
+                "{}{}{}",
+                &xml[..a],
+                view,
+                &xml[b + "</sheetViews>".len()..start]
+            ),
             _ => format!("{}{}", &xml[..start], view),
         };
-        wb.package.put("xl/worksheets/sheet1.xml".into(), format!("{}{}", head, &xml[start..]).into_bytes());
+        wb.package.put(
+            "xl/worksheets/sheet1.xml".into(),
+            format!("{}{}", head, &xml[start..]).into_bytes(),
+        );
         wb.insert_rows(0, 2, 2).unwrap();
         assert_eq!(wb.sheet_layout(0).unwrap().frozen, Some((5, 0)));
-        assert!(sheet_xml(&wb).contains(r#"topLeftCell="A6""#), "{}", sheet_xml(&wb));
+        assert!(
+            sheet_xml(&wb).contains(r#"topLeftCell="A6""#),
+            "{}",
+            sheet_xml(&wb)
+        );
         wb.insert_rows(0, 20, 1).unwrap();
         assert_eq!(wb.sheet_layout(0).unwrap().frozen, Some((5, 0)));
         wb.delete_rows(0, 4, 4).unwrap();

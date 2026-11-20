@@ -25,7 +25,8 @@ pub fn indexed_color(index: usize) -> Option<&'static str> {
 
 /// Office's default theme colors, used when the workbook has no theme part
 const DEFAULT_THEME: [&str; 12] = [
-    "FFFFFF", "000000", "E7E6E6", "44546A", "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47", "0563C1", "954F72",
+    "FFFFFF", "000000", "E7E6E6", "44546A", "4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5",
+    "70AD47", "0563C1", "954F72",
 ];
 
 /// Theme colors in the order `theme="n"` counts them: lt1, dk1, lt2, dk2, accent1–6, hlink,
@@ -37,11 +38,16 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { colors: DEFAULT_THEME.iter().map(|c| c.to_string()).collect() }
+        Theme {
+            colors: DEFAULT_THEME.iter().map(|c| c.to_string()).collect(),
+        }
     }
 }
 
-const SCHEME: [&str; 12] = ["dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+const SCHEME: [&str; 12] = [
+    "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+    "hlink", "folHlink",
+];
 
 impl Theme {
     /// Reads the color scheme of a theme part; missing colors keep Office's defaults
@@ -104,9 +110,12 @@ impl Theme {
                 6 => rgb,
                 _ => return None,
             }
-        } else if let Some(theme) = get_attr_value(e, "theme").and_then(|v| v.parse::<usize>().ok()) {
+        } else if let Some(theme) = get_attr_value(e, "theme").and_then(|v| v.parse::<usize>().ok())
+        {
             self.colors.get(theme)?.clone()
-        } else if let Some(indexed) = get_attr_value(e, "indexed").and_then(|v| v.parse::<usize>().ok()) {
+        } else if let Some(indexed) =
+            get_attr_value(e, "indexed").and_then(|v| v.parse::<usize>().ok())
+        {
             match indexed {
                 64 => "000000".to_string(),
                 65 => "FFFFFF".to_string(),
@@ -115,7 +124,9 @@ impl Theme {
         } else {
             return None;
         };
-        let tint = get_attr_value(e, "tint").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        let tint = get_attr_value(e, "tint")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
         Some(format!("#{}", apply_tint(&base, tint)))
     }
 }
@@ -128,7 +139,11 @@ pub fn apply_tint(rgb: &str, tint: f64) -> String {
     let channel = |i: usize| u8::from_str_radix(&rgb[i..i + 2], 16).unwrap_or(0) as f64 / 255.0;
     let (r, g, b) = (channel(0), channel(2), channel(4));
     let (h, s, mut l) = rgb_to_hsl(r, g, b);
-    l = if tint < 0.0 { l * (1.0 + tint) } else { l * (1.0 - tint) + tint };
+    l = if tint < 0.0 {
+        l * (1.0 + tint)
+    } else {
+        l * (1.0 - tint) + tint
+    };
     let (r, g, b) = hsl_to_rgb(h, s, l.clamp(0.0, 1.0));
     let to_hex = |v: f64| format!("{:02X}", (v * 255.0).round().clamp(0.0, 255.0) as u8);
     format!("{}{}{}", to_hex(r), to_hex(g), to_hex(b))
@@ -142,7 +157,11 @@ fn rgb_to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
         return (0.0, 0.0, l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if max == g {
@@ -157,7 +176,11 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
     if s == 0.0 {
         return (l, l, l);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let hue = |mut t: f64| {
         if t < 0.0 {
@@ -194,11 +217,27 @@ mod tests {
     #[test]
     fn resolves_rgb_indexed_theme_and_auto() {
         let theme = Theme::default();
-        assert_eq!(color(r#"<color rgb="FF1F4E78"/>"#, &theme).as_deref(), Some("#1F4E78"));
-        assert_eq!(color(r#"<color indexed="10"/>"#, &theme).as_deref(), Some("#FF0000"));
-        assert_eq!(color(r#"<color indexed="64"/>"#, &theme).as_deref(), Some("#000000"));
-        assert_eq!(color(r#"<color theme="1"/>"#, &theme).as_deref(), Some("#000000"), "theme 1 is dk1");
-        assert_eq!(color(r#"<color theme="4"/>"#, &theme).as_deref(), Some("#4472C4"));
+        assert_eq!(
+            color(r#"<color rgb="FF1F4E78"/>"#, &theme).as_deref(),
+            Some("#1F4E78")
+        );
+        assert_eq!(
+            color(r#"<color indexed="10"/>"#, &theme).as_deref(),
+            Some("#FF0000")
+        );
+        assert_eq!(
+            color(r#"<color indexed="64"/>"#, &theme).as_deref(),
+            Some("#000000")
+        );
+        assert_eq!(
+            color(r#"<color theme="1"/>"#, &theme).as_deref(),
+            Some("#000000"),
+            "theme 1 is dk1"
+        );
+        assert_eq!(
+            color(r#"<color theme="4"/>"#, &theme).as_deref(),
+            Some("#4472C4")
+        );
         assert_eq!(color(r#"<color auto="1"/>"#, &theme), None);
         assert_eq!(color(r#"<color/>"#, &theme), None);
     }
@@ -227,10 +266,26 @@ mod tests {
     fn reads_the_theme_swapping_dark_and_light() {
         let xml = r#"<a:theme xmlns:a="x"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="111111"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FEFEFE"/></a:lt1><a:dk2><a:srgbClr val="0E2841"/></a:dk2><a:lt2><a:srgbClr val="E8E8E8"/></a:lt2><a:accent1><a:srgbClr val="156082"/></a:accent1></a:clrScheme></a:themeElements></a:theme>"#;
         let theme = Theme::parse(xml);
-        assert_eq!(color(r#"<color theme="0"/>"#, &theme).as_deref(), Some("#FEFEFE"));
-        assert_eq!(color(r#"<color theme="1"/>"#, &theme).as_deref(), Some("#111111"));
-        assert_eq!(color(r#"<color theme="3"/>"#, &theme).as_deref(), Some("#0E2841"));
-        assert_eq!(color(r#"<color theme="4"/>"#, &theme).as_deref(), Some("#156082"));
-        assert_eq!(color(r#"<color theme="5"/>"#, &theme).as_deref(), Some("#ED7D31"), "missing accents keep the default");
+        assert_eq!(
+            color(r#"<color theme="0"/>"#, &theme).as_deref(),
+            Some("#FEFEFE")
+        );
+        assert_eq!(
+            color(r#"<color theme="1"/>"#, &theme).as_deref(),
+            Some("#111111")
+        );
+        assert_eq!(
+            color(r#"<color theme="3"/>"#, &theme).as_deref(),
+            Some("#0E2841")
+        );
+        assert_eq!(
+            color(r#"<color theme="4"/>"#, &theme).as_deref(),
+            Some("#156082")
+        );
+        assert_eq!(
+            color(r#"<color theme="5"/>"#, &theme).as_deref(),
+            Some("#ED7D31"),
+            "missing accents keep the default"
+        );
     }
 }

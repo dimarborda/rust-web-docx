@@ -8,7 +8,9 @@ use quick_xml::reader::Reader;
 
 use ooxml_core::xml::{element_ranges, get_attr_value, set_attr, tag_is};
 
-use crate::dates::{is_builtin_date_format, is_date_format_code, DATE_FORMAT_ID, DATE_TIME_FORMAT_ID};
+use crate::dates::{
+    is_builtin_date_format, is_date_format_code, DATE_FORMAT_ID, DATE_TIME_FORMAT_ID,
+};
 
 /// Number formats of the cell formats (`<cellXfs>`) of a stylesheet
 #[derive(Debug, Default)]
@@ -36,7 +38,11 @@ impl Styles {
                     } else if tag_is(name.as_ref(), "cellXfs") {
                         in_cell_xfs = true;
                     } else if in_cell_xfs && tag_is(name.as_ref(), "xf") {
-                        styles.xf_formats.push(get_attr_value(&e, "numFmtId").and_then(|v| v.parse().ok()).unwrap_or(0));
+                        styles.xf_formats.push(
+                            get_attr_value(&e, "numFmtId")
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(0),
+                        );
                     }
                 }
                 Ok(Event::End(e)) if tag_is(e.name().as_ref(), "cellXfs") => in_cell_xfs = false,
@@ -58,7 +64,9 @@ impl Styles {
 
     /// Whether cells with the cell format `xf` (their `s`) show dates
     pub fn is_date_style(&self, xf: u32) -> bool {
-        self.xf_formats.get(xf as usize).is_some_and(|id| self.is_date_format(*id))
+        self.xf_formats
+            .get(xf as usize)
+            .is_some_and(|id| self.is_date_format(*id))
     }
 }
 
@@ -77,23 +85,47 @@ pub fn date_style(xml: &str, base: u32, with_time: bool) -> Result<(u32, Option<
         .ok_or("La hoja de estilos no tiene formatos de celda (<cellXfs>).")?;
     let section = &xml[cell_xfs.clone()];
     let xfs = element_ranges(section, "xf", |_| true)?;
-    let format_id = if with_time { DATE_TIME_FORMAT_ID } else { DATE_FORMAT_ID };
+    let format_id = if with_time {
+        DATE_TIME_FORMAT_ID
+    } else {
+        DATE_FORMAT_ID
+    };
 
     let base_xf = xfs
         .get(base as usize)
         .or(xfs.first())
         .map(|r| &section[r.clone()])
         .unwrap_or(r#"<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>"#);
-    let wanted = set_attr(&set_attr(base_xf, "numFmtId", &format_id.to_string()), "applyNumberFormat", "1");
+    let wanted = set_attr(
+        &set_attr(base_xf, "numFmtId", &format_id.to_string()),
+        "applyNumberFormat",
+        "1",
+    );
     if let Some(existing) = xfs.iter().position(|r| section[r.clone()] == wanted) {
         return Ok((existing as u32, None));
     }
 
     let index = xfs.len() as u32;
-    let insert_at = xfs.last().map(|r| r.end).ok_or("La hoja de estilos no tiene formatos de celda (<xf>).")?;
-    let mut new_section = format!("{}{}{}", &section[..insert_at], wanted, &section[insert_at..]);
+    let insert_at = xfs
+        .last()
+        .map(|r| r.end)
+        .ok_or("La hoja de estilos no tiene formatos de celda (<xf>).")?;
+    let mut new_section = format!(
+        "{}{}{}",
+        &section[..insert_at],
+        wanted,
+        &section[insert_at..]
+    );
     new_section = set_attr(&new_section, "count", &(index + 1).to_string());
-    Ok((index, Some(format!("{}{}{}", &xml[..cell_xfs.start], new_section, &xml[cell_xfs.end..]))))
+    Ok((
+        index,
+        Some(format!(
+            "{}{}{}",
+            &xml[..cell_xfs.start],
+            new_section,
+            &xml[cell_xfs.end..]
+        )),
+    ))
 }
 
 #[cfg(test)]
@@ -105,7 +137,10 @@ mod tests {
     #[test]
     fn knows_which_styles_show_dates() {
         let styles = Styles::parse(STYLES).unwrap();
-        assert!(!styles.is_date_style(0), "cellStyleXfs are not cell formats");
+        assert!(
+            !styles.is_date_style(0),
+            "cellStyleXfs are not cell formats"
+        );
         assert!(styles.is_date_style(1));
         assert!(!styles.is_date_style(2));
         assert!(!styles.is_date_style(9));
@@ -120,6 +155,10 @@ mod tests {
         assert!(xml.contains(r#"<cellXfs count="4">"#), "{}", xml);
         assert!(xml.contains(r#"<xf numFmtId="22" fontId="2" xfId="0" applyNumberFormat="1"><alignment horizontal="left"/></xf></cellXfs>"#), "{}", xml);
         assert!(Styles::parse(&xml).unwrap().is_date_style(3));
-        assert_eq!(date_style(&xml, 2, true).unwrap(), (3, None), "reuses the format it added");
+        assert_eq!(
+            date_style(&xml, 2, true).unwrap(),
+            (3, None),
+            "reuses the format it added"
+        );
     }
 }

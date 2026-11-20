@@ -130,10 +130,13 @@ fn read_section(tokens: &[Token], start: usize, end: usize) -> Option<SectionLoc
             let pr_end = element_end(tokens, i);
             properties = Some(tokens[i].span.start..tokens[pr_end].span.end);
             for t in &tokens[i + 1..pr_end] {
-                let (Event::Start(e) | Event::Empty(e)) = &t.ev else { continue };
+                let (Event::Start(e) | Event::Empty(e)) = &t.ev else {
+                    continue;
+                };
                 let name = e.name();
                 if tag_is(name.as_ref(), "tag") {
-                    key = get_attr_value(e, "val").and_then(|v| v.strip_prefix(SECTION_TAG_PREFIX).map(str::to_string));
+                    key = get_attr_value(e, "val")
+                        .and_then(|v| v.strip_prefix(SECTION_TAG_PREFIX).map(str::to_string));
                 } else if tag_is(name.as_ref(), "alias") {
                     title = get_attr_value(e, "val").filter(|v| !v.trim().is_empty());
                 } else if tag_is(name.as_ref(), "lock") {
@@ -175,7 +178,9 @@ pub(super) fn check_section_key(key: &str) -> Result<(), String> {
     let valid = !key.is_empty()
         && key.chars().count() <= MAX_KEY_CHARS
         && key.chars().next().is_some_and(char::is_alphanumeric)
-        && key.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        && key
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
     if valid {
         Ok(())
     } else {
@@ -211,7 +216,11 @@ pub fn section_key_from_title(title: &str) -> String {
             key.push('-');
         }
     }
-    let key: String = key.trim_end_matches('-').chars().take(MAX_KEY_CHARS).collect();
+    let key: String = key
+        .trim_end_matches('-')
+        .chars()
+        .take(MAX_KEY_CHARS)
+        .collect();
     let key = key.trim_end_matches('-').to_string();
     if key.is_empty() {
         "seccion".to_string()
@@ -307,7 +316,12 @@ fn block_span(
 ) -> Result<Range<usize>, String> {
     let (mut start, mut end) = match (paragraphs.get(from), paragraphs.get(to)) {
         (Some(a), Some(b)) => (a.start, b.end),
-        _ => return Err(format!("El rango {}–{} no existe en el documento.", from, to)),
+        _ => {
+            return Err(format!(
+                "El rango {}–{} no existe en el documento.",
+                from, to
+            ))
+        }
     };
     for table in tables {
         let within = |pos: usize| pos > table.start && pos < table.end;
@@ -353,7 +367,10 @@ fn block_span(
         return Err("El rango corta otra sección o un control de contenido; amplíalo para incluirlos completos o redúcelo para quedar dentro.".to_string());
     }
     if has_section_break(&xml[start..end]) {
-        return Err("El rango incluye un salto de sección de Word; una sección lógica no puede contenerlo.".to_string());
+        return Err(
+            "El rango incluye un salto de sección de Word; una sección lógica no puede contenerlo."
+                .to_string(),
+        );
     }
     Ok(start..end)
 }
@@ -414,7 +431,9 @@ impl SdtIds {
 
 /// Byte position at the end of the body, before its final `w:sectPr`
 fn body_end(xml: &str) -> Result<usize, String> {
-    let end = xml.rfind("</w:body>").ok_or("El documento no tiene cuerpo (w:body).")?;
+    let end = xml
+        .rfind("</w:body>")
+        .ok_or("El documento no tiene cuerpo (w:body).")?;
     match xml[..end].rfind("<w:sectPr") {
         // The body's own sectPr is its last child: no paragraph closes after it
         Some(at) if !xml[at..end].contains("</w:p>") => Ok(at),
@@ -440,7 +459,11 @@ impl DocxModifier {
                     // Paragraph ranges are sorted: binary search the first and last inside
                     let a = paragraphs.partition_point(|r| r.start < c.start);
                     let b = paragraphs.partition_point(|r| r.end <= c.end);
-                    if a < b { (Some(a), Some(b - 1)) } else { (None, None) }
+                    if a < b {
+                        (Some(a), Some(b - 1))
+                    } else {
+                        (None, None)
+                    }
                 }
                 None => (None, None),
             };
@@ -512,10 +535,25 @@ impl DocxModifier {
         }
         let (from, to) = if to < from { (to, from) } else { (from, to) };
         let paragraphs = body_paragraph_ranges(&xml)?;
-        let span = block_span(&xml, &paragraphs, &body_table_spans(&tokens), &body_sdt_spans(&tokens), from, to)?;
+        let span = block_span(
+            &xml,
+            &paragraphs,
+            &body_table_spans(&tokens),
+            &body_sdt_spans(&tokens),
+            from,
+            to,
+        )?;
         let id = SdtIds::new(&xml).next(key);
-        let title = title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(key);
-        let wrapped = format!("{}{}{}", section_open(key, title, id, locked, content_locked), &xml[span.clone()], SECTION_CLOSE);
+        let title = title
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(key);
+        let wrapped = format!(
+            "{}{}{}",
+            section_open(key, title, id, locked, content_locked),
+            &xml[span.clone()],
+            SECTION_CLOSE
+        );
         xml.replace_range(span, &wrapped);
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
         self.section_info(key)
@@ -536,7 +574,12 @@ impl DocxModifier {
     /// lock). `keep_heading`: a heading paragraph opening the section stays and the items go
     /// after it. Sections nested in the replaced content go away with it. Returns the first
     /// new paragraph and the caret after the last one.
-    pub fn replace_section(&mut self, key: &str, items: &[NewParagraph], keep_heading: bool) -> Result<(usize, (usize, usize)), String> {
+    pub fn replace_section(
+        &mut self,
+        key: &str,
+        items: &[NewParagraph],
+        keep_heading: bool,
+    ) -> Result<(usize, (usize, usize)), String> {
         if items.is_empty() {
             return Err("No hay párrafos para insertar.".to_string());
         }
@@ -577,7 +620,12 @@ impl DocxModifier {
 
     /// Sets a section's locks: `locked`, it cannot be deleted; `content_locked`, its content
     /// cannot be edited by hand (Word and this editor; code still can fill it)
-    pub fn set_section_lock(&mut self, key: &str, locked: bool, content_locked: bool) -> Result<SectionInfo, String> {
+    pub fn set_section_lock(
+        &mut self,
+        key: &str,
+        locked: bool,
+        content_locked: bool,
+    ) -> Result<SectionInfo, String> {
         let mut xml = self.get_file_string("word/document.xml")?;
         let loc = Self::find_section(&xml, key)?;
         let pr = &xml[loc.properties.clone()];
@@ -599,7 +647,10 @@ impl DocxModifier {
                 continue;
             }
             out.push_str(piece);
-            if ["rPr", "alias", "tag", "id"].iter().any(|n| is_element(tok, n)) {
+            if ["rPr", "alias", "tag", "id"]
+                .iter()
+                .any(|n| is_element(tok, n))
+            {
                 insert_at = Some(out.len());
             }
             i = end + 1;
@@ -627,7 +678,10 @@ impl DocxModifier {
             return Err("Una sección nueva necesita al menos un párrafo.".to_string());
         }
         let mut xml = self.get_file_string("word/document.xml")?;
-        if locate_sections(&tokenize(&xml)?).iter().any(|l| l.key == key) {
+        if locate_sections(&tokenize(&xml)?)
+            .iter()
+            .any(|l| l.key == key)
+        {
             return Err(format!("Ya existe una sección con la clave «{}».", key));
         }
         let at = match place {
@@ -635,15 +689,27 @@ impl DocxModifier {
             SectionPlace::Before(k) => Self::find_section(&xml, k)?.element.start,
             SectionPlace::Inside(k) => {
                 let loc = Self::find_section(&xml, k)?;
-                loc.content.map(|c| c.end).ok_or_else(|| format!("La sección «{}» está vacía; usa after o before.", k))?
+                loc.content
+                    .map(|c| c.end)
+                    .ok_or_else(|| format!("La sección «{}» está vacía; usa after o before.", k))?
             }
             SectionPlace::End => body_end(&xml)?,
         };
-        let index = body_paragraph_ranges(&xml)?.iter().filter(|r| r.end <= at).count();
+        let index = body_paragraph_ranges(&xml)?
+            .iter()
+            .filter(|r| r.end <= at)
+            .count();
         xml.insert_str(at, "<w:p/>");
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
         let (first, _) = self.insert_paragraphs(index, 0, items)?;
-        let info = self.define_section(key, first, first + items.len() - 1, title, locked, content_locked)?;
+        let info = self.define_section(
+            key,
+            first,
+            first + items.len() - 1,
+            title,
+            locked,
+            content_locked,
+        )?;
         Ok((info, first))
     }
 
@@ -652,7 +718,11 @@ impl DocxModifier {
     /// text ("2. Caracterización" → "caracterizacion"). Lower levels nest in higher ones.
     /// Headings whose part is already a section, or whose range would cut a table, another
     /// content control or hold a section break, are skipped and reported.
-    pub fn sections_from_headings(&mut self, from_level: u32, to_level: u32) -> Result<HeadingSections, String> {
+    pub fn sections_from_headings(
+        &mut self,
+        from_level: u32,
+        to_level: u32,
+    ) -> Result<HeadingSections, String> {
         if from_level == 0 || to_level < from_level || to_level > 9 {
             return Err("Los niveles de título van de 1 a 9 (p. ej. de 1 a 2).".to_string());
         }
@@ -663,13 +733,17 @@ impl DocxModifier {
         let sdts = body_sdt_spans(&tokens);
         let existing = locate_sections(&tokens);
         let infos = self.sections()?;
-        let mut taken: std::collections::HashSet<String> = existing.iter().map(|l| l.key.clone()).collect();
+        let mut taken: std::collections::HashSet<String> =
+            existing.iter().map(|l| l.key.clone()).collect();
         // Headings of the body (not in tables or text boxes), with their 1-based level
         let headings: Vec<(usize, u32, String)> = self
             .extract_paragraphs()?
             .into_iter()
             .filter(|p| p.index < paragraphs.len())
-            .filter_map(|p| p.outline_level.map(|l| (p.index, l + 1, p.text.trim().to_string())))
+            .filter_map(|p| {
+                p.outline_level
+                    .map(|l| (p.index, l + 1, p.text.trim().to_string()))
+            })
             .filter(|(_, l, _)| *l <= 9)
             .collect();
         let mut ids = SdtIds::new(&xml);
@@ -679,7 +753,11 @@ impl DocxModifier {
             if *level < from_level || *level > to_level {
                 continue;
             }
-            let skip = |reason: String| SkippedHeading { paragraph: *index, text: text.clone(), reason };
+            let skip = |reason: String| SkippedHeading {
+                paragraph: *index,
+                text: text.clone(),
+                reason,
+            };
             // Up to the next heading of the same or a higher level, within the section (or
             // table cell…) that holds the heading
             let mut last = headings[n + 1..]
@@ -694,10 +772,17 @@ impl DocxModifier {
                 .filter(|c| c.start <= start && start < c.end)
                 .min_by_key(|c| c.end - c.start)
             {
-                last = last.min(paragraphs.partition_point(|r| r.end <= container.end).saturating_sub(1));
+                last = last.min(
+                    paragraphs
+                        .partition_point(|r| r.end <= container.end)
+                        .saturating_sub(1),
+                );
             }
             // A section that already spans exactly this heading's part is the same section
-            if let Some(s) = infos.iter().find(|s| s.first == Some(*index) && s.last == Some(last)) {
+            if let Some(s) = infos
+                .iter()
+                .find(|s| s.first == Some(*index) && s.last == Some(last))
+            {
                 skipped.push(skip(format!("ya abre la sección «{}»", s.key)));
                 continue;
             }
@@ -710,7 +795,11 @@ impl DocxModifier {
             };
             let key = unique_key(&section_key_from_title(text), &taken);
             taken.insert(key.clone());
-            let title = if text.is_empty() { key.clone() } else { text.clone() };
+            let title = if text.is_empty() {
+                key.clone()
+            } else {
+                text.clone()
+            };
             let opening = section_open(&key, &title, ids.next(&key), false, false);
             created.push((key, span, opening));
         }
@@ -724,7 +813,8 @@ impl DocxModifier {
                 inserts.push((span.end, 0, std::cmp::Reverse(span.start), SECTION_CLOSE));
             }
             inserts.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
-            let mut out = String::with_capacity(xml.len() + inserts.iter().map(|i| i.3.len()).sum::<usize>());
+            let mut out =
+                String::with_capacity(xml.len() + inserts.iter().map(|i| i.3.len()).sum::<usize>());
             let mut pos = 0;
             for (at, _, _, piece) in inserts {
                 out.push_str(&xml[pos..at]);
@@ -734,8 +824,13 @@ impl DocxModifier {
             out.push_str(&xml[pos..]);
             self.put_file("word/document.xml".to_string(), out.into_bytes());
         }
-        let keys: std::collections::HashSet<&str> = created.iter().map(|(k, _, _)| k.as_str()).collect();
-        let created = self.sections()?.into_iter().filter(|s| keys.contains(s.key.as_str())).collect();
+        let keys: std::collections::HashSet<&str> =
+            created.iter().map(|(k, _, _)| k.as_str()).collect();
+        let created = self
+            .sections()?
+            .into_iter()
+            .filter(|s| keys.contains(s.key.as_str()))
+            .collect();
         Ok(HeadingSections { created, skipped })
     }
 }

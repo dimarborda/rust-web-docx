@@ -4,20 +4,30 @@
 //! Child module of `docx_parser` so it can work on the package parts directly.
 
 use super::*;
-use crate::paragraph_edit::{edit_paragraph, parse_paragraph_fragment, set_paragraph_attrs, set_paragraph_property, FormatTarget};
+use crate::paragraph_edit::{
+    edit_paragraph, parse_paragraph_fragment, set_paragraph_attrs, set_paragraph_property,
+    FormatTarget,
+};
 use crate::styles::{NumDef, Style};
 use ooxml_core::content_types;
 use ooxml_core::rels::{rels_part_for, with_relationship};
 
 const NUMBERING: &str = "word/numbering.xml";
 const DOCUMENT: &str = "word/document.xml";
-const REL_NUMBERING: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
-const MIME_NUMBERING: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
+const REL_NUMBERING: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
+const MIME_NUMBERING: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml";
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 /// Built-in styles the gallery always offers (created on first use when the document lacks
 /// them): (id, Word's built-in name)
-const BUILT_IN: &[(&str, &str)] = &[("Title", "title"), ("Heading1", "heading 1"), ("Heading2", "heading 2"), ("Heading3", "heading 3")];
+const BUILT_IN: &[(&str, &str)] = &[
+    ("Title", "title"),
+    ("Heading1", "heading 1"),
+    ("Heading2", "heading 2"),
+    ("Heading3", "heading 3"),
+];
 
 /// One entry of the paragraph style gallery
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -50,12 +60,19 @@ impl DocxModifier {
         styles.sort_by(|a, b| {
             let pa = a.ui_priority.unwrap_or(99);
             let pb = b.ui_priority.unwrap_or(99);
-            pa.cmp(&pb).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            pa.cmp(&pb)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
         let builtin = |name: &str| {
             let n = name.to_lowercase();
-            let known = n == "normal" || n == "title" || n == "subtitle" || n == "quote" || n == "intense quote"
-                || n == "list paragraph" || n == "no spacing" || n.starts_with("heading ");
+            let known = n == "normal"
+                || n == "title"
+                || n == "subtitle"
+                || n == "quote"
+                || n == "intense quote"
+                || n == "list paragraph"
+                || n == "no spacing"
+                || n.starts_with("heading ");
             known.then_some(n)
         };
         let default_id = self.styles.default_paragraph_style.clone();
@@ -63,19 +80,35 @@ impl DocxModifier {
         // The default paragraph style first, even when it is not marked as a quick style
         if let Some(id) = &default_id {
             if let Some(s) = self.styles.styles.get(id) {
-                out.push(StyleEntry { id: id.clone(), name: s.name.clone(), builtin: Some("normal".to_string()) });
+                out.push(StyleEntry {
+                    id: id.clone(),
+                    name: s.name.clone(),
+                    builtin: Some("normal".to_string()),
+                });
             }
         } else {
-            out.push(StyleEntry { id: "Normal".to_string(), name: "Normal".to_string(), builtin: Some("normal".to_string()) });
+            out.push(StyleEntry {
+                id: "Normal".to_string(),
+                name: "Normal".to_string(),
+                builtin: Some("normal".to_string()),
+            });
         }
         for s in styles {
             if Some(&s.id) != default_id.as_ref() {
-                out.push(StyleEntry { id: s.id.clone(), name: s.name.clone(), builtin: builtin(&s.name) });
+                out.push(StyleEntry {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    builtin: builtin(&s.name),
+                });
             }
         }
         for (id, name) in BUILT_IN {
             if !out.iter().any(|e| e.builtin.as_deref() == Some(name)) {
-                out.push(StyleEntry { id: id.to_string(), name: name.to_string(), builtin: Some(name.to_string()) });
+                out.push(StyleEntry {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    builtin: Some(name.to_string()),
+                });
             }
         }
         out
@@ -84,18 +117,29 @@ impl DocxModifier {
     /// Applies paragraph style `id` (an id from `paragraph_styles`) to the paragraphs.
     /// The default style removes `w:pStyle`; Title and Heading 1–3 are created if missing.
     pub fn set_paragraph_style(&mut self, indices: &[usize], id: &str) -> Result<(), String> {
-        let is_default = id.is_empty() || self.styles.default_paragraph_style.as_deref() == Some(id)
+        let is_default = id.is_empty()
+            || self.styles.default_paragraph_style.as_deref() == Some(id)
             || (id == "Normal" && !self.styles.styles.contains_key(id));
         let style_id = if is_default {
             None
-        } else if self.styles.styles.get(id).is_some_and(|s| s.kind == "paragraph") {
+        } else if self
+            .styles
+            .styles
+            .get(id)
+            .is_some_and(|s| s.kind == "paragraph")
+        {
             Some(id.to_string())
         } else if BUILT_IN.iter().any(|(b, _)| *b == id) {
             Some(self.ensure_heading_style(id)?)
         } else {
-            return Err(format!("El documento no tiene el estilo de párrafo «{}».", id));
+            return Err(format!(
+                "El documento no tiene el estilo de párrafo «{}».",
+                id
+            ));
         };
-        let element = style_id.as_ref().map(|id| format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(id)));
+        let element = style_id
+            .as_ref()
+            .map(|id| format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(id)));
         self.edit_paragraphs_each(indices, |_, _, p| {
             let mut edited = set_paragraph_property(p, "pStyle", element.as_deref())?;
             // A direct outline level would keep a paragraph that is no longer a heading in
@@ -113,12 +157,24 @@ impl DocxModifier {
         }
         let line = ((multiple * 240.0).round() as i64).to_string();
         self.edit_paragraphs_each(indices, |_, _, p| {
-            set_paragraph_attrs(p, "spacing", &[("line", Some(line.clone())), ("lineRule", Some("auto".to_string()))])
+            set_paragraph_attrs(
+                p,
+                "spacing",
+                &[
+                    ("line", Some(line.clone())),
+                    ("lineRule", Some("auto".to_string())),
+                ],
+            )
         })
     }
 
     /// Space before and after the paragraphs, in points (`None` keeps the current value)
-    pub fn set_paragraph_spacing(&mut self, indices: &[usize], before: Option<f64>, after: Option<f64>) -> Result<(), String> {
+    pub fn set_paragraph_spacing(
+        &mut self,
+        indices: &[usize],
+        before: Option<f64>,
+        after: Option<f64>,
+    ) -> Result<(), String> {
         let twips = |pt: f64| ((pt.max(0.0) * 20.0).round() as i64).to_string();
         let mut changes: Vec<(&str, Option<String>)> = Vec::new();
         if let Some(b) = before {
@@ -134,7 +190,9 @@ impl DocxModifier {
         if changes.is_empty() {
             return Ok(());
         }
-        self.edit_paragraphs_each(indices, |_, _, p| set_paragraph_attrs(p, "spacing", &changes))
+        self.edit_paragraphs_each(indices, |_, _, p| {
+            set_paragraph_attrs(p, "spacing", &changes)
+        })
     }
 
     /// Increase (`steps` > 0) or decrease indent, as Word's buttons: list items move to the
@@ -160,7 +218,11 @@ impl DocxModifier {
                     } else {
                         ((current + step - 1) / step + steps as i64).max(0) * step
                     };
-                    set_paragraph_attrs(p, "ind", &[("left", Some(next.max(0).to_string())), ("start", None)])
+                    set_paragraph_attrs(
+                        p,
+                        "ind",
+                        &[("left", Some(next.max(0).to_string())), ("start", None)],
+                    )
                 }
             }
         })
@@ -173,7 +235,9 @@ impl DocxModifier {
         let mut sorted: Vec<usize> = indices.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        let Some(&first) = sorted.first() else { return Ok(()) };
+        let Some(&first) = sorted.first() else {
+            return Ok(());
+        };
         let list_style = self.list_paragraph_style();
         let default_style = self.styles.default_paragraph_style.clone();
 
@@ -192,14 +256,22 @@ impl DocxModifier {
             });
         }
         if kind != "bullet" && kind != "number" {
-            return Err(format!("Tipo de lista no válido: {}. Usa bullet, number o none.", kind));
+            return Err(format!(
+                "Tipo de lista no válido: {}. Usa bullet, number o none.",
+                kind
+            ));
         }
 
         // Continue the list right above (Word does the same when it has the same kind)
         let previous = first
             .checked_sub(1)
             .filter(|i| *i < TEXT_BOX_BASE && first < TEXT_BOX_BASE)
-            .and_then(|i| self.extract_paragraphs().ok()?.into_iter().find(|p| p.index == i))
+            .and_then(|i| {
+                self.extract_paragraphs()
+                    .ok()?
+                    .into_iter()
+                    .find(|p| p.index == i)
+            })
             .filter(|p| p.list_kind.as_deref() == Some(kind))
             .and_then(|p| p.num_id);
         let num_id = match previous {
@@ -211,9 +283,15 @@ impl DocxModifier {
             // Switching between bullets and numbers keeps the level
             let level = info.list_level.unwrap_or(0);
             let mut edited = set_paragraph_property(p, "numPr", Some(&num_pr(&num_id, level)))?;
-            let plain = info.style.is_empty() || Some(&info.style) == default_style.as_ref() || info.style == "Normal";
+            let plain = info.style.is_empty()
+                || Some(&info.style) == default_style.as_ref()
+                || info.style == "Normal";
             if let (true, Some(ls)) = (plain, list_style.as_deref()) {
-                edited = set_paragraph_property(&edited, "pStyle", Some(&format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(ls))))?;
+                edited = set_paragraph_property(
+                    &edited,
+                    "pStyle",
+                    Some(&format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(ls))),
+                )?;
             }
             Ok(edited)
         })
@@ -221,8 +299,18 @@ impl DocxModifier {
 
     /// Removes the direct character formatting (font, size, bold, italic, underline,
     /// strikethrough, superscript/subscript, color, highlight) from (`p1`, `o1`) to (`p2`, `o2`)
-    pub fn clear_formatting(&mut self, p1: usize, o1: usize, p2: usize, o2: usize) -> Result<(), String> {
-        let ((p1, o1), (p2, o2)) = if (p2, o2) < (p1, o1) { ((p2, o2), (p1, o1)) } else { ((p1, o1), (p2, o2)) };
+    pub fn clear_formatting(
+        &mut self,
+        p1: usize,
+        o1: usize,
+        p2: usize,
+        o2: usize,
+    ) -> Result<(), String> {
+        let ((p1, o1), (p2, o2)) = if (p2, o2) < (p1, o1) {
+            ((p2, o2), (p1, o1))
+        } else {
+            ((p1, o1), (p2, o2))
+        };
         let indices: Vec<usize> = (p1..=p2).collect();
         self.edit_paragraphs_each(&indices, |styles, i, p| {
             let info = parse_paragraph_fragment(p, styles);
@@ -237,7 +325,10 @@ impl DocxModifier {
                 for _ in run.text.chars() {
                     let at = formats.len();
                     formats.push(if at >= start && at < end {
-                        FormatTarget { clear: true, ..Default::default() }
+                        FormatTarget {
+                            clear: true,
+                            ..Default::default()
+                        }
                     } else {
                         FormatTarget::from_run(run)
                     });
@@ -260,27 +351,43 @@ impl DocxModifier {
     /// gets its own `w:num` restarting at 1. Creates numbering.xml when the document has none.
     fn new_list(&mut self, kind: &str) -> Result<String, String> {
         let numbering = &self.styles.numbering;
-        let level0 = |num: &NumDef| numbering.abstracts.get(&num.abstract_id).and_then(|l| l.get(&0));
+        let level0 = |num: &NumDef| {
+            numbering
+                .abstracts
+                .get(&num.abstract_id)
+                .and_then(|l| l.get(&0))
+        };
         let is_bullet = |num: &NumDef| level0(num).is_some_and(|l| l.fmt == "bullet");
-        let is_decimal = |num: &NumDef| level0(num).is_some_and(|l| l.fmt == "decimal" && l.text == "%1.");
+        let is_decimal =
+            |num: &NumDef| level0(num).is_some_and(|l| l.fmt == "decimal" && l.text == "%1.");
 
         if kind == "bullet" {
             // An existing bullet list definition keeps the document's own look
-            let mut ids: Vec<(&String, &NumDef)> = numbering.nums.iter().filter(|(_, n)| is_bullet(n)).collect();
+            let mut ids: Vec<(&String, &NumDef)> = numbering
+                .nums
+                .iter()
+                .filter(|(_, n)| is_bullet(n))
+                .collect();
             ids.sort_by_key(|(id, _)| id.parse::<i64>().unwrap_or(i64::MAX));
             if let Some((id, _)) = ids.first() {
                 return Ok((*id).clone());
             }
         }
         let existing_abstract = if kind == "number" {
-            let mut found: Vec<&NumDef> = numbering.nums.values().filter(|n| is_decimal(n)).collect();
+            let mut found: Vec<&NumDef> =
+                numbering.nums.values().filter(|n| is_decimal(n)).collect();
             found.sort_by_key(|n| n.abstract_id.parse::<i64>().unwrap_or(i64::MAX));
             found.first().map(|n| n.abstract_id.clone())
         } else {
             None
         };
 
-        let next_id = |ids: Vec<&String>| ids.iter().filter_map(|id| id.parse::<i64>().ok()).max().map_or(1, |m| m + 1);
+        let next_id = |ids: Vec<&String>| {
+            ids.iter()
+                .filter_map(|id| id.parse::<i64>().ok())
+                .max()
+                .map_or(1, |m| m + 1)
+        };
         let next_abstract = next_id(self.styles.numbering.abstracts.keys().collect()).to_string();
         let next_num = next_id(self.styles.numbering.nums.keys().collect()).to_string();
 
@@ -296,7 +403,9 @@ impl DocxModifier {
             None => {
                 let id = next_abstract;
                 let definition = abstract_num(&id, kind);
-                let at = find_tag(&xml, "num").or_else(|| find_tag(&xml, "numIdMacAtCleanup")).or_else(|| xml.rfind("</w:numbering>"))
+                let at = find_tag(&xml, "num")
+                    .or_else(|| find_tag(&xml, "numIdMacAtCleanup"))
+                    .or_else(|| xml.rfind("</w:numbering>"))
                     .ok_or("La numeración del documento no es válida.")?;
                 xml.insert_str(at, &definition);
                 id
@@ -308,8 +417,13 @@ impl DocxModifier {
         } else {
             ""
         };
-        let num = format!(r#"<w:num w:numId="{}"><w:abstractNumId w:val="{}"/>{}</w:num>"#, num_id, abstract_id, restart);
-        let at = find_tag(&xml, "numIdMacAtCleanup").or_else(|| xml.rfind("</w:numbering>")).ok_or("La numeración del documento no es válida.")?;
+        let num = format!(
+            r#"<w:num w:numId="{}"><w:abstractNumId w:val="{}"/>{}</w:num>"#,
+            num_id, abstract_id, restart
+        );
+        let at = find_tag(&xml, "numIdMacAtCleanup")
+            .or_else(|| xml.rfind("</w:numbering>"))
+            .ok_or("La numeración del documento no es válida.")?;
         xml.insert_str(at, &num);
         self.put_file(NUMBERING.to_string(), xml.into_bytes());
         self.reload_styles();
@@ -347,13 +461,17 @@ impl DocxModifier {
         let mut sorted: Vec<usize> = indices.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        let (body, other): (Vec<usize>, Vec<usize>) = sorted.into_iter().partition(|i| *i < TEXT_BOX_BASE);
+        let (body, other): (Vec<usize>, Vec<usize>) =
+            sorted.into_iter().partition(|i| *i < TEXT_BOX_BASE);
         if !body.is_empty() {
             let original = self.get_file_string(DOCUMENT)?;
             let mut xml = original.clone();
             let ranges = body_paragraph_ranges(&xml)?;
             for i in body.iter().rev() {
-                let range = ranges.get(*i).cloned().ok_or_else(|| format!("No existe el párrafo {}.", i))?;
+                let range = ranges
+                    .get(*i)
+                    .cloned()
+                    .ok_or_else(|| format!("No existe el párrafo {}.", i))?;
                 let edited = f(&self.styles, *i, &xml[range.clone()])?;
                 xml.replace_range(range, &edited);
             }
@@ -374,7 +492,11 @@ impl DocxModifier {
 }
 
 fn num_pr(num_id: &str, level: u32) -> String {
-    format!(r#"<w:numPr><w:ilvl w:val="{}"/><w:numId w:val="{}"/></w:numPr>"#, level, escape_xml(num_id))
+    format!(
+        r#"<w:numPr><w:ilvl w:val="{}"/><w:numId w:val="{}"/></w:numPr>"#,
+        level,
+        escape_xml(num_id)
+    )
 }
 
 /// Byte offset of the first `<w:tag ` / `<w:tag>` element
@@ -414,7 +536,13 @@ mod tests {
     /// A blank document (no numbering part) with `texts` as its paragraphs
     fn doc(texts: &[&str]) -> DocxModifier {
         let mut m = DocxModifier::from_bytes(&generate_blank_docx(PageSize::A4).unwrap()).unwrap();
-        let items: Vec<NewParagraph> = texts.iter().map(|t| NewParagraph { text: t.to_string(), ..Default::default() }).collect();
+        let items: Vec<NewParagraph> = texts
+            .iter()
+            .map(|t| NewParagraph {
+                text: t.to_string(),
+                ..Default::default()
+            })
+            .collect();
         m.replace_paragraphs(0, 0, &items).unwrap();
         m
     }
@@ -433,9 +561,18 @@ mod tests {
         assert_eq!(ps[0].list_kind.as_deref(), Some("bullet"));
         assert_eq!(ps[1].list_kind.as_deref(), Some("bullet"));
         assert_eq!(ps[2].list_kind, None);
-        assert_eq!(ps[0].list_label.as_ref().map(|l| l.text.as_str()), Some("•"));
-        assert!(m.get_file_string("[Content_Types].xml").unwrap().contains("/word/numbering.xml"));
-        assert!(m.get_file_string("word/_rels/document.xml.rels").unwrap().contains("numbering.xml"));
+        assert_eq!(
+            ps[0].list_label.as_ref().map(|l| l.text.as_str()),
+            Some("•")
+        );
+        assert!(m
+            .get_file_string("[Content_Types].xml")
+            .unwrap()
+            .contains("/word/numbering.xml"));
+        assert!(m
+            .get_file_string("word/_rels/document.xml.rels")
+            .unwrap()
+            .contains("numbering.xml"));
         // The level's indent applies: 0.5" = 48 px
         assert_eq!(ps[0].indent_left, 48.0);
     }
@@ -445,7 +582,12 @@ mod tests {
         let mut m = doc(&["a", "b", "texto", "c", "d"]);
         m.set_list(&[0, 1], "number").unwrap();
         m.set_list(&[3, 4], "number").unwrap();
-        let labels: Vec<Option<String>> = m.extract_paragraphs().unwrap().into_iter().map(|p| p.list_label.map(|l| l.text)).collect();
+        let labels: Vec<Option<String>> = m
+            .extract_paragraphs()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.list_label.map(|l| l.text))
+            .collect();
         assert_eq!(labels[0].as_deref(), Some("1."));
         assert_eq!(labels[1].as_deref(), Some("2."));
         assert_eq!(labels[2], None);
@@ -458,7 +600,10 @@ mod tests {
         m.set_list(&[0, 1], "number").unwrap();
         m.set_list(&[2], "number").unwrap();
         let ps = m.extract_paragraphs().unwrap();
-        assert_eq!(ps[2].list_label.as_ref().map(|l| l.text.as_str()), Some("3."));
+        assert_eq!(
+            ps[2].list_label.as_ref().map(|l| l.text.as_str()),
+            Some("3.")
+        );
         assert_eq!(ps[0].num_id, ps[2].num_id);
     }
 
@@ -469,7 +614,10 @@ mod tests {
         m.change_indent(&[1], 1).unwrap();
         let ps = m.extract_paragraphs().unwrap();
         assert_eq!(ps[1].list_level, Some(1));
-        assert_eq!(ps[1].list_label.as_ref().map(|l| l.text.as_str()), Some("a."));
+        assert_eq!(
+            ps[1].list_label.as_ref().map(|l| l.text.as_str()),
+            Some("a.")
+        );
         m.change_indent(&[1], -3).unwrap();
         assert_eq!(m.extract_paragraphs().unwrap()[1].list_level, Some(0));
 
@@ -477,11 +625,16 @@ mod tests {
         m.change_indent(&[1], 1).unwrap();
         m.set_list(&[1], "bullet").unwrap();
         let ps = m.extract_paragraphs().unwrap();
-        assert_eq!((ps[1].list_kind.as_deref(), ps[1].list_level), (Some("bullet"), Some(1)));
+        assert_eq!(
+            (ps[1].list_kind.as_deref(), ps[1].list_level),
+            (Some("bullet"), Some(1))
+        );
 
         m.set_list(&[0, 1], "none").unwrap();
         let ps = m.extract_paragraphs().unwrap();
-        assert!(ps.iter().all(|p| p.num_id.is_none() && p.list_label.is_none()));
+        assert!(ps
+            .iter()
+            .all(|p| p.num_id.is_none() && p.list_label.is_none()));
         assert!(!m.get_file_string(DOCUMENT).unwrap().contains("numPr"));
     }
 
@@ -494,7 +647,10 @@ mod tests {
         assert!(m.get_file_string(NUMBERING).is_err());
         assert_eq!(m.extract_paragraphs().unwrap()[0].list_kind, None);
         assert!(m.redo().is_some());
-        assert_eq!(m.extract_paragraphs().unwrap()[0].list_kind.as_deref(), Some("bullet"));
+        assert_eq!(
+            m.extract_paragraphs().unwrap()[0].list_kind.as_deref(),
+            Some("bullet")
+        );
     }
 
     #[test]
@@ -508,15 +664,25 @@ mod tests {
         m.update_paragraph_runs(0, &[run], None).unwrap();
         m.clear_formatting(0, 4, 0, 7).unwrap();
         let p = &m.extract_paragraphs().unwrap()[0];
-        let got: Vec<(&str, bool, bool, Option<&str>)> =
-            p.runs.iter().map(|r| (r.text.as_str(), r.bold, r.strike, r.highlight.as_deref())).collect();
+        let got: Vec<(&str, bool, bool, Option<&str>)> = p
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), r.bold, r.strike, r.highlight.as_deref()))
+            .collect();
         assert_eq!(
             got,
-            vec![("uno ", true, true, Some("FFFF00")), ("dos", false, false, None), (" tres", true, true, Some("FFFF00"))]
+            vec![
+                ("uno ", true, true, Some("FFFF00")),
+                ("dos", false, false, None),
+                (" tres", true, true, Some("FFFF00"))
+            ]
         );
         // The style's size shows again
         assert_ne!(p.runs[1].font_size, Some(20.0));
-        assert!(!m.get_file_string(DOCUMENT).unwrap().contains(r#"<w:b w:val="0"/>"#));
+        assert!(!m
+            .get_file_string(DOCUMENT)
+            .unwrap()
+            .contains(r#"<w:b w:val="0"/>"#));
     }
 
     #[test]
@@ -538,7 +704,10 @@ mod tests {
         let p = &m.extract_paragraphs().unwrap()[0];
         assert_eq!(p.line_spacing, Some(1.5));
         assert_eq!(p.space_after, 6.0);
-        assert!(m.get_file_string(DOCUMENT).unwrap().contains(r#"<w:spacing w:after="120" w:line="360" w:lineRule="auto"/>"#));
+        assert!(m
+            .get_file_string(DOCUMENT)
+            .unwrap()
+            .contains(r#"<w:spacing w:after="120" w:line="360" w:lineRule="auto"/>"#));
     }
 
     #[test]
@@ -553,7 +722,13 @@ mod tests {
         assert!(ps[0].is_heading);
         assert_eq!(ps[0].outline_level, Some(0));
         // Now defined by the document, it is listed once
-        assert_eq!(m.paragraph_styles().iter().filter(|s| s.builtin.as_deref() == Some("heading 1")).count(), 1);
+        assert_eq!(
+            m.paragraph_styles()
+                .iter()
+                .filter(|s| s.builtin.as_deref() == Some("heading 1"))
+                .count(),
+            1
+        );
 
         m.set_paragraph_style(&[0], &gallery[0].id).unwrap();
         assert!(!m.extract_paragraphs().unwrap()[0].is_heading);

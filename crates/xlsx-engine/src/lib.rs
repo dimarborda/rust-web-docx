@@ -5,18 +5,18 @@
 pub mod areas;
 pub mod blank;
 pub mod calc;
-pub mod format;
-pub mod formula;
-pub mod moves;
 pub mod cell_ref;
 pub mod dates;
 pub mod fill;
+pub mod format;
+pub mod formula;
+pub mod moves;
+pub mod numfmt;
+pub mod recalc;
 pub mod shared_strings;
 pub mod sheet;
 pub mod sheets;
 pub mod styles;
-pub mod numfmt;
-pub mod recalc;
 pub mod text;
 pub mod theme;
 pub mod view;
@@ -64,12 +64,17 @@ fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
         Value::Bool(b) => CellInput::Bool(*b),
         Value::Number(n) => CellInput::Number(n.as_f64().ok_or("Número no válido.")?),
         Value::Object(o) if o.get("skip") == Some(&Value::Bool(true)) => return Ok(None),
-        Value::Object(o) => match (o.get("date").and_then(Value::as_f64), o.get("formula").and_then(Value::as_str)) {
+        Value::Object(o) => match (
+            o.get("date").and_then(Value::as_f64),
+            o.get("formula").and_then(Value::as_str),
+        ) {
             (Some(ms), _) => CellInput::Date(ms),
             (None, Some(f)) => CellInput::Formula(f.to_string()),
             _ => return Err("Valor de celda no admitido.".to_string()),
         },
-        Value::Array(_) => return Err("Valor de celda no admitido: una lista dentro de una celda.".to_string()),
+        Value::Array(_) => {
+            return Err("Valor de celda no admitido: una lista dentro de una celda.".to_string())
+        }
     }))
 }
 
@@ -78,9 +83,27 @@ fn cell_input(value: &Value) -> Result<Option<CellInput>, String> {
 /// borders, or `{style, color, edges}`
 fn format_input(value: &Value) -> Result<format::Format, String> {
     let obj = value.as_object().ok_or("El formato debe ser un objeto.")?;
-    let known = ["bold", "italic", "underline", "strike", "color", "fontSize", "fontName", "fill", "numberFormat", "align", "valign", "wrap", "border"];
+    let known = [
+        "bold",
+        "italic",
+        "underline",
+        "strike",
+        "color",
+        "fontSize",
+        "fontName",
+        "fill",
+        "numberFormat",
+        "align",
+        "valign",
+        "wrap",
+        "border",
+    ];
     if let Some(unknown) = obj.keys().find(|k| !known.contains(&k.as_str())) {
-        return Err(format!("Propiedad de formato desconocida: '{}'. Usa {}.", unknown, known.join(", ")));
+        return Err(format!(
+            "Propiedad de formato desconocida: '{}'. Usa {}.",
+            unknown,
+            known.join(", ")
+        ));
     }
     let flag = |k: &str| -> Result<Option<bool>, String> {
         match obj.get(k) {
@@ -104,14 +127,26 @@ fn format_input(value: &Value) -> Result<format::Format, String> {
     };
     let border = match obj.get("border") {
         None => None,
-        Some(Value::Null) => Some(format::BorderSpec { style: None, color: None, edges: format::Edges::All }),
-        Some(Value::String(s)) => Some(format::BorderSpec { style: Some(s.clone()), color: None, edges: format::Edges::All }),
+        Some(Value::Null) => Some(format::BorderSpec {
+            style: None,
+            color: None,
+            edges: format::Edges::All,
+        }),
+        Some(Value::String(s)) => Some(format::BorderSpec {
+            style: Some(s.clone()),
+            color: None,
+            edges: format::Edges::All,
+        }),
         Some(Value::Object(b)) => Some(format::BorderSpec {
             style: b.get("style").and_then(Value::as_str).map(str::to_string),
             color: b.get("color").and_then(Value::as_str).map(str::to_string),
             edges: format::Edges::parse(b.get("edges").and_then(Value::as_str).unwrap_or("all"))?,
         }),
-        _ => return Err("'border' debe ser un estilo (\"thin\"), null o {style, color, edges}.".to_string()),
+        _ => {
+            return Err(
+                "'border' debe ser un estilo (\"thin\"), null o {style, color, edges}.".to_string(),
+            )
+        }
     };
     Ok(format::Format {
         bold: flag("bold")?,
@@ -191,20 +226,40 @@ impl XlsxWorkbook {
     /// The cells of a range (`A1:C3`) as JSON rows
     pub fn range_json(&self, sheet: usize, range: &str) -> Result<String, JsValue> {
         let rows = self.workbook.range(sheet, range).map_err(js_err)?;
-        let rows: Vec<Value> = rows.iter().map(|row| Value::Array(row.iter().map(cell_json).collect())).collect();
+        let rows: Vec<Value> = rows
+            .iter()
+            .map(|row| Value::Array(row.iter().map(cell_json).collect()))
+            .collect();
         Ok(Value::Array(rows).to_string())
     }
 
     /// Writes JSON rows of values (see `cell_input`) from the cell `start`
-    pub fn set_values_json(&mut self, sheet: usize, start: &str, rows: &str) -> Result<(), JsValue> {
-        let parsed: Value = serde_json::from_str(rows).map_err(|e| js_err(format!("Valores no válidos: {}", e)))?;
-        let rows = parsed.as_array().ok_or_else(|| js_err("Los valores deben ser una lista de filas.".to_string()))?;
+    pub fn set_values_json(
+        &mut self,
+        sheet: usize,
+        start: &str,
+        rows: &str,
+    ) -> Result<(), JsValue> {
+        let parsed: Value =
+            serde_json::from_str(rows).map_err(|e| js_err(format!("Valores no válidos: {}", e)))?;
+        let rows = parsed
+            .as_array()
+            .ok_or_else(|| js_err("Los valores deben ser una lista de filas.".to_string()))?;
         let mut inputs = Vec::with_capacity(rows.len());
         for row in rows {
-            let row = row.as_array().ok_or_else(|| js_err("Cada fila debe ser una lista de valores.".to_string()))?;
-            inputs.push(row.iter().map(cell_input).collect::<Result<Vec<_>, _>>().map_err(js_err)?);
+            let row = row
+                .as_array()
+                .ok_or_else(|| js_err("Cada fila debe ser una lista de valores.".to_string()))?;
+            inputs.push(
+                row.iter()
+                    .map(cell_input)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(js_err)?,
+            );
         }
-        self.workbook.set_values(sheet, start, inputs).map_err(js_err)
+        self.workbook
+            .set_values(sheet, start, inputs)
+            .map_err(js_err)
     }
 
     /// Areas of the workbook (tables, defined names, print areas, filters, regions) as JSON;
@@ -222,9 +277,18 @@ impl XlsxWorkbook {
 
     /// Context of an area for an agent (see `Workbook::area_context`): `target` is a table or
     /// defined name, an address with its sheet, or a range of the sheet at `sheet`
-    pub fn area_context_json(&self, target: &str, sheet: Option<usize>, max_rows: usize, locale: &str) -> Result<String, JsValue> {
+    pub fn area_context_json(
+        &self,
+        target: &str,
+        sheet: Option<usize>,
+        max_rows: usize,
+        locale: &str,
+    ) -> Result<String, JsValue> {
         let area = self.workbook.resolve_area(target, sheet).map_err(js_err)?;
-        let context = self.workbook.area_context(&area, max_rows, &numfmt::Locale::from_tag(locale)).map_err(js_err)?;
+        let context = self
+            .workbook
+            .area_context(&area, max_rows, &numfmt::Locale::from_tag(locale))
+            .map_err(js_err)?;
         Ok(context.to_string())
     }
 
@@ -232,14 +296,24 @@ impl XlsxWorkbook {
     pub fn region_at_json(&self, sheet: usize, reference: &str) -> Result<String, JsValue> {
         let names = self.workbook.sheet_names().map_err(js_err)?;
         let area = self.workbook.region_at(sheet, reference).map_err(js_err)?;
-        Ok(area.to_json(names.get(sheet).map(String::as_str).unwrap_or("")).to_string())
+        Ok(area
+            .to_json(names.get(sheet).map(String::as_str).unwrap_or(""))
+            .to_string())
     }
 
     /// Formats the cells of a range; `format` is JSON (see `format_input`)
-    pub fn set_format_json(&mut self, sheet: usize, range: &str, format: &str) -> Result<(), JsValue> {
-        let value: Value = serde_json::from_str(format).map_err(|e| js_err(format!("Formato no válido: {}", e)))?;
+    pub fn set_format_json(
+        &mut self,
+        sheet: usize,
+        range: &str,
+        format: &str,
+    ) -> Result<(), JsValue> {
+        let value: Value = serde_json::from_str(format)
+            .map_err(|e| js_err(format!("Formato no válido: {}", e)))?;
         let format = format_input(&value).map_err(js_err)?;
-        self.workbook.set_format(sheet, range, &format).map_err(js_err)
+        self.workbook
+            .set_format(sheet, range, &format)
+            .map_err(js_err)
     }
 
     /// Back to the default format for the cells of a range
@@ -248,8 +322,16 @@ impl XlsxWorkbook {
     }
 
     /// Width in characters of the columns `first..=last` (1 = A)
-    pub fn set_column_width(&mut self, sheet: usize, first: u32, last: u32, width: f64) -> Result<(), JsValue> {
-        self.workbook.set_column_width(sheet, first, last, width).map_err(js_err)
+    pub fn set_column_width(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        width: f64,
+    ) -> Result<(), JsValue> {
+        self.workbook
+            .set_column_width(sheet, first, last, width)
+            .map_err(js_err)
     }
 
     pub fn merge_cells(&mut self, sheet: usize, range: &str) -> Result<(), JsValue> {
@@ -262,58 +344,126 @@ impl XlsxWorkbook {
     }
 
     /// Moves `count` rows from `first` before the row `before`; returns where the first ends up
-    pub fn move_rows(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, JsValue> {
-        self.workbook.move_rows(sheet, first, count, before).map_err(js_err)
+    pub fn move_rows(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        count: u32,
+        before: u32,
+    ) -> Result<u32, JsValue> {
+        self.workbook
+            .move_rows(sheet, first, count, before)
+            .map_err(js_err)
     }
 
     /// Moves `count` columns from `first` before the column `before` (see `move_rows`)
-    pub fn move_columns(&mut self, sheet: usize, first: u32, count: u32, before: u32) -> Result<u32, JsValue> {
-        self.workbook.move_columns(sheet, first, count, before).map_err(js_err)
+    pub fn move_columns(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        count: u32,
+        before: u32,
+    ) -> Result<u32, JsValue> {
+        self.workbook
+            .move_columns(sheet, first, count, before)
+            .map_err(js_err)
     }
 
     /// `count` empty rows before the row `before`, like the one above them
     pub fn insert_rows(&mut self, sheet: usize, before: u32, count: u32) -> Result<u32, JsValue> {
-        self.workbook.insert_rows(sheet, before, count).map_err(js_err)
+        self.workbook
+            .insert_rows(sheet, before, count)
+            .map_err(js_err)
     }
 
     /// `count` empty columns before the column `before`, like the one to their left
-    pub fn insert_columns(&mut self, sheet: usize, before: u32, count: u32) -> Result<u32, JsValue> {
-        self.workbook.insert_columns(sheet, before, count).map_err(js_err)
+    pub fn insert_columns(
+        &mut self,
+        sheet: usize,
+        before: u32,
+        count: u32,
+    ) -> Result<u32, JsValue> {
+        self.workbook
+            .insert_columns(sheet, before, count)
+            .map_err(js_err)
     }
 
     /// Deletes `count` rows from `first`
     pub fn delete_rows(&mut self, sheet: usize, first: u32, count: u32) -> Result<u32, JsValue> {
-        self.workbook.delete_rows(sheet, first, count).map_err(js_err)
+        self.workbook
+            .delete_rows(sheet, first, count)
+            .map_err(js_err)
     }
 
     /// Deletes `count` columns from `first`
     pub fn delete_columns(&mut self, sheet: usize, first: u32, count: u32) -> Result<u32, JsValue> {
-        self.workbook.delete_columns(sheet, first, count).map_err(js_err)
+        self.workbook
+            .delete_columns(sheet, first, count)
+            .map_err(js_err)
     }
 
     /// Height in points of the rows `first..=last`; none goes back to the automatic height
-    pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), JsValue> {
-        self.workbook.set_row_height(sheet, first, last, height).map_err(js_err)
+    pub fn set_row_height(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        height: Option<f64>,
+    ) -> Result<(), JsValue> {
+        self.workbook
+            .set_row_height(sheet, first, last, height)
+            .map_err(js_err)
     }
 
     /// Hides or shows the rows `first..=last`
-    pub fn set_rows_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), JsValue> {
-        self.workbook.set_rows_hidden(sheet, first, last, hidden).map_err(js_err)
+    pub fn set_rows_hidden(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        hidden: bool,
+    ) -> Result<(), JsValue> {
+        self.workbook
+            .set_rows_hidden(sheet, first, last, hidden)
+            .map_err(js_err)
     }
 
     /// Hides or shows the columns `first..=last`
-    pub fn set_columns_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), JsValue> {
-        self.workbook.set_columns_hidden(sheet, first, last, hidden).map_err(js_err)
+    pub fn set_columns_hidden(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        hidden: bool,
+    ) -> Result<(), JsValue> {
+        self.workbook
+            .set_columns_hidden(sheet, first, last, hidden)
+            .map_err(js_err)
     }
 
     /// Fills `target` from `source`, the cells at one of its ends; with `series`, trends continue
-    pub fn fill_range(&mut self, sheet: usize, source: &str, target: &str, series: bool) -> Result<(), JsValue> {
-        self.workbook.fill(sheet, source, target, series).map_err(js_err)
+    pub fn fill_range(
+        &mut self,
+        sheet: usize,
+        source: &str,
+        target: &str,
+        series: bool,
+    ) -> Result<(), JsValue> {
+        self.workbook
+            .fill(sheet, source, target, series)
+            .map_err(js_err)
     }
 
     /// Numbers as the cell format `style` shows them in the language `locale`
-    pub fn format_numbers(&self, style: u32, values: Vec<f64>, locale: &str) -> Result<Vec<String>, JsValue> {
-        self.workbook.format_numbers(style, &values, &numfmt::Locale::from_tag(locale)).map_err(js_err)
+    pub fn format_numbers(
+        &self,
+        style: u32,
+        values: Vec<f64>,
+        locale: &str,
+    ) -> Result<Vec<String>, JsValue> {
+        self.workbook
+            .format_numbers(style, &values, &numfmt::Locale::from_tag(locale))
+            .map_err(js_err)
     }
 
     /// Adds an empty worksheet after the tab at `after` (at the end without it); returns its
@@ -334,8 +484,8 @@ impl XlsxWorkbook {
 
     /// Replaces `{{FIELD}}` placeholders with the strings of a JSON object; returns how many
     pub fn fill_template_json(&mut self, values: &str) -> Result<usize, JsValue> {
-        let values: HashMap<String, String> =
-            serde_json::from_str(values).map_err(|e| js_err(format!("Los valores deben ser un objeto de textos: {}", e)))?;
+        let values: HashMap<String, String> = serde_json::from_str(values)
+            .map_err(|e| js_err(format!("Los valores deben ser un objeto de textos: {}", e)))?;
         self.workbook.fill_template(&values).map_err(js_err)
     }
 
@@ -369,19 +519,32 @@ impl XlsxWorkbook {
 
     /// Cell formats for drawing, as JSON: `{defaultFont, xfs: [{font, fill, border, h, v, …}]}`
     pub fn styles_view_json(&self) -> Result<String, JsValue> {
-        Ok(self.workbook.style_view().map_err(js_err)?.to_json().to_string())
+        Ok(self
+            .workbook
+            .style_view()
+            .map_err(js_err)?
+            .to_json()
+            .to_string())
     }
 
     /// Grid of the sheet at `sheet` as JSON: column widths, row heights, merged cells, frozen panes
     pub fn sheet_layout_json(&self, sheet: usize) -> Result<String, JsValue> {
-        Ok(self.workbook.sheet_layout(sheet).map_err(js_err)?.to_json().to_string())
+        Ok(self
+            .workbook
+            .sheet_layout(sheet)
+            .map_err(js_err)?
+            .to_json()
+            .to_string())
     }
 
     /// Cells of the sheet at `sheet` that show something, formatted in the language `locale`
     /// (`es`, `en-US`…), as JSON rows `[row, col, style, text, kind, color, number]` (the last two
     /// only when there is something to say: numbers carry `number`, with `color` null if none)
     pub fn sheet_cells_json(&self, sheet: usize, locale: &str) -> Result<String, JsValue> {
-        let cells = self.workbook.cell_views(sheet, &numfmt::Locale::from_tag(locale)).map_err(js_err)?;
+        let cells = self
+            .workbook
+            .cell_views(sheet, &numfmt::Locale::from_tag(locale))
+            .map_err(js_err)?;
         Ok(view::cells_json(&cells).to_string())
     }
 
@@ -426,17 +589,34 @@ mod tests {
     #[test]
     fn converts_values_to_and_from_json() {
         let mut wb = XlsxWorkbook::new_blank().unwrap();
-        wb.set_values_json(0, "A1", r#"[["a", 1.5, true, {"date": 0}, {"skip": true}, null]]"#).unwrap();
+        wb.set_values_json(
+            0,
+            "A1",
+            r#"[["a", 1.5, true, {"date": 0}, {"skip": true}, null]]"#,
+        )
+        .unwrap();
         let rows: Value = serde_json::from_str(&wb.range_json(0, "A1:E1").unwrap()).unwrap();
-        assert_eq!(rows[0][0], json!({"ref": "A1", "type": "string", "value": "a"}));
+        assert_eq!(
+            rows[0][0],
+            json!({"ref": "A1", "type": "string", "value": "a"})
+        );
         assert_eq!(rows[0][1]["value"], json!(1.5));
         assert_eq!(rows[0][2]["type"], "boolean");
-        assert_eq!(rows[0][3], json!({"ref": "D1", "type": "date", "value": 0.0}));
-        assert_eq!(rows[0][4], json!({"ref": "E1", "type": "empty", "value": null}));
+        assert_eq!(
+            rows[0][3],
+            json!({"ref": "D1", "type": "date", "value": 0.0})
+        );
+        assert_eq!(
+            rows[0][4],
+            json!({"ref": "E1", "type": "empty", "value": null})
+        );
         assert!(cell_input(&json!({"otra": 1})).is_err());
         assert!(cell_input(&json!([1])).is_err());
         let sheets: Value = serde_json::from_str(&wb.sheets_json().unwrap()).unwrap();
-        assert_eq!(sheets, json!([{"name": "Hoja1", "kind": "worksheet", "state": "visible"}]));
+        assert_eq!(
+            sheets,
+            json!([{"name": "Hoja1", "kind": "worksheet", "state": "visible"}])
+        );
 
         wb.checkpoint(Some("A1".into()));
         wb.set_values_json(0, "A1", r#"[["b"]]"#).unwrap();

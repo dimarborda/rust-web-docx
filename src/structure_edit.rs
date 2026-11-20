@@ -37,8 +37,16 @@ impl DocxModifier {
     pub(super) fn reload_styles(&mut self) {
         let files = self.package.parts();
         let part = |path: &str| files.get(path).and_then(|b| std::str::from_utf8(b).ok());
-        let theme_path = files.keys().filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml")).min().cloned();
-        self.styles = StyleSheet::load(part("word/styles.xml"), theme_path.as_deref().and_then(part), part("word/numbering.xml"));
+        let theme_path = files
+            .keys()
+            .filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml"))
+            .min()
+            .cloned();
+        self.styles = StyleSheet::load(
+            part("word/styles.xml"),
+            theme_path.as_deref().and_then(part),
+            part("word/numbering.xml"),
+        );
         self.revision += 1;
     }
 
@@ -48,10 +56,15 @@ impl DocxModifier {
         let (id, name, definition) = HEADING_STYLES
             .iter()
             .find(|(id, _, _)| *id == kind)
-            .ok_or_else(|| format!("Estilo no válido: {}. Usa Title, Heading1, Heading2 o Heading3.", kind))?;
-        let xml = self
-            .get_file_string("word/styles.xml")
-            .map_err(|_| "El documento no tiene hoja de estilos; no se pueden crear títulos.".to_string())?;
+            .ok_or_else(|| {
+                format!(
+                    "Estilo no válido: {}. Usa Title, Heading1, Heading2 o Heading3.",
+                    kind
+                )
+            })?;
+        let xml = self.get_file_string("word/styles.xml").map_err(|_| {
+            "El documento no tiene hoja de estilos; no se pueden crear títulos.".to_string()
+        })?;
         let defined = |style_id: &str| xml.contains(&format!("w:styleId=\"{}\"", style_id));
         let existing = self
             .styles
@@ -66,7 +79,9 @@ impl DocxModifier {
         if defined(id) {
             return Ok(id.to_string());
         }
-        let end = xml.rfind("</w:styles>").ok_or("La hoja de estilos del documento no es válida.")?;
+        let end = xml
+            .rfind("</w:styles>")
+            .ok_or("La hoja de estilos del documento no es válida.")?;
         let mut updated = xml.clone();
         updated.insert_str(end, definition);
         self.put_file("word/styles.xml".to_string(), updated.into_bytes());
@@ -78,7 +93,11 @@ impl DocxModifier {
     /// a style must not inherit a heading from the paragraph they were split from (inserting
     /// before a title would otherwise turn the new text into titles): they go back to the
     /// default paragraph style.
-    pub(super) fn apply_paragraph_styles(&mut self, first: usize, items: &[NewParagraph]) -> Result<(), String> {
+    pub(super) fn apply_paragraph_styles(
+        &mut self,
+        first: usize,
+        items: &[NewParagraph],
+    ) -> Result<(), String> {
         let headings: std::collections::HashSet<usize> = self
             .extract_paragraphs()?
             .into_iter()
@@ -100,9 +119,15 @@ impl DocxModifier {
         let mut xml = self.get_file_string("word/document.xml")?;
         let ranges = body_paragraph_ranges(&xml)?;
         for (index, style_id) in changes.iter().rev() {
-            let range = ranges.get(*index).cloned().ok_or_else(|| format!("No existe el párrafo {}.", index))?;
-            let element = style_id.as_ref().map(|id| format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(id)));
-            let mut edited = set_paragraph_property(&xml[range.clone()], "pStyle", element.as_deref())?;
+            let range = ranges
+                .get(*index)
+                .cloned()
+                .ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+            let element = style_id
+                .as_ref()
+                .map(|id| format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(id)));
+            let mut edited =
+                set_paragraph_property(&xml[range.clone()], "pStyle", element.as_deref())?;
             if style_id.is_none() {
                 // A direct outline level would keep it in the outline
                 edited = set_paragraph_property(&edited, "outlineLvl", None)?;
@@ -116,7 +141,12 @@ impl DocxModifier {
     /// Replaces every block from paragraph `from` to paragraph `to` (both included, with the
     /// tables between them) by `items`. Returns the first new paragraph and the caret after the
     /// last one. Refuses ranges that cut a table or a content control, or hold a section break.
-    pub fn replace_paragraphs(&mut self, from: usize, to: usize, items: &[NewParagraph]) -> Result<(usize, (usize, usize)), String> {
+    pub fn replace_paragraphs(
+        &mut self,
+        from: usize,
+        to: usize,
+        items: &[NewParagraph],
+    ) -> Result<(usize, (usize, usize)), String> {
         if items.is_empty() {
             return Err("No hay párrafos para insertar.".to_string());
         }
@@ -125,13 +155,21 @@ impl DocxModifier {
         let ranges = body_paragraph_ranges(&xml)?;
         let (start, end) = match (ranges.get(from), ranges.get(to)) {
             (Some(a), Some(b)) => (a.start, b.end),
-            _ => return Err(format!("El rango {}–{} no existe en el documento.", from, to)),
+            _ => {
+                return Err(format!(
+                    "El rango {}–{} no existe en el documento.",
+                    from, to
+                ))
+            }
         };
         if !is_balanced(&xml[start..end]) {
             return Err("El rango corta una tabla o un control de contenido; amplíalo para incluirlos completos.".to_string());
         }
         if xml[start..end].contains("<w:sectPr") {
-            return Err("El rango incluye un salto de sección; no se puede reemplazar de una vez.".to_string());
+            return Err(
+                "El rango incluye un salto de sección; no se puede reemplazar de una vez."
+                    .to_string(),
+            );
         }
         xml.replace_range(start..end, "<w:p/>");
         self.put_file("word/document.xml".to_string(), xml.into_bytes());
@@ -141,16 +179,28 @@ impl DocxModifier {
     /// Byte range of the blocks from paragraph `from` to `to` (both included), checked like
     /// `replace_paragraphs`: it must not cut a table or a content control, nor hold a section
     /// break. A range that ends in the last cell of a table it opened takes the whole table.
-    fn whole_block_range(xml: &str, ranges: &[std::ops::Range<usize>], from: usize, to: usize) -> Result<std::ops::Range<usize>, String> {
+    fn whole_block_range(
+        xml: &str,
+        ranges: &[std::ops::Range<usize>],
+        from: usize,
+        to: usize,
+    ) -> Result<std::ops::Range<usize>, String> {
         let (start, mut end) = match (ranges.get(from), ranges.get(to)) {
             (Some(a), Some(b)) if from <= to => (a.start, b.end),
-            _ => return Err(format!("El rango {}–{} no existe en el documento.", from, to)),
+            _ => {
+                return Err(format!(
+                    "El rango {}–{} no existe en el documento.",
+                    from, to
+                ))
+            }
         };
         // Solo si `to` es el último párrafo de la tabla: ampliar no puede sumar otros párrafos
         if !inside_table(xml, start) {
             let mut wider = end;
             while inside_table(xml, wider) && !is_balanced(&xml[start..wider]) {
-                let Some(close) = xml[wider..].find("</w:tbl>") else { break };
+                let Some(close) = xml[wider..].find("</w:tbl>") else {
+                    break;
+                };
                 wider += close + "</w:tbl>".len();
             }
             if ranges.get(to + 1).is_none_or(|next| next.start >= wider) {
@@ -161,7 +211,10 @@ impl DocxModifier {
             return Err("El rango corta una tabla o un control de contenido; amplíalo para incluirlos completos.".to_string());
         }
         if xml[start..end].contains("<w:sectPr") {
-            return Err("El rango incluye un salto de sección; no se puede mover ni borrar de una vez.".to_string());
+            return Err(
+                "El rango incluye un salto de sección; no se puede mover ni borrar de una vez."
+                    .to_string(),
+            );
         }
         Ok(start..end)
     }
@@ -183,30 +236,65 @@ impl DocxModifier {
     /// `before` (numbered before the move; the paragraph count moves them to the end), keeping
     /// their XML as is: formatting, pictures, links, notes and fields. Returns the index of the
     /// first moved paragraph in its new place. `before` cannot fall inside the range or a table.
-    pub fn move_paragraphs(&mut self, from: usize, to: usize, before: usize) -> Result<usize, String> {
+    pub fn move_paragraphs(
+        &mut self,
+        from: usize,
+        to: usize,
+        before: usize,
+    ) -> Result<usize, String> {
         let xml = self.get_file_string("word/document.xml")?;
         let ranges = body_paragraph_ranges(&xml)?;
         let range = Self::whole_block_range(&xml, &ranges, from, to)?;
         let count = to - from + 1;
         if before > from && before <= to {
-            return Err(format!("El destino ({}) queda dentro del rango {}–{} que se mueve.", before, from, to));
+            return Err(format!(
+                "El destino ({}) queda dentro del rango {}–{} que se mueve.",
+                before, from, to
+            ));
         }
         let at = match ranges.get(before) {
             Some(r) => r.start,
             None if before == ranges.len() => end_of_last_block(&xml, &ranges)?,
-            None => return Err(format!("El destino {} no existe en el documento (tiene {} párrafos).", before, ranges.len())),
+            None => {
+                return Err(format!(
+                    "El destino {} no existe en el documento (tiene {} párrafos).",
+                    before,
+                    ranges.len()
+                ))
+            }
         };
         if inside_table(&xml, at) {
-            return Err(format!("El destino {} está dentro de una tabla; elige un párrafo fuera de ella.", before));
+            return Err(format!(
+                "El destino {} está dentro de una tabla; elige un párrafo fuera de ella.",
+                before
+            ));
         }
         if at == range.start || at == range.end {
             return Ok(from); // ya está ahí
         }
         let moved = xml[range.clone()].to_string();
         let (new_xml, first) = if at < range.start {
-            (format!("{}{}{}{}", &xml[..at], moved, &xml[at..range.start], &xml[range.end..]), before)
+            (
+                format!(
+                    "{}{}{}{}",
+                    &xml[..at],
+                    moved,
+                    &xml[at..range.start],
+                    &xml[range.end..]
+                ),
+                before,
+            )
         } else {
-            (format!("{}{}{}{}", &xml[..range.start], &xml[range.end..at], moved, &xml[at..]), before - count)
+            (
+                format!(
+                    "{}{}{}{}",
+                    &xml[..range.start],
+                    &xml[range.end..at],
+                    moved,
+                    &xml[at..]
+                ),
+                before - count,
+            )
         };
         let new_xml = with_final_paragraph(new_xml)?;
         self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
@@ -227,7 +315,9 @@ fn end_of_last_block(xml: &str, ranges: &[std::ops::Range<usize>]) -> Result<usi
     let last = ranges.last().ok_or("El documento no tiene párrafos.")?;
     let mut at = last.end;
     while inside_table(xml, at) {
-        let close = xml[at..].find("</w:tbl>").ok_or("Una tabla del documento no está cerrada.")?;
+        let close = xml[at..]
+            .find("</w:tbl>")
+            .ok_or("Una tabla del documento no está cerrada.")?;
         at += close + "</w:tbl>".len();
     }
     Ok(at)
@@ -236,7 +326,9 @@ fn end_of_last_block(xml: &str, ranges: &[std::ops::Range<usize>]) -> Result<usi
 /// The body must keep a paragraph, and Word needs one after a table that ends it: adds an empty
 /// paragraph when the body has none or its last block (before the section properties) is a table
 fn with_final_paragraph(mut xml: String) -> Result<String, String> {
-    let body_end = xml.rfind("</w:body>").ok_or("El documento no tiene cuerpo.")?;
+    let body_end = xml
+        .rfind("</w:body>")
+        .ok_or("El documento no tiene cuerpo.")?;
     let mut end = body_end;
     if let Some(sect) = xml[..body_end].rfind("<w:sectPr") {
         // Solo si son las propiedades del cuerpo (no las de un párrafo con salto de sección)
@@ -251,4 +343,3 @@ fn with_final_paragraph(mut xml: String) -> Result<String, String> {
     }
     Ok(xml)
 }
-

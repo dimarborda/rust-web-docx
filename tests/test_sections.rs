@@ -2,7 +2,8 @@
 //! replacing and unwrapping them, and that the saved file keeps them.
 
 use rust_web_docx::docx_parser::{
-    section_key_from_title, DocumentElement, DocxModifier, NewParagraph, SchemaSection, SectionInfo, SectionPlace, SectionSchema,
+    section_key_from_title, DocumentElement, DocxModifier, NewParagraph, SchemaSection,
+    SectionInfo, SectionPlace, SectionSchema,
 };
 use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
@@ -23,7 +24,10 @@ fn docx(body: &str) -> DocxModifier {
     {
         let mut zip = ZipWriter::new(&mut buf);
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
             ("word/styles.xml", styles.as_str()),
         ] {
@@ -40,16 +44,29 @@ fn para(text: &str) -> String {
 }
 
 fn heading(text: &str) -> String {
-    format!(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p>"#, text)
+    format!(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p>"#,
+        text
+    )
 }
 
 fn heading2(text: &str) -> String {
-    format!(r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p>"#, text)
+    format!(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p>"#,
+        text
+    )
 }
 
 fn table(cells: &[&str]) -> String {
-    let tcs: String = cells.iter().map(|c| format!("<w:tc>{}</w:tc>", para(c))).collect();
-    format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid><w:tr>{}</w:tr></w:tbl>"#, "<w:gridCol/>".repeat(cells.len()), tcs)
+    let tcs: String = cells
+        .iter()
+        .map(|c| format!("<w:tc>{}</w:tc>", para(c)))
+        .collect();
+    format!(
+        r#"<w:tbl><w:tblGrid>{}</w:tblGrid><w:tr>{}</w:tr></w:tbl>"#,
+        "<w:gridCol/>".repeat(cells.len()),
+        tcs
+    )
 }
 
 fn section(key: &str, alias: &str, content: &str) -> String {
@@ -81,7 +98,10 @@ fn reopen(m: &DocxModifier) -> DocxModifier {
 }
 
 fn np(text: &str) -> NewParagraph {
-    NewParagraph { text: text.into(), ..Default::default() }
+    NewParagraph {
+        text: text.into(),
+        ..Default::default()
+    }
 }
 
 /// Technical report: Introducción (with a nested Alcance), Caracterización with a table,
@@ -107,19 +127,60 @@ fn test_sections_lists_tagged_controls_with_ranges_and_nesting() {
     let m = report();
     assert_eq!(
         texts(&m),
-        ["Informe técnico", "1. Introducción", "Objeto del informe.", "Solo el edificio A.", "2. Caracterización", "Muestra", "pH", "Notas.", "Fuera de toda sección", "ACME"]
+        [
+            "Informe técnico",
+            "1. Introducción",
+            "Objeto del informe.",
+            "Solo el edificio A.",
+            "2. Caracterización",
+            "Muestra",
+            "pH",
+            "Notas.",
+            "Fuera de toda sección",
+            "ACME"
+        ]
     );
     let sections = m.sections().unwrap();
-    let summary: Vec<(&str, &str, Option<usize>, Option<usize>, usize, Option<&str>)> = sections
+    let summary: Vec<(
+        &str,
+        &str,
+        Option<usize>,
+        Option<usize>,
+        usize,
+        Option<&str>,
+    )> = sections
         .iter()
-        .map(|s| (s.key.as_str(), s.title.as_str(), s.first, s.last, s.depth, s.parent.as_deref()))
+        .map(|s| {
+            (
+                s.key.as_str(),
+                s.title.as_str(),
+                s.first,
+                s.last,
+                s.depth,
+                s.parent.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         summary,
         [
             ("introduccion", "Introducción", Some(1), Some(3), 0, None),
-            ("alcance", "Alcance", Some(3), Some(3), 1, Some("introduccion")),
-            ("caracterizacion", "Caracterización & datos", Some(4), Some(7), 0, None),
+            (
+                "alcance",
+                "Alcance",
+                Some(3),
+                Some(3),
+                1,
+                Some("introduccion")
+            ),
+            (
+                "caracterizacion",
+                "Caracterización & datos",
+                Some(4),
+                Some(7),
+                0,
+                None
+            ),
         ],
         "untagged content controls are not sections"
     );
@@ -127,18 +188,44 @@ fn test_sections_lists_tagged_controls_with_ranges_and_nesting() {
 
 #[test]
 fn test_define_section_wraps_blocks_and_survives_saving() {
-    let mut m = docx(&[heading("Conclusiones"), para("Primera."), table(&["A", "B"]), para("Última."), para("Anexo")].concat());
-    let info = m.define_section("conclusiones", 0, 4, Some("Conclusiones"), true, false).unwrap();
+    let mut m = docx(
+        &[
+            heading("Conclusiones"),
+            para("Primera."),
+            table(&["A", "B"]),
+            para("Última."),
+            para("Anexo"),
+        ]
+        .concat(),
+    );
+    let info = m
+        .define_section("conclusiones", 0, 4, Some("Conclusiones"), true, false)
+        .unwrap();
     assert_eq!(
         info,
-        SectionInfo { key: "conclusiones".into(), title: "Conclusiones".into(), first: Some(0), last: Some(4), depth: 0, parent: None, locked: true, content_locked: false }
+        SectionInfo {
+            key: "conclusiones".into(),
+            title: "Conclusiones".into(),
+            first: Some(0),
+            last: Some(4),
+            depth: 0,
+            parent: None,
+            locked: true,
+            content_locked: false
+        }
     );
     let xml = m.get_file_string("word/document.xml").unwrap();
     assert!(xml.contains(r#"<w:tag w:val="section:conclusiones"/>"#));
     assert!(xml.contains(r#"<w:lock w:val="sdtLocked"/>"#));
-    assert!(xml.contains("<w:sectPr><w:pgSz"), "the body's final sectPr stays outside");
+    assert!(
+        xml.contains("<w:sectPr><w:pgSz"),
+        "the body's final sectPr stays outside"
+    );
     // Text and numbering do not change; the saved file reads the section back
-    assert_eq!(texts(&m), ["Conclusiones", "Primera.", "A", "B", "Última.", "Anexo"]);
+    assert_eq!(
+        texts(&m),
+        ["Conclusiones", "Primera.", "A", "B", "Última.", "Anexo"]
+    );
     assert_eq!(reopen(&m).sections().unwrap(), vec![info]);
 }
 
@@ -147,9 +234,18 @@ fn test_define_section_takes_whole_tables_and_nests() {
     let mut m = report();
     // From the table's first cell to its last one: the table is wrapped whole
     let datos = m.define_section("datos", 5, 6, None, false, false).unwrap();
-    assert_eq!((datos.first, datos.last, datos.title.as_str()), (Some(5), Some(6), "datos"));
-    assert_eq!((datos.depth, datos.parent.as_deref()), (1, Some("caracterizacion")));
-    assert!(m.get_file_string("word/document.xml").unwrap().contains("<w:sdtContent><w:tbl>"));
+    assert_eq!(
+        (datos.first, datos.last, datos.title.as_str()),
+        (Some(5), Some(6), "datos")
+    );
+    assert_eq!(
+        (datos.depth, datos.parent.as_deref()),
+        (1, Some("caracterizacion"))
+    );
+    assert!(m
+        .get_file_string("word/document.xml")
+        .unwrap()
+        .contains("<w:sdtContent><w:tbl>"));
 }
 
 #[test]
@@ -157,29 +253,55 @@ fn test_define_section_wraps_a_section_sharing_its_first_or_last_paragraph() {
     let six = || docx(&["0", "1", "2", "3", "4", "5"].map(para).concat());
     let outer_first = |inner: (usize, usize)| {
         let mut m = six();
-        m.define_section("externa", 1, 5, None, false, false).unwrap();
-        m.define_section("interna", inner.0, inner.1, None, false, false).unwrap();
+        m.define_section("externa", 1, 5, None, false, false)
+            .unwrap();
+        m.define_section("interna", inner.0, inner.1, None, false, false)
+            .unwrap();
         m
     };
     // Same last paragraph, same first one, both (issue #1): the outer section wraps the inner
     // one whole, as when the outer one is marked first
     for inner in [(3, 5), (1, 3), (1, 5)] {
         let mut m = six();
-        m.define_section("interna", inner.0, inner.1, None, false, false).unwrap();
-        let externa = m.define_section("externa", 1, 5, None, false, false).unwrap();
-        assert_eq!((externa.first, externa.last, externa.depth), (Some(1), Some(5), 0));
-        let interna = m.sections().unwrap().into_iter().find(|s| s.key == "interna").unwrap();
-        assert_eq!((interna.first, interna.last, interna.parent.as_deref()), (Some(inner.0), Some(inner.1), Some("externa")));
+        m.define_section("interna", inner.0, inner.1, None, false, false)
+            .unwrap();
+        let externa = m
+            .define_section("externa", 1, 5, None, false, false)
+            .unwrap();
+        assert_eq!(
+            (externa.first, externa.last, externa.depth),
+            (Some(1), Some(5), 0)
+        );
+        let interna = m
+            .sections()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == "interna")
+            .unwrap();
+        assert_eq!(
+            (interna.first, interna.last, interna.parent.as_deref()),
+            (Some(inner.0), Some(inner.1), Some("externa"))
+        );
         if inner != (1, 5) {
-            assert_eq!(m.sections().unwrap(), outer_first(inner).sections().unwrap());
+            assert_eq!(
+                m.sections().unwrap(),
+                outer_first(inner).sections().unwrap()
+            );
         }
         assert_eq!(texts(&m), ["0", "1", "2", "3", "4", "5"]);
     }
     // Still refused: a range sharing a border with a section it does not hold whole
     let mut m = six();
-    m.define_section("interna", 1, 3, None, false, false).unwrap();
-    assert!(m.define_section("x", 1, 2, None, false, false).is_ok(), "nests inside instead");
-    assert!(m.define_section("y", 2, 5, None, false, false).unwrap_err().contains("corta"));
+    m.define_section("interna", 1, 3, None, false, false)
+        .unwrap();
+    assert!(
+        m.define_section("x", 1, 2, None, false, false).is_ok(),
+        "nests inside instead"
+    );
+    assert!(m
+        .define_section("y", 2, 5, None, false, false)
+        .unwrap_err()
+        .contains("corta"));
 }
 
 #[test]
@@ -200,32 +322,61 @@ fn test_define_section_refusals_leave_the_document_untouched() {
 
 #[test]
 fn test_define_section_refuses_a_word_section_break() {
-    let mut m = docx(&[para("A"), r#"<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>B</w:t></w:r></w:p>"#.to_string(), para("C")].concat());
-    assert!(m.define_section("x", 0, 2, None, false, false).unwrap_err().contains("salto de sección"));
+    let mut m = docx(
+        &[
+            para("A"),
+            r#"<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>B</w:t></w:r></w:p>"#.to_string(),
+            para("C"),
+        ]
+        .concat(),
+    );
+    assert!(m
+        .define_section("x", 0, 2, None, false, false)
+        .unwrap_err()
+        .contains("salto de sección"));
     assert!(m.define_section("x", 2, 2, None, false, false).is_ok());
 }
 
 #[test]
 fn test_replace_section_keeps_the_marker_and_optionally_the_heading() {
     let mut m = report();
-    m.replace_section("introduccion", &[np("Nuevo objeto."), np("Segundo párrafo.")], true).unwrap();
+    m.replace_section(
+        "introduccion",
+        &[np("Nuevo objeto."), np("Segundo párrafo.")],
+        true,
+    )
+    .unwrap();
     assert_eq!(
         texts(&m)[..5],
-        ["Informe técnico", "1. Introducción", "Nuevo objeto.", "Segundo párrafo.", "2. Caracterización"],
+        [
+            "Informe técnico",
+            "1. Introducción",
+            "Nuevo objeto.",
+            "Segundo párrafo.",
+            "2. Caracterización"
+        ],
         "the heading stays and the nested section goes away with the old content"
     );
     let keys: Vec<String> = m.sections().unwrap().into_iter().map(|s| s.key).collect();
     assert_eq!(keys, ["introduccion", "caracterizacion"]);
     let intro = &m.sections().unwrap()[0];
-    assert_eq!((intro.first, intro.last, intro.title.as_str()), (Some(1), Some(3), "Introducción"));
+    assert_eq!(
+        (intro.first, intro.last, intro.title.as_str()),
+        (Some(1), Some(3), "Introducción")
+    );
     // The new paragraphs are not headings
     let paragraphs = m.extract_paragraphs().unwrap();
     assert!(paragraphs[1].outline_level.is_some() && paragraphs[2].outline_level.is_none());
 
     // Without keepHeading, the whole content goes, table included
-    let (first, _) = m.replace_section("caracterizacion", &[np("Sin datos.")], false).unwrap();
+    let (first, _) = m
+        .replace_section("caracterizacion", &[np("Sin datos.")], false)
+        .unwrap();
     assert_eq!(first, 4);
-    assert_eq!(texts(&m)[4..], ["Sin datos.", "Fuera de toda sección", "ACME"]);
+    assert_eq!(
+        texts(&m)[4..],
+        ["Sin datos.", "Fuera de toda sección", "ACME"]
+    );
     let car = &m.sections().unwrap()[1];
     assert_eq!((car.first, car.last), (Some(4), Some(4)));
     assert_eq!(reopen(&m).sections().unwrap(), m.sections().unwrap());
@@ -235,9 +386,18 @@ fn test_replace_section_keeps_the_marker_and_optionally_the_heading() {
 fn test_replace_section_without_a_heading_keeps_everything_inside() {
     let mut m = report();
     // "alcance" opens with a regular paragraph: keepHeading has nothing to keep
-    m.replace_section("alcance", &[np("Edificios A y B.")], true).unwrap();
-    let alcance = m.sections().unwrap().into_iter().find(|s| s.key == "alcance").unwrap();
-    assert_eq!((alcance.first, alcance.last, alcance.depth), (Some(3), Some(3), 1));
+    m.replace_section("alcance", &[np("Edificios A y B.")], true)
+        .unwrap();
+    let alcance = m
+        .sections()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.key == "alcance")
+        .unwrap();
+    assert_eq!(
+        (alcance.first, alcance.last, alcance.depth),
+        (Some(3), Some(3), 1)
+    );
     assert_eq!(texts(&m)[3], "Edificios A y B.");
 }
 
@@ -251,15 +411,24 @@ fn test_unwrap_section_keeps_content_and_nested_sections() {
     let alcance = sections.iter().find(|s| s.key == "alcance").unwrap();
     assert_eq!((alcance.depth, alcance.parent.as_deref()), (0, None));
     assert!(!sections.iter().any(|s| s.key == "introduccion"));
-    assert!(m.unwrap_section("introduccion").unwrap_err().contains("No existe"));
+    assert!(m
+        .unwrap_section("introduccion")
+        .unwrap_err()
+        .contains("No existe"));
 }
 
 #[test]
 fn test_duplicated_keys_are_listed_but_refused_by_key() {
     let mut m = docx(&[section("a", "A", &para("1")), section("a", "A", &para("2"))].concat());
     assert_eq!(m.sections().unwrap().len(), 2);
-    assert!(m.replace_section("a", &[np("x")], false).unwrap_err().contains("Hay 2 secciones"));
-    assert!(m.define_section("a", 0, 0, None, false, false).unwrap_err().contains("Ya existe"));
+    assert!(m
+        .replace_section("a", &[np("x")], false)
+        .unwrap_err()
+        .contains("Hay 2 secciones"));
+    assert!(m
+        .define_section("a", 0, 0, None, false, false)
+        .unwrap_err()
+        .contains("Ya existe"));
 }
 
 #[test]
@@ -267,9 +436,11 @@ fn test_section_edits_are_one_undo_step_each() {
     let mut m = report();
     let original = m.get_file_string("word/document.xml").unwrap();
     m.checkpoint(None);
-    m.define_section("final", 8, 8, Some("Final"), false, false).unwrap();
+    m.define_section("final", 8, 8, Some("Final"), false, false)
+        .unwrap();
     m.checkpoint(None);
-    m.replace_section("final", &[np("Otro texto.")], false).unwrap();
+    m.replace_section("final", &[np("Otro texto.")], false)
+        .unwrap();
     m.checkpoint(None);
     m.unwrap_section("final").unwrap();
     for _ in 0..3 {
@@ -288,18 +459,36 @@ fn document(m: &DocxModifier) -> String {
 fn test_set_section_lock_writes_word_lock_values_in_place() {
     let mut m = report();
     let locks = |m: &DocxModifier| {
-        let s = m.sections().unwrap().into_iter().find(|s| s.key == "alcance").unwrap();
+        let s = m
+            .sections()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.key == "alcance")
+            .unwrap();
         (s.locked, s.content_locked)
     };
-    for (locked, content, val) in [(true, true, Some("sdtContentLocked")), (false, true, Some("contentLocked")), (true, false, Some("sdtLocked")), (false, false, None)] {
+    for (locked, content, val) in [
+        (true, true, Some("sdtContentLocked")),
+        (false, true, Some("contentLocked")),
+        (true, false, Some("sdtLocked")),
+        (false, false, None),
+    ] {
         m.set_section_lock("alcance", locked, content).unwrap();
         assert_eq!(locks(&m), (locked, content));
         let xml = document(&m);
         let pr = &xml[xml.find(r#"<w:alias w:val="Alcance"/>"#).unwrap()..];
         let pr = &pr[..pr.find("</w:sdtPr>").unwrap()];
-        assert_eq!(pr.matches("<w:lock").count(), val.is_some() as usize, "one lock at most");
+        assert_eq!(
+            pr.matches("<w:lock").count(),
+            val.is_some() as usize,
+            "one lock at most"
+        );
         if let Some(val) = val {
-            assert!(pr.ends_with(&format!(r#"<w:id w:val="1"/><w:lock w:val="{}"/>"#, val)), "lock goes after w:id: {}", pr);
+            assert!(
+                pr.ends_with(&format!(r#"<w:id w:val="1"/><w:lock w:val="{}"/>"#, val)),
+                "lock goes after w:id: {}",
+                pr
+            );
         }
     }
     let info = m.define_section("cierre", 8, 8, None, false, true).unwrap();
@@ -311,59 +500,106 @@ fn test_set_section_lock_writes_word_lock_values_in_place() {
 // ---------- Sections from headings ----------
 
 fn technical_report() -> DocxModifier {
-    docx(&[
-        para("Informe técnico de suelos"),
-        heading("1. Introducción"),
-        para("Objeto."),
-        heading2("1.1 Alcance"),
-        para("Edificio A."),
-        heading("2. Caracterización del sitio"),
-        table(&["Muestra", "pH"]),
-        para("Notas."),
-        heading("3. Conclusiones"),
-        para("Apto."),
-        heading("Anexo"),
-        heading("Anexo"),
-    ]
-    .concat())
+    docx(
+        &[
+            para("Informe técnico de suelos"),
+            heading("1. Introducción"),
+            para("Objeto."),
+            heading2("1.1 Alcance"),
+            para("Edificio A."),
+            heading("2. Caracterización del sitio"),
+            table(&["Muestra", "pH"]),
+            para("Notas."),
+            heading("3. Conclusiones"),
+            para("Apto."),
+            heading("Anexo"),
+            heading("Anexo"),
+        ]
+        .concat(),
+    )
 }
 
 #[test]
 fn test_section_keys_from_titles() {
-    assert_eq!(section_key_from_title("2.1 Caracterización del sitio"), "caracterizacion-del-sitio");
-    assert_eq!(section_key_from_title("3) Conclusiones y recomendaciones"), "conclusiones-y-recomendaciones");
-    assert_eq!(section_key_from_title("Año 2026: Señalización"), "ano-2026-senalizacion");
+    assert_eq!(
+        section_key_from_title("2.1 Caracterización del sitio"),
+        "caracterizacion-del-sitio"
+    );
+    assert_eq!(
+        section_key_from_title("3) Conclusiones y recomendaciones"),
+        "conclusiones-y-recomendaciones"
+    );
+    assert_eq!(
+        section_key_from_title("Año 2026: Señalización"),
+        "ano-2026-senalizacion"
+    );
     assert_eq!(section_key_from_title("  "), "seccion");
-    assert_eq!(section_key_from_title(&"palabra ".repeat(20)).chars().count(), 63);
+    assert_eq!(
+        section_key_from_title(&"palabra ".repeat(20))
+            .chars()
+            .count(),
+        63
+    );
 }
 
 #[test]
 fn test_sections_from_headings_nest_lower_levels() {
     let mut m = technical_report();
     let result = m.sections_from_headings(1, 2).unwrap();
-    let summary: Vec<(String, String, Option<usize>, Option<usize>, Option<String>)> =
-        result.created.iter().map(|s| (s.key.clone(), s.title.clone(), s.first, s.last, s.parent.clone())).collect();
-    let row = |k: &str, t: &str, f: usize, l: usize, p: Option<&str>| (k.to_string(), t.to_string(), Some(f), Some(l), p.map(String::from));
+    let summary: Vec<(String, String, Option<usize>, Option<usize>, Option<String>)> = result
+        .created
+        .iter()
+        .map(|s| {
+            (
+                s.key.clone(),
+                s.title.clone(),
+                s.first,
+                s.last,
+                s.parent.clone(),
+            )
+        })
+        .collect();
+    let row = |k: &str, t: &str, f: usize, l: usize, p: Option<&str>| {
+        (
+            k.to_string(),
+            t.to_string(),
+            Some(f),
+            Some(l),
+            p.map(String::from),
+        )
+    };
     assert_eq!(
         summary,
         [
             row("introduccion", "1. Introducción", 1, 4, None),
             row("alcance", "1.1 Alcance", 3, 4, Some("introduccion")),
-            row("caracterizacion-del-sitio", "2. Caracterización del sitio", 5, 8, None),
+            row(
+                "caracterizacion-del-sitio",
+                "2. Caracterización del sitio",
+                5,
+                8,
+                None
+            ),
             row("conclusiones", "3. Conclusiones", 9, 10, None),
             row("anexo", "Anexo", 11, 11, None),
             row("anexo-2", "Anexo", 12, 12, None),
         ]
     );
     assert!(result.skipped.is_empty());
-    assert_eq!(texts(&m)[0], "Informe técnico de suelos", "text before the first heading stays outside");
+    assert_eq!(
+        texts(&m)[0],
+        "Informe técnico de suelos",
+        "text before the first heading stays outside"
+    );
     assert_eq!(reopen(&m).sections().unwrap(), m.sections().unwrap());
 
     // Again: every heading already opens a section
     let again = m.sections_from_headings(1, 2).unwrap();
     assert!(again.created.is_empty());
     assert_eq!(again.skipped.len(), 6);
-    assert!(again.skipped[0].reason.contains("ya abre la sección «introduccion»"));
+    assert!(again.skipped[0]
+        .reason
+        .contains("ya abre la sección «introduccion»"));
 }
 
 #[test]
@@ -376,7 +612,12 @@ fn test_sections_from_headings_inside_out_wraps_sections_sharing_a_border() {
     let mut fresh = technical_report();
     fresh.sections_from_headings(1, 2).unwrap();
     let shape = |m: &DocxModifier| {
-        let mut s: Vec<_> = m.sections().unwrap().into_iter().map(|s| (s.key, s.first, s.last, s.depth, s.parent)).collect();
+        let mut s: Vec<_> = m
+            .sections()
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.key, s.first, s.last, s.depth, s.parent))
+            .collect();
         s.sort();
         s
     };
@@ -389,7 +630,16 @@ fn test_sections_from_headings_only_the_given_levels_in_one_undo_step() {
     let original = document(&m);
     m.checkpoint(None);
     let created = m.sections_from_headings(1, 1).unwrap().created;
-    assert_eq!(created.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), ["introduccion", "caracterizacion-del-sitio", "conclusiones", "anexo", "anexo-2"]);
+    assert_eq!(
+        created.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(),
+        [
+            "introduccion",
+            "caracterizacion-del-sitio",
+            "conclusiones",
+            "anexo",
+            "anexo-2"
+        ]
+    );
     assert_eq!(created[0].last, Some(4), "level 2 headings stay inside");
     m.undo();
     assert_eq!(document(&m), original);
@@ -399,40 +649,107 @@ fn test_sections_from_headings_only_the_given_levels_in_one_undo_step() {
 
 #[test]
 fn test_sections_from_headings_stay_inside_existing_sections_and_skip_breaks() {
-    let mut m = docx(&[
-        section("cuerpo", "Cuerpo", &[heading("A"), para("a"), heading("B"), para("b")].concat()),
-        heading("Fuera"),
-        r#"<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>con salto</w:t></w:r></w:p>"#.to_string(),
-        heading("Final"),
-    ]
-    .concat());
+    let mut m = docx(
+        &[
+            section(
+                "cuerpo",
+                "Cuerpo",
+                &[heading("A"), para("a"), heading("B"), para("b")].concat(),
+            ),
+            heading("Fuera"),
+            r#"<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>con salto</w:t></w:r></w:p>"#.to_string(),
+            heading("Final"),
+        ]
+        .concat(),
+    );
     let result = m.sections_from_headings(1, 1).unwrap();
-    let created: Vec<(&str, Option<usize>, Option<usize>, Option<&str>)> =
-        result.created.iter().map(|s| (s.key.as_str(), s.first, s.last, s.parent.as_deref())).collect();
-    assert_eq!(created, [("a", Some(0), Some(1), Some("cuerpo")), ("b", Some(2), Some(3), Some("cuerpo")), ("final", Some(6), Some(6), None)]);
+    let created: Vec<(&str, Option<usize>, Option<usize>, Option<&str>)> = result
+        .created
+        .iter()
+        .map(|s| (s.key.as_str(), s.first, s.last, s.parent.as_deref()))
+        .collect();
+    assert_eq!(
+        created,
+        [
+            ("a", Some(0), Some(1), Some("cuerpo")),
+            ("b", Some(2), Some(3), Some("cuerpo")),
+            ("final", Some(6), Some(6), None)
+        ]
+    );
     assert_eq!(result.skipped.len(), 1);
-    assert_eq!((result.skipped[0].paragraph, result.skipped[0].text.as_str()), (4, "Fuera"));
+    assert_eq!(
+        (result.skipped[0].paragraph, result.skipped[0].text.as_str()),
+        (4, "Fuera")
+    );
     assert!(result.skipped[0].reason.contains("salto de sección"));
 }
 
 // ---------- Inserting sections ----------
 
 fn heading_item(text: &str) -> NewParagraph {
-    NewParagraph { text: text.into(), style: Some("Heading1".into()), ..Default::default() }
+    NewParagraph {
+        text: text.into(),
+        style: Some("Heading1".into()),
+        ..Default::default()
+    }
 }
 
 #[test]
 fn test_insert_section_at_each_place() {
     let mut m = report();
-    let (end, first) = m.insert_section("anexos", Some("Anexos"), &SectionPlace::End, &[heading_item("Anexos"), np("")], false, false).unwrap();
-    assert_eq!((first, end.first, end.last, end.depth), (10, Some(10), Some(11), 0));
-    assert!(document(&m).contains("</w:sdt><w:sectPr>"), "before the body's sectPr");
+    let (end, first) = m
+        .insert_section(
+            "anexos",
+            Some("Anexos"),
+            &SectionPlace::End,
+            &[heading_item("Anexos"), np("")],
+            false,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        (first, end.first, end.last, end.depth),
+        (10, Some(10), Some(11), 0)
+    );
+    assert!(
+        document(&m).contains("</w:sdt><w:sectPr>"),
+        "before the body's sectPr"
+    );
 
-    m.insert_section("objetivos", Some("Objetivos"), &SectionPlace::After("alcance".into()), &[np("Objetivo 1.")], false, false).unwrap();
-    m.insert_section("resumen", None, &SectionPlace::Before("introduccion".into()), &[np("Resumen.")], true, false).unwrap();
-    m.insert_section("metodo", Some("Método"), &SectionPlace::Inside("caracterizacion".into()), &[np("Método.")], false, true).unwrap();
+    m.insert_section(
+        "objetivos",
+        Some("Objetivos"),
+        &SectionPlace::After("alcance".into()),
+        &[np("Objetivo 1.")],
+        false,
+        false,
+    )
+    .unwrap();
+    m.insert_section(
+        "resumen",
+        None,
+        &SectionPlace::Before("introduccion".into()),
+        &[np("Resumen.")],
+        true,
+        false,
+    )
+    .unwrap();
+    m.insert_section(
+        "metodo",
+        Some("Método"),
+        &SectionPlace::Inside("caracterizacion".into()),
+        &[np("Método.")],
+        false,
+        true,
+    )
+    .unwrap();
 
-    let order: Vec<(String, Option<String>, Option<usize>)> = m.sections().unwrap().into_iter().map(|s| (s.key, s.parent, s.first)).collect();
+    let order: Vec<(String, Option<String>, Option<usize>)> = m
+        .sections()
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.key, s.parent, s.first))
+        .collect();
     let row = |k: &str, p: Option<&str>, f: usize| (k.to_string(), p.map(String::from), Some(f));
     assert_eq!(
         order,
@@ -447,11 +764,41 @@ fn test_insert_section_at_each_place() {
         ]
     );
     let texts = texts(&m);
-    assert_eq!((texts[1].as_str(), texts[5].as_str(), texts[10].as_str(), texts[13].as_str()), ("Resumen.", "Objetivo 1.", "Método.", "Anexos"));
-    let heading = m.extract_paragraphs().unwrap().into_iter().find(|p| p.index == 13).unwrap();
-    assert_eq!(heading.outline_level, Some(0), "the heading item gets Word's Heading 1");
-    assert!(m.insert_section("anexos", None, &SectionPlace::End, &[np("x")], false, false).unwrap_err().contains("Ya existe"));
-    assert!(m.insert_section("x", None, &SectionPlace::After("nada".into()), &[np("x")], false, false).unwrap_err().contains("No existe"));
+    assert_eq!(
+        (
+            texts[1].as_str(),
+            texts[5].as_str(),
+            texts[10].as_str(),
+            texts[13].as_str()
+        ),
+        ("Resumen.", "Objetivo 1.", "Método.", "Anexos")
+    );
+    let heading = m
+        .extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.index == 13)
+        .unwrap();
+    assert_eq!(
+        heading.outline_level,
+        Some(0),
+        "the heading item gets Word's Heading 1"
+    );
+    assert!(m
+        .insert_section("anexos", None, &SectionPlace::End, &[np("x")], false, false)
+        .unwrap_err()
+        .contains("Ya existe"));
+    assert!(m
+        .insert_section(
+            "x",
+            None,
+            &SectionPlace::After("nada".into()),
+            &[np("x")],
+            false,
+            false
+        )
+        .unwrap_err()
+        .contains("No existe"));
 }
 
 // ---------- Schema ----------
@@ -482,12 +829,26 @@ fn test_section_schema_is_stored_as_custom_xml_and_survives_saving() {
     m.set_section_schema(Some(&schema())).unwrap();
     assert_eq!(m.section_schema().unwrap(), Some(schema()));
     let item = m.get_file_string("customXml/item1.xml").unwrap();
-    assert!(item.contains(r#"<sections xmlns="urn:rust-web-docx:sections:1" type="informe-tecnico""#));
-    assert!(m.get_file_string("customXml/itemProps1.xml").unwrap().contains("ds:schemaRef ds:uri=\"urn:rust-web-docx:sections:1\""));
-    assert!(m.get_file_string("customXml/_rels/item1.xml.rels").unwrap().contains(r#"Target="itemProps1.xml""#));
-    assert!(m.get_file_string("word/_rels/document.xml.rels").unwrap().contains(r#"Target="../customXml/item1.xml""#));
+    assert!(
+        item.contains(r#"<sections xmlns="urn:rust-web-docx:sections:1" type="informe-tecnico""#)
+    );
+    assert!(m
+        .get_file_string("customXml/itemProps1.xml")
+        .unwrap()
+        .contains("ds:schemaRef ds:uri=\"urn:rust-web-docx:sections:1\""));
+    assert!(m
+        .get_file_string("customXml/_rels/item1.xml.rels")
+        .unwrap()
+        .contains(r#"Target="itemProps1.xml""#));
+    assert!(m
+        .get_file_string("word/_rels/document.xml.rels")
+        .unwrap()
+        .contains(r#"Target="../customXml/item1.xml""#));
     let types = m.get_file_string("[Content_Types].xml").unwrap();
-    assert!(types.contains(r#"PartName="/customXml/itemProps1.xml""#) && types.contains(r#"Extension="xml""#));
+    assert!(
+        types.contains(r#"PartName="/customXml/itemProps1.xml""#)
+            && types.contains(r#"Extension="xml""#)
+    );
     assert_eq!(reopen(&m).section_schema().unwrap(), Some(schema()));
 
     // Replacing rewrites the same part
@@ -500,11 +861,21 @@ fn test_section_schema_is_stored_as_custom_xml_and_survives_saving() {
     // Removing leaves no trace
     m.set_section_schema(None).unwrap();
     assert_eq!(m.section_schema().unwrap(), None);
-    for part in ["customXml/item1.xml", "customXml/itemProps1.xml", "customXml/_rels/item1.xml.rels"] {
+    for part in [
+        "customXml/item1.xml",
+        "customXml/itemProps1.xml",
+        "customXml/_rels/item1.xml.rels",
+    ] {
         assert!(m.get_file_string(part).is_err(), "{} removed", part);
     }
-    assert!(!m.get_file_string("word/_rels/document.xml.rels").unwrap().contains("customXml"));
-    assert!(!m.get_file_string("[Content_Types].xml").unwrap().contains("itemProps1"));
+    assert!(!m
+        .get_file_string("word/_rels/document.xml.rels")
+        .unwrap()
+        .contains("customXml"));
+    assert!(!m
+        .get_file_string("[Content_Types].xml")
+        .unwrap()
+        .contains("itemProps1"));
     assert_eq!(reopen(&m).section_schema().unwrap(), None);
 }
 
@@ -513,10 +884,16 @@ fn test_section_schema_refuses_invalid_lists_and_undoes_in_one_step() {
     let mut m = report();
     let mut bad = schema();
     bad.sections[1].parent = Some("conclusiones".into());
-    assert!(m.set_section_schema(Some(&bad)).unwrap_err().contains("debe aparecer antes"));
+    assert!(m
+        .set_section_schema(Some(&bad))
+        .unwrap_err()
+        .contains("debe aparecer antes"));
     let mut bad = schema();
     bad.sections.push(bad.sections[0].clone());
-    assert!(m.set_section_schema(Some(&bad)).unwrap_err().contains("repetida"));
+    assert!(m
+        .set_section_schema(Some(&bad))
+        .unwrap_err()
+        .contains("repetida"));
     let mut bad = schema();
     bad.kind = " ".into();
     assert!(m.set_section_schema(Some(&bad)).is_err());

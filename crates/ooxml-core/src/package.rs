@@ -20,7 +20,11 @@ pub struct ZipLimits {
 
 impl Default for ZipLimits {
     fn default() -> Self {
-        ZipLimits { max_entries: 10_000, max_part_bytes: 256 * 1024 * 1024, max_total_bytes: 512 * 1024 * 1024 }
+        ZipLimits {
+            max_entries: 10_000,
+            max_part_bytes: 256 * 1024 * 1024,
+            max_total_bytes: 512 * 1024 * 1024,
+        }
     }
 }
 
@@ -63,15 +67,23 @@ pub struct Package {
 
 impl Package {
     /// Reads a package from the bytes of its ZIP, refusing archives that expand past `limits`
-    pub fn from_bytes(bytes: &[u8], limits: &ZipLimits, format: &'static str) -> Result<Self, String> {
+    pub fn from_bytes(
+        bytes: &[u8],
+        limits: &ZipLimits,
+        format: &'static str,
+    ) -> Result<Self, String> {
         if bytes.len() < 4 {
             return Err("El archivo proporcionado está vacío o es demasiado pequeño.".to_string());
         }
 
         let original_size = bytes.len();
         let reader = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(reader)
-            .map_err(|e| format!("No se pudo leer el archivo como formato {} (ZIP): {}", format, e))?;
+        let mut archive = ZipArchive::new(reader).map_err(|e| {
+            format!(
+                "No se pudo leer el archivo como formato {} (ZIP): {}",
+                format, e
+            )
+        })?;
 
         let mut parts = HashMap::new();
         let mut original_order = Vec::new();
@@ -94,8 +106,11 @@ impl Package {
                 .name()
                 .map_err(|e| format!("Nombre no válido en la entrada ZIP {}: {}", i, e))?
                 .to_string();
-            let cap = limits.max_part_bytes.min(limits.max_total_bytes.saturating_sub(total));
-            let mut content = Vec::with_capacity(file.size().min(cap).min(16 * 1024 * 1024) as usize);
+            let cap = limits
+                .max_part_bytes
+                .min(limits.max_total_bytes.saturating_sub(total));
+            let mut content =
+                Vec::with_capacity(file.size().min(cap).min(16 * 1024 * 1024) as usize);
             (&mut file)
                 .take(cap + 1)
                 .read_to_end(&mut content)
@@ -120,7 +135,13 @@ impl Package {
             original_order.push(name);
         }
 
-        Ok(Package { format, parts, original_order, original_size, history: History::default() })
+        Ok(Package {
+            format,
+            parts,
+            original_order,
+            original_size,
+            history: History::default(),
+        })
     }
 
     /// All parts by name
@@ -141,7 +162,10 @@ impl Package {
         match self.parts.get(name) {
             Some(bytes) => String::from_utf8(bytes.clone())
                 .map_err(|e| format!("El archivo '{}' no contiene UTF-8 válido: {}", name, e)),
-            None => Err(format!("No se encontró '{}' en el archivo {}.", name, self.format)),
+            None => Err(format!(
+                "No se encontró '{}' en el archivo {}.",
+                name, self.format
+            )),
         }
     }
 
@@ -149,7 +173,8 @@ impl Package {
     pub fn put(&mut self, name: String, bytes: Vec<u8>) {
         if let Some(step) = self.history.recording.as_mut() {
             if !step.parts.iter().any(|(n, _)| *n == name) {
-                step.parts.push((name.clone(), self.parts.get(&name).cloned()));
+                step.parts
+                    .push((name.clone(), self.parts.get(&name).cloned()));
                 self.history.redo.clear();
             }
         }
@@ -163,7 +188,8 @@ impl Package {
         }
         if let Some(step) = self.history.recording.as_mut() {
             if !step.parts.iter().any(|(n, _)| n == name) {
-                step.parts.push((name.to_string(), self.parts.get(name).cloned()));
+                step.parts
+                    .push((name.to_string(), self.parts.get(name).cloned()));
                 self.history.redo.clear();
             }
         }
@@ -193,8 +219,7 @@ impl Package {
         let mut buffer = Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(&mut buffer);
 
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
         for name in &self.original_order {
             if let Some(content) = self.parts.get(name) {
@@ -208,8 +233,9 @@ impl Package {
         // Include any new parts added
         for (name, content) in &self.parts {
             if !self.original_order.contains(name) {
-                zip.start_file(name, options)
-                    .map_err(|e| format!("Error al escribir nueva entrada ZIP '{}': {}", name, e))?;
+                zip.start_file(name, options).map_err(|e| {
+                    format!("Error al escribir nueva entrada ZIP '{}': {}", name, e)
+                })?;
                 zip.write_all(content)
                     .map_err(|e| format!("Error al escribir contenido de '{}': {}", name, e))?;
             }
@@ -224,7 +250,10 @@ impl Package {
     /// Starts a new undo step; changes made until the next checkpoint undo together
     pub fn checkpoint(&mut self, selection_before: Option<String>) {
         self.finish_step();
-        self.history.recording = Some(UndoStep { selection_before, ..Default::default() });
+        self.history.recording = Some(UndoStep {
+            selection_before,
+            ..Default::default()
+        });
     }
 
     /// Records where the selection ended up after the current step's changes
@@ -263,7 +292,11 @@ impl Package {
                 (name, current)
             })
             .collect::<Vec<_>>();
-        UndoStep { parts, selection_before: step.selection_before, selection_after: step.selection_after }
+        UndoStep {
+            parts,
+            selection_before: step.selection_before,
+            selection_after: step.selection_after,
+        }
     }
 
     /// Undoes the last step
@@ -293,7 +326,12 @@ impl Package {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.history.undo.is_empty() || self.history.recording.as_ref().is_some_and(|s| !s.parts.is_empty())
+        !self.history.undo.is_empty()
+            || self
+                .history
+                .recording
+                .as_ref()
+                .is_some_and(|s| !s.parts.is_empty())
     }
 
     pub fn can_redo(&self) -> bool {
@@ -318,7 +356,9 @@ mod tests {
 
     fn names(bytes: &[u8]) -> Vec<String> {
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().unwrap().to_string()).collect()
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -330,17 +370,32 @@ mod tests {
         assert_eq!(names(&out), ["b.xml", "a.xml", "c/d.bin", "new.xml"]);
         let again = Package::from_bytes(&out, &ZipLimits::default(), "TEST").unwrap();
         assert_eq!(again.get_string("a.xml").unwrap(), "<a/>");
-        assert!(again.get_string("missing").unwrap_err().contains("archivo TEST"));
+        assert!(again
+            .get_string("missing")
+            .unwrap_err()
+            .contains("archivo TEST"));
     }
 
     #[test]
     fn refuses_archives_past_the_limits() {
         let bytes = zip_of(&[("a", "12345"), ("b", "12345")]);
-        let few = ZipLimits { max_entries: 1, ..ZipLimits::default() };
+        let few = ZipLimits {
+            max_entries: 1,
+            ..ZipLimits::default()
+        };
         assert!(Package::from_bytes(&bytes, &few, "TEST").is_err());
-        let small = ZipLimits { max_part_bytes: 4, ..ZipLimits::default() };
-        assert!(Package::from_bytes(&bytes, &small, "TEST").err().unwrap().contains("'a'"));
-        let total = ZipLimits { max_total_bytes: 8, ..ZipLimits::default() };
+        let small = ZipLimits {
+            max_part_bytes: 4,
+            ..ZipLimits::default()
+        };
+        assert!(Package::from_bytes(&bytes, &small, "TEST")
+            .err()
+            .unwrap()
+            .contains("'a'"));
+        let total = ZipLimits {
+            max_total_bytes: 8,
+            ..ZipLimits::default()
+        };
         assert!(Package::from_bytes(&bytes, &total, "TEST").is_err());
         assert!(Package::from_bytes(b"xx", &ZipLimits::default(), "TEST").is_err());
     }

@@ -14,7 +14,10 @@ fn docx(body: &str) -> DocxModifier {
         let mut zip = ZipWriter::new(&mut buf);
         let opts = SimpleFileOptions::default();
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
         ] {
             zip.start_file(name, opts).unwrap();
@@ -34,11 +37,20 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 }
 
 fn images(m: &DocxModifier, paragraph: usize) -> Vec<ImageRef> {
-    m.extract_paragraphs().unwrap().into_iter().find(|p| p.index == paragraph).unwrap().images
+    m.extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.index == paragraph)
+        .unwrap()
+        .images
 }
 
 fn texts(m: &DocxModifier) -> Vec<String> {
-    m.extract_paragraphs().unwrap().into_iter().map(|p| p.text).collect()
+    m.extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect()
 }
 
 fn reopen(m: &DocxModifier) -> DocxModifier {
@@ -49,12 +61,22 @@ fn reopen(m: &DocxModifier) -> DocxModifier {
 fn test_resize_move_and_wrap_an_inserted_picture() {
     let mut m = docx(r#"<w:p><w:r><w:t>Texto</w:t></w:r></w:p>"#);
     m.checkpoint(None);
-    let (p, _) = m.insert_image(0, 5, &png(400, 200), &NewImage::default()).unwrap();
+    let (p, _) = m
+        .insert_image(0, 5, &png(400, 200), &NewImage::default())
+        .unwrap();
     assert_eq!(images(&m, p)[0].wrap, "inline");
 
     m.checkpoint(None);
     let img = m
-        .update_image(p, 0, &ImageUpdate { width: Some(100.0), wrap: Some("square".into()), ..Default::default() })
+        .update_image(
+            p,
+            0,
+            &ImageUpdate {
+                width: Some(100.0),
+                wrap: Some("square".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!((img.width, img.height), (100.0, 50.0), "aspect ratio kept");
     assert!(img.anchored);
@@ -77,7 +99,10 @@ fn test_resize_move_and_wrap_an_inserted_picture() {
     let img = &images(&r, p)[0];
     assert_eq!(img.wrap, "square");
     assert_eq!(img.wrap_side, "left");
-    assert_eq!((img.h_relative.as_str(), img.h_align.as_deref()), ("margin", Some("right")));
+    assert_eq!(
+        (img.h_relative.as_str(), img.h_align.as_deref()),
+        ("margin", Some("right"))
+    );
     assert_eq!((img.v_relative.as_str(), img.v_offset), ("paragraph", 12.0));
     assert_eq!(img.alt, "Logo & sello");
     let doc = r.get_file_string("word/document.xml").unwrap();
@@ -112,10 +137,16 @@ fn test_floating_insert_anchors_to_the_current_paragraph() {
     assert_eq!(img.wrap, "tight");
     assert_eq!((img.width, img.height), (120.0, 60.0));
     assert_eq!((img.h_relative.as_str(), img.h_offset), ("page", 40.0));
-    assert!(m.get_file_string("word/document.xml").unwrap().contains("<wp:wrapPolygon"));
+    assert!(m
+        .get_file_string("word/document.xml")
+        .unwrap()
+        .contains("<wp:wrapPolygon"));
 
     // A position needs a floating wrap
-    let bad = NewImage { h_offset: Some(10.0), ..Default::default() };
+    let bad = NewImage {
+        h_offset: Some(10.0),
+        ..Default::default()
+    };
     assert!(m.insert_image(0, 0, &png(10, 10), &bad).is_err());
 }
 
@@ -135,7 +166,9 @@ fn test_inline_offset_follows_the_text() {
 #[test]
 fn test_delete_picture_and_its_empty_run() {
     let mut m = docx(r#"<w:p><w:r><w:t>Texto</w:t></w:r></w:p>"#);
-    let (p, _) = m.insert_image(0, 5, &png(40, 40), &NewImage::default()).unwrap();
+    let (p, _) = m
+        .insert_image(0, 5, &png(40, 40), &NewImage::default())
+        .unwrap();
     m.checkpoint(None);
     m.delete_image(p, 0).unwrap();
     assert!(images(&m, p).is_empty());
@@ -150,10 +183,12 @@ fn test_delete_picture_and_its_empty_run() {
 #[test]
 fn test_text_edits_keep_pictures_in_place() {
     let mut m = docx(r#"<w:p><w:r><w:t>Texto</w:t></w:r></w:p>"#);
-    let opts = NewImage { wrap: Some("square".into()), ..Default::default() };
+    let opts = NewImage {
+        wrap: Some("square".into()),
+        ..Default::default()
+    };
     m.insert_image(0, 0, &png(40, 40), &opts).unwrap();
     m.replace_paragraph_range(0, 0, 0, "Nuevo ").unwrap();
     assert_eq!(texts(&m), vec!["Nuevo Texto"]);
     assert_eq!(images(&m, 0)[0].wrap, "square");
 }
-

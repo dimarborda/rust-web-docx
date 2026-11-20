@@ -22,7 +22,10 @@ impl PageSize {
             None | Some("") | Some("a4") => Ok(PageSize::A4),
             Some("letter") | Some("carta") => Ok(PageSize::Letter),
             Some("legal") | Some("oficio") => Ok(PageSize::Legal),
-            Some(other) => Err(format!("Unknown page size '{}': use a4, letter or legal", other)),
+            Some(other) => Err(format!(
+                "Unknown page size '{}': use a4, letter or legal",
+                other
+            )),
         }
     }
 
@@ -116,7 +119,12 @@ mod tests {
         ] {
             let m = DocxModifier::from_bytes(&generate_blank_docx(page).unwrap()).unwrap();
             let setup = &m.layout_inputs().unwrap().page_setup;
-            assert_eq!((setup.width, setup.height), (w / 15.0, h / 15.0), "{:?}", page);
+            assert_eq!(
+                (setup.width, setup.height),
+                (w / 15.0, h / 15.0),
+                "{:?}",
+                page
+            );
         }
     }
 

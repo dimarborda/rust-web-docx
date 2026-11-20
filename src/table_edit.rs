@@ -114,7 +114,9 @@ fn read_table(tokens: &[Token], start: usize, end: usize) -> TableLoc {
         }
         if is_element(tok, "tblGrid") {
             let grid_end = element_end(tokens, i);
-            grid_cols = (i..grid_end).filter(|&j| is_element(&tokens[j], "gridCol")).count();
+            grid_cols = (i..grid_end)
+                .filter(|&j| is_element(&tokens[j], "gridCol"))
+                .count();
             i = grid_end + 1;
             continue;
         }
@@ -134,7 +136,11 @@ fn read_table(tokens: &[Token], start: usize, end: usize) -> TableLoc {
         .map(|r| r.cells.last().map(|c| c.grid + c.span).unwrap_or(0))
         .max()
         .unwrap_or(0);
-    TableLoc { tok: (start, end), rows, cols: grid_cols.max(used) }
+    TableLoc {
+        tok: (start, end),
+        rows,
+        cols: grid_cols.max(used),
+    }
 }
 
 fn read_row(tokens: &[Token], start: usize, end: usize, wrapped: bool) -> RowLoc {
@@ -146,7 +152,9 @@ fn read_row(tokens: &[Token], start: usize, end: usize, wrapped: bool) -> RowLoc
         if is_element(tok, "trPr") {
             let pr_end = element_end(tokens, i);
             if let Some(j) = (i..pr_end).find(|&j| is_element(&tokens[j], "gridBefore")) {
-                grid = val_attr(&tokens[j]).and_then(|v| v.parse().ok()).unwrap_or(0);
+                grid = val_attr(&tokens[j])
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
             }
             i = pr_end + 1;
             continue;
@@ -160,15 +168,28 @@ fn read_row(tokens: &[Token], start: usize, end: usize, wrapped: bool) -> RowLoc
                 let pr_end = element_end(tokens, pr);
                 for tok in &tokens[pr..pr_end] {
                     if is_element(tok, "gridSpan") {
-                        span = val_attr(tok).and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+                        span = val_attr(tok)
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1)
+                            .max(1);
                     } else if is_element(tok, "vMerge") {
-                        vmerge = if val_attr(tok).as_deref() == Some("restart") { VMerge::Restart } else { VMerge::Continue };
+                        vmerge = if val_attr(tok).as_deref() == Some("restart") {
+                            VMerge::Restart
+                        } else {
+                            VMerge::Continue
+                        };
                     } else if is_element(tok, "hMerge") {
                         hmerge = true;
                     }
                 }
             }
-            cells.push(CellLoc { tok: (i, tc_end), grid, span, vmerge, hmerge });
+            cells.push(CellLoc {
+                tok: (i, tc_end),
+                grid,
+                span,
+                vmerge,
+                hmerge,
+            });
             grid += span;
             i = tc_end + 1;
             continue;
@@ -179,7 +200,11 @@ fn read_row(tokens: &[Token], start: usize, end: usize, wrapped: bool) -> RowLoc
         }
         i += 1;
     }
-    RowLoc { tok: (start, end), cells, wrapped }
+    RowLoc {
+        tok: (start, end),
+        cells,
+        wrapped,
+    }
 }
 
 /// Byte ranges of the paragraphs of a cell; refuses cells holding a nested table
@@ -229,7 +254,13 @@ fn remove_children(fragment: &str, names: &[&str]) -> Result<String, String> {
 }
 
 /// XML of the first element named `name` (local name) between tokens `from` and `to`
-fn first_element<'x>(xml: &'x str, tokens: &[Token], from: usize, to: usize, name: &str) -> Option<&'x str> {
+fn first_element<'x>(
+    xml: &'x str,
+    tokens: &[Token],
+    from: usize,
+    to: usize,
+    name: &str,
+) -> Option<&'x str> {
     let j = (from..to).find(|&j| is_element(&tokens[j], name))?;
     Some(&xml[byte_range(tokens, (j, element_end(tokens, j)))])
 }
@@ -246,7 +277,10 @@ fn run_content(p: &str, text: &str) -> String {
                 out.push_str(&format!("<{p}tab/>"));
             }
             if !piece.is_empty() {
-                out.push_str(&format!(r#"<{p}t xml:space="preserve">{}</{p}t>"#, escape_xml(piece)));
+                out.push_str(&format!(
+                    r#"<{p}t xml:space="preserve">{}</{p}t>"#,
+                    escape_xml(piece)
+                ));
             }
         }
     }
@@ -255,10 +289,19 @@ fn run_content(p: &str, text: &str) -> String {
 
 /// A new cell like `cell`: its properties, its first paragraph's properties and its first
 /// run's formatting, holding `text`
-fn cell_like(xml: &str, tokens: &[Token], cell: &CellLoc, p: &str, text: &str) -> Result<String, String> {
+fn cell_like(
+    xml: &str,
+    tokens: &[Token],
+    cell: &CellLoc,
+    p: &str,
+    text: &str,
+) -> Result<String, String> {
     let (start, end) = cell.tok;
     let tc_pr = match (start + 1..end).find(|&j| is_element(&tokens[j], "tcPr")) {
-        Some(j) => remove_children(&xml[byte_range(tokens, (j, element_end(tokens, j)))], &["cnfStyle", "tcPrChange", "cellIns", "cellDel", "cellMerge"])?,
+        Some(j) => remove_children(
+            &xml[byte_range(tokens, (j, element_end(tokens, j)))],
+            &["cnfStyle", "tcPrChange", "cellIns", "cellDel", "cellMerge"],
+        )?,
         None => String::new(),
     };
     let (mut p_pr, mut r_pr) = (String::new(), String::new());
@@ -290,7 +333,11 @@ fn cell_like(xml: &str, tokens: &[Token], cell: &CellLoc, p: &str, text: &str) -
             p_pr = format!("<{p}pPr>{mark}</{p}pPr>");
         }
     }
-    let run = if text.is_empty() { String::new() } else { format!("<{p}r>{r_pr}{}</{p}r>", run_content(p, text)) };
+    let run = if text.is_empty() {
+        String::new()
+    } else {
+        format!("<{p}r>{r_pr}{}</{p}r>", run_content(p, text))
+    };
     Ok(format!("<{p}tc>{tc_pr}<{p}p>{p_pr}{run}</{p}p></{p}tc>"))
 }
 
@@ -299,13 +346,27 @@ impl DocxModifier {
         let count = tables.len();
         tables.into_iter().nth(table).ok_or_else(|| match count {
             0 => "El documento no tiene tablas.".to_string(),
-            1 => format!("No existe la tabla {}: el documento tiene una sola tabla (índice 0).", table),
-            n => format!("No existe la tabla {}: el documento tiene {} tablas (índices 0 a {}).", table, n, n - 1),
+            1 => format!(
+                "No existe la tabla {}: el documento tiene una sola tabla (índice 0).",
+                table
+            ),
+            n => format!(
+                "No existe la tabla {}: el documento tiene {} tablas (índices 0 a {}).",
+                table,
+                n,
+                n - 1
+            ),
         })
     }
 
     fn row_error(table: usize, rows: usize, row: usize) -> String {
-        format!("No existe la fila {} en la tabla {}: tiene {} filas (índices 0 a {}).", row, table, rows, rows.saturating_sub(1))
+        format!(
+            "No existe la fila {} en la tabla {}: tiene {} filas (índices 0 a {}).",
+            row,
+            table,
+            rows,
+            rows.saturating_sub(1)
+        )
     }
 
     /// The body tables with their size, first row text and paragraph range
@@ -322,7 +383,9 @@ impl DocxModifier {
                 .filter(|(_, r)| r.start >= bytes.start && r.end <= bytes.end)
                 .map(|(i, _)| i)
                 .collect();
-            let (Some(&first), Some(&last)) = (inside.first(), inside.last()) else { continue };
+            let (Some(&first), Some(&last)) = (inside.first(), inside.last()) else {
+                continue;
+            };
             let mut header = vec![String::new(); table.cols];
             if let Some(row) = table.rows.first() {
                 for cell in &row.cells {
@@ -339,7 +402,14 @@ impl DocxModifier {
                     }
                 }
             }
-            out.push(TableSummary { index, rows: table.rows.len(), cols: table.cols, header, first, last });
+            out.push(TableSummary {
+                index,
+                rows: table.rows.len(),
+                cols: table.cols,
+                header,
+                first,
+                last,
+            });
         }
         Ok(out)
     }
@@ -348,23 +418,40 @@ impl DocxModifier {
     /// paragraph properties and run formatting; "\n" is a line break inside the cell. `col` is
     /// a grid column: a horizontally merged cell is written through its first column, and a
     /// cell continuing a vertical merge is refused (write the first row of the merge).
-    pub fn set_table_cell(&mut self, table: usize, row: usize, col: usize, text: &str) -> Result<(), String> {
+    pub fn set_table_cell(
+        &mut self,
+        table: usize,
+        row: usize,
+        col: usize,
+        text: &str,
+    ) -> Result<(), String> {
         let mut xml = self.get_file_string("word/document.xml")?;
         let ranges = {
             let tokens = tokenize(&xml)?;
             let loc = Self::table_at(locate_tables(&tokens), table)?;
-            let r = loc.rows.get(row).ok_or_else(|| Self::row_error(table, loc.rows.len(), row))?;
+            let r = loc
+                .rows
+                .get(row)
+                .ok_or_else(|| Self::row_error(table, loc.rows.len(), row))?;
             if col >= loc.cols {
                 return Err(format!(
                     "No existe la columna {} en la tabla {}: tiene {} columnas (índices 0 a {}).",
-                    col, table, loc.cols, loc.cols.saturating_sub(1)
+                    col,
+                    table,
+                    loc.cols,
+                    loc.cols.saturating_sub(1)
                 ));
             }
             let cell = r
                 .cells
                 .iter()
                 .find(|c| col >= c.grid && col < c.grid + c.span)
-                .ok_or_else(|| format!("La fila {} de la tabla {} no tiene celda en la columna {}.", row, table, col))?;
+                .ok_or_else(|| {
+                    format!(
+                        "La fila {} de la tabla {} no tiene celda en la columna {}.",
+                        row, table, col
+                    )
+                })?;
             if cell.grid != col {
                 return Err(format!(
                     "La celda ({}, {}) de la tabla {} está combinada con la columna {}; escribe en la columna {}.",
@@ -377,7 +464,12 @@ impl DocxModifier {
             if cell.vmerge == VMerge::Continue {
                 let first = (0..row)
                     .rev()
-                    .find(|&k| loc.rows[k].cells.iter().any(|c| c.grid == col && c.vmerge != VMerge::Continue))
+                    .find(|&k| {
+                        loc.rows[k]
+                            .cells
+                            .iter()
+                            .any(|c| c.grid == col && c.vmerge != VMerge::Continue)
+                    })
                     .unwrap_or(0);
                 return Err(format!(
                     "La celda ({}, {}) de la tabla {} está combinada verticalmente con la de la fila {}; escribe en la fila {}.",
@@ -396,7 +488,13 @@ impl DocxModifier {
     /// shading, widths), first paragraph's properties and first run's formatting; by default
     /// the row before `at`, or the next one when inserting at the top. Short rows get empty
     /// cells. Returns the index of the first new row.
-    pub fn insert_table_rows(&mut self, table: usize, at: usize, rows: &[Vec<String>], copy_from: Option<usize>) -> Result<usize, String> {
+    pub fn insert_table_rows(
+        &mut self,
+        table: usize,
+        at: usize,
+        rows: &[Vec<String>],
+        copy_from: Option<usize>,
+    ) -> Result<usize, String> {
         if rows.is_empty() {
             return Err("No hay filas para insertar.".to_string());
         }
@@ -418,8 +516,14 @@ impl DocxModifier {
                 return Err(format!("La tabla {} tiene filas dentro de controles de contenido; no se pueden insertar filas en ella.", table));
             }
             let template_index = copy_from.unwrap_or(if at > 0 { at - 1 } else { 0 });
-            let template = loc.rows.get(template_index).ok_or_else(|| Self::row_error(table, count, template_index))?;
-            if template.has_vmerge(VMerge::Restart) || template.has_vmerge(VMerge::Continue) || template.cells.iter().any(|c| c.hmerge) {
+            let template = loc
+                .rows
+                .get(template_index)
+                .ok_or_else(|| Self::row_error(table, count, template_index))?;
+            if template.has_vmerge(VMerge::Restart)
+                || template.has_vmerge(VMerge::Continue)
+                || template.cells.iter().any(|c| c.hmerge)
+            {
                 return Err(format!(
                     "La fila {} de la tabla {} tiene celdas combinadas verticalmente; elige otra fila con copyFormatFrom.",
                     template_index, table
@@ -433,12 +537,18 @@ impl DocxModifier {
             }
             let cells = template.cells.len();
             if cells == 0 {
-                return Err(format!("La fila {} de la tabla {} no tiene celdas.", template_index, table));
+                return Err(format!(
+                    "La fila {} de la tabla {} no tiene celdas.",
+                    template_index, table
+                ));
             }
             if let Some((k, row)) = rows.iter().enumerate().find(|(_, r)| r.len() > cells) {
                 return Err(format!(
                     "La fila {} tiene {} valores, pero las filas de la tabla {} tienen {} celdas.",
-                    k, row.len(), table, cells
+                    k,
+                    row.len(),
+                    table,
+                    cells
                 ));
             }
 
@@ -448,7 +558,9 @@ impl DocxModifier {
                 _ => String::new(),
             };
             let ids = Regex::new(r#"\s+w14:(?:paraId|textId)="[^"]*""#).unwrap();
-            let open = ids.replace_all(&xml[tokens[tr_start].span.clone()], "").into_owned();
+            let open = ids
+                .replace_all(&xml[tokens[tr_start].span.clone()], "")
+                .into_owned();
             let ex = first_element(&xml, &tokens, tr_start + 1, tr_end, "tblPrEx").unwrap_or("");
             let mut drop = vec!["cnfStyle", "ins", "del", "trPrChange"];
             if at > 0 {
@@ -465,7 +577,10 @@ impl DocxModifier {
                 fragment.push_str(ex);
                 fragment.push_str(&tr_pr);
                 for (k, cell) in template.cells.iter().enumerate() {
-                    let text = values.get(k).map(|s| s.replace("\r\n", "\n").replace('\r', "\n")).unwrap_or_default();
+                    let text = values
+                        .get(k)
+                        .map(|s| s.replace("\r\n", "\n").replace('\r', "\n"))
+                        .unwrap_or_default();
                     fragment.push_str(&cell_like(&xml, &tokens, cell, &p, &text)?);
                 }
                 fragment.push_str(&format!("</{p}tr>"));
@@ -484,7 +599,12 @@ impl DocxModifier {
 
     /// Deletes `count` rows of body table `table` from row `from`. The table keeps at least one
     /// row, and vertical merges crossing the deleted range are refused.
-    pub fn delete_table_rows(&mut self, table: usize, from: usize, count: usize) -> Result<(), String> {
+    pub fn delete_table_rows(
+        &mut self,
+        table: usize,
+        from: usize,
+        count: usize,
+    ) -> Result<(), String> {
         if count == 0 {
             return Err("No hay filas para eliminar (count = 0).".to_string());
         }
@@ -506,14 +626,20 @@ impl DocxModifier {
                 return Err(format!("La tabla {} tiene filas dentro de controles de contenido; no se pueden eliminar filas de ella.", table));
             }
             let crosses_above = loc.rows[from].has_vmerge(VMerge::Continue);
-            let crosses_below = loc.rows.get(from + count).is_some_and(|r| r.has_vmerge(VMerge::Continue));
+            let crosses_below = loc
+                .rows
+                .get(from + count)
+                .is_some_and(|r| r.has_vmerge(VMerge::Continue));
             if crosses_above || crosses_below {
                 return Err(format!(
                     "Las filas {} a {} de la tabla {} cortan celdas combinadas verticalmente; amplía el rango para incluirlas completas.",
                     from, from + count - 1, table
                 ));
             }
-            loc.rows[from..from + count].iter().map(|r| byte_range(&tokens, r.tok)).collect::<Vec<_>>()
+            loc.rows[from..from + count]
+                .iter()
+                .map(|r| byte_range(&tokens, r.tok))
+                .collect::<Vec<_>>()
         };
         for range in cuts.into_iter().rev() {
             xml.replace_range(range, "");
@@ -543,10 +669,25 @@ impl DocxModifier {
             let loc = Self::table_at(locate_tables(&tokens), table)?;
             if let Some(values) = values {
                 if values.len() > loc.rows.len() {
-                    return Err(format!("Hay valores para {} filas, pero la tabla {} tiene {}.", values.len(), table, loc.rows.len()));
+                    return Err(format!(
+                        "Hay valores para {} filas, pero la tabla {} tiene {}.",
+                        values.len(),
+                        table,
+                        loc.rows.len()
+                    ));
                 }
-                if let Some((r, row)) = values.iter().enumerate().find(|(_, row)| row.len() > loc.cols) {
-                    return Err(format!("La fila {} tiene {} valores, pero la tabla {} tiene {} columnas.", r, row.len(), table, loc.cols));
+                if let Some((r, row)) = values
+                    .iter()
+                    .enumerate()
+                    .find(|(_, row)| row.len() > loc.cols)
+                {
+                    return Err(format!(
+                        "La fila {} tiene {} valores, pero la tabla {} tiene {} columnas.",
+                        r,
+                        row.len(),
+                        table,
+                        loc.cols
+                    ));
                 }
             }
             clean_table_copy(&original[byte_range(&tokens, loc.tok)])?
@@ -605,11 +746,33 @@ impl DocxModifier {
 /// Elements left out of a copied table: marks whose ids must be unique in the document,
 /// references to notes and comments, and tracked deletions and property changes (accepted)
 const COPY_DROPS: &[&str] = &[
-    "bookmarkStart", "bookmarkEnd", "commentRangeStart", "commentRangeEnd", "commentReference",
-    "footnoteReference", "endnoteReference", "permStart", "permEnd", "del", "moveFrom",
-    "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd", "rPrChange",
-    "pPrChange", "tcPrChange", "trPrChange", "tblPrChange", "tblPrExChange", "tblGridChange",
-    "sectPrChange", "numberingChange", "cellIns", "cellDel", "cellMerge",
+    "bookmarkStart",
+    "bookmarkEnd",
+    "commentRangeStart",
+    "commentRangeEnd",
+    "commentReference",
+    "footnoteReference",
+    "endnoteReference",
+    "permStart",
+    "permEnd",
+    "del",
+    "moveFrom",
+    "moveFromRangeStart",
+    "moveFromRangeEnd",
+    "moveToRangeStart",
+    "moveToRangeEnd",
+    "rPrChange",
+    "pPrChange",
+    "tcPrChange",
+    "trPrChange",
+    "tblPrChange",
+    "tblPrExChange",
+    "tblGridChange",
+    "sectPrChange",
+    "numberingChange",
+    "cellIns",
+    "cellDel",
+    "cellMerge",
 ];
 /// Elements whose content stays in a copied table without them (tracked insertions, accepted)
 const COPY_UNWRAPS: &[&str] = &["ins", "moveTo"];
@@ -631,7 +794,9 @@ fn clean_table_copy(fragment: &str) -> Result<String, String> {
             continue;
         };
         let end = element_end(&tokens, i);
-        if tag_is(name, "tag") && val_attr(tok).is_some_and(|v| v.starts_with(super::section_edit::SECTION_TAG_PREFIX)) {
+        if tag_is(name, "tag")
+            && val_attr(tok).is_some_and(|v| v.starts_with(super::section_edit::SECTION_TAG_PREFIX))
+        {
             return Err("La tabla contiene una sección lógica; quítala con unwrapSection antes de duplicar la tabla.".to_string());
         }
         // A content control's id: Word gives the copy a new one

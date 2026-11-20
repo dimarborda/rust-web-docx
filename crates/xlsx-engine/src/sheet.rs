@@ -138,7 +138,9 @@ impl<'a> SheetXml<'a> {
                     // Nothing after sheetData holds cells
                     break;
                 }
-                Event::Start(e) | Event::Empty(e) if cell.is_none() && tag_is(e.name().as_ref(), "row") => {
+                Event::Start(e) | Event::Empty(e)
+                    if cell.is_none() && tag_is(e.name().as_ref(), "row") =>
+                {
                     let self_closing = xml[before..after].ends_with("/>");
                     let previous = rows.last().map(|r| r.number).unwrap_or(0);
                     let number = attr_u32(&e, "r");
@@ -156,11 +158,16 @@ impl<'a> SheetXml<'a> {
                         row.range.end = after;
                     }
                 }
-                Event::Start(e) | Event::Empty(e) if cell.is_none() && tag_is(e.name().as_ref(), "c") => {
+                Event::Start(e) | Event::Empty(e)
+                    if cell.is_none() && tag_is(e.name().as_ref(), "c") =>
+                {
                     let Some(row) = rows.last_mut() else { continue };
                     let previous_col = row.cells.last().map(|c| c.at.col).unwrap_or(0);
                     let explicit = get_attr_value(&e, "r").and_then(|r| CellRef::parse(&r).ok());
-                    let at = explicit.unwrap_or(CellRef { row: row.number, col: previous_col + 1 });
+                    let at = explicit.unwrap_or(CellRef {
+                        row: row.number,
+                        col: previous_col + 1,
+                    });
                     let node = CellNode {
                         at,
                         range: before..after,
@@ -239,7 +246,13 @@ impl<'a> SheetXml<'a> {
             }
         }
         let data = data.ok_or("La hoja no tiene <sheetData>.")?;
-        Ok(SheetXml { xml, prefix, data, rows, dimension })
+        Ok(SheetXml {
+            xml,
+            prefix,
+            data,
+            rows,
+            dimension,
+        })
     }
 
     /// The cell at `at`, if the sheet has an element for it
@@ -302,7 +315,10 @@ impl<'a> SheetXml<'a> {
                 body.push_str(&new_row(**number, cells));
                 pending.next();
             }
-            let edits_here = pending.peek().filter(|(n, _)| **n == row.number).map(|(_, cells)| *cells);
+            let edits_here = pending
+                .peek()
+                .filter(|(n, _)| **n == row.number)
+                .map(|(_, cells)| *cells);
             if edits_here.is_some() {
                 pending.next();
             }
@@ -313,7 +329,11 @@ impl<'a> SheetXml<'a> {
             body.push_str(&self.rebuild_row(row, edits_here.map(Vec::as_slice).unwrap_or(&[])));
             cursor = row.range.end;
         }
-        let tail_at = self.rows.last().map(|r| r.range.end.max(cursor)).unwrap_or(inner.start);
+        let tail_at = self
+            .rows
+            .last()
+            .map(|r| r.range.end.max(cursor))
+            .unwrap_or(inner.start);
         body.push_str(&xml[cursor..tail_at]);
         cursor = tail_at;
         for (number, cells) in pending {
@@ -353,7 +373,9 @@ impl<'a> SheetXml<'a> {
         if !row.has_ref {
             start_tag = set_attr(&start_tag, "r", &row.number.to_string());
         }
-        let adds_cells = edits.iter().any(|(col, c)| c.is_some() && !row.cells.iter().any(|cell| cell.at.col == *col));
+        let adds_cells = edits
+            .iter()
+            .any(|(col, c)| c.is_some() && !row.cells.iter().any(|cell| cell.at.col == *col));
         if adds_cells {
             // `spans` is only an optimization hint; a stale one would be wrong
             start_tag = remove_attr(&start_tag, "spans");
@@ -387,11 +409,19 @@ impl<'a> SheetXml<'a> {
                     out.push_str(content.as_deref().unwrap_or(""));
                     pending.next();
                 }
-                None if !cell.has_ref => out.push_str(&set_attr(&xml[cell.range.clone()], "r", &cell.at.to_string())),
+                None if !cell.has_ref => out.push_str(&set_attr(
+                    &xml[cell.range.clone()],
+                    "r",
+                    &cell.at.to_string(),
+                )),
                 None => out.push_str(&xml[cell.range.clone()]),
             }
         }
-        let tail_at = row.cells.last().map(|c| c.range.end).unwrap_or(row.start_tag.end);
+        let tail_at = row
+            .cells
+            .last()
+            .map(|c| c.range.end)
+            .unwrap_or(row.start_tag.end);
         out.push_str(&xml[cursor..tail_at]);
         for (_, content) in pending {
             out.push_str(content.as_deref().unwrap_or(""));
@@ -401,10 +431,16 @@ impl<'a> SheetXml<'a> {
     }
 
     /// The `<dimension>` element grown to hold the written cells
-    fn updated_dimension(&self, element: &str, edits: &BTreeMap<CellRef, Option<String>>) -> String {
+    fn updated_dimension(
+        &self,
+        element: &str,
+        edits: &BTreeMap<CellRef, Option<String>>,
+    ) -> String {
         let mut reader = Reader::from_str(element);
         let current = match reader.read_event() {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok()),
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok())
+            }
             _ => None,
         };
         let written = edits
@@ -432,7 +468,10 @@ mod tests {
     const SHEET: &str = r#"<worksheet xmlns="m"><dimension ref="A1:C3"/><sheetData><row r="1" spans="1:3"><c r="A1" t="s"><v>0</v></c><c r="C1" s="2"><f>A2*2</f><v>84</v></c></row><row r="3"><c r="B3" t="inlineStr"><is><r><t>Hola </t></r><r><t>mundo</t></r><rPh><t>x</t></rPh></is></c><c r="C3" t="b"><v>1</v></c></row></sheetData><mergeCells count="1"><mergeCell ref="A5:B5"/></mergeCells></worksheet>"#;
 
     fn edits(pairs: &[(&str, Option<&str>)]) -> BTreeMap<CellRef, Option<String>> {
-        pairs.iter().map(|(r, c)| (CellRef::parse(r).unwrap(), c.map(str::to_string))).collect()
+        pairs
+            .iter()
+            .map(|(r, c)| (CellRef::parse(r).unwrap(), c.map(str::to_string)))
+            .collect()
     }
 
     #[test]
@@ -451,11 +490,28 @@ mod tests {
     fn infers_positions_without_references() {
         let xml = r#"<worksheet><sheetData><row><c><v>1</v></c><c><v>2</v></c></row><row><c r="C2"><v>3</v></c><c><v>4</v></c></row></sheetData></worksheet>"#;
         let sheet = SheetXml::parse(xml).unwrap();
-        assert_eq!(sheet.cell(CellRef::parse("B1").unwrap()).unwrap().value.as_deref(), Some("2"));
-        assert_eq!(sheet.cell(CellRef::parse("D2").unwrap()).unwrap().value.as_deref(), Some("4"));
+        assert_eq!(
+            sheet
+                .cell(CellRef::parse("B1").unwrap())
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            sheet
+                .cell(CellRef::parse("D2").unwrap())
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("4")
+        );
 
         let out = sheet.splice(&edits(&[("A1", Some(r#"<c r="A1"><v>9</v></c>"#))]));
-        assert_eq!(out, r#"<worksheet><sheetData><row r="1"><c r="A1"><v>9</v></c><c r="B1"><v>2</v></c></row><row r="2"><c r="C2"><v>3</v></c><c><v>4</v></c></row></sheetData></worksheet>"#);
+        assert_eq!(
+            out,
+            r#"<worksheet><sheetData><row r="1"><c r="A1"><v>9</v></c><c r="B1"><v>2</v></c></row><row r="2"><c r="C2"><v>3</v></c><c><v>4</v></c></row></sheetData></worksheet>"#
+        );
     }
 
     #[test]

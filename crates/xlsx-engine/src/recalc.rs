@@ -44,7 +44,8 @@ pub fn defined_names(workbook_xml: &str) -> Vec<DefinedName> {
             Ok(Event::Start(e)) if tag_is(e.name().as_ref(), "definedName") => {
                 current = Some(DefinedName {
                     name: get_attr_value(&e, "name").unwrap_or_default(),
-                    local_sheet: get_attr_value(&e, "localSheetId").and_then(|v| v.trim().parse().ok()),
+                    local_sheet: get_attr_value(&e, "localSheetId")
+                        .and_then(|v| v.trim().parse().ok()),
                     text: String::new(),
                 });
             }
@@ -55,7 +56,8 @@ pub fn defined_names(workbook_xml: &str) -> Vec<DefinedName> {
             }
             Ok(Event::GeneralRef(r)) => {
                 if let Some(name) = current.as_mut() {
-                    name.text.push_str(&decode(&format!("&{};", r.into_inner())));
+                    name.text
+                        .push_str(&decode(&format!("&{};", r.into_inner())));
                 }
             }
             Ok(Event::End(e)) if tag_is(e.name().as_ref(), "definedName") => {
@@ -74,7 +76,13 @@ pub fn defined_names(workbook_xml: &str) -> Vec<DefinedName> {
 pub fn node_value(node: &CellNode, strings: &SharedStrings, date1904: bool) -> Val {
     let raw = node.value.as_deref().unwrap_or("");
     match node.kind.as_deref() {
-        Some("s") => raw.trim().parse::<usize>().ok().and_then(|i| strings.get(i)).map(|s| Val::Text(s.to_string())).unwrap_or(Val::Empty),
+        Some("s") => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| strings.get(i))
+            .map(|s| Val::Text(s.to_string()))
+            .unwrap_or(Val::Empty),
         Some("str") => Val::Text(raw.to_string()),
         Some("inlineStr") => Val::Text(node.inline.clone().unwrap_or_else(|| raw.to_string())),
         Some("b") => Val::Bool(matches!(raw.trim(), "1" | "true")),
@@ -84,7 +92,11 @@ pub fn node_value(node: &CellNode, strings: &SharedStrings, date1904: bool) -> V
             .map(Val::Number)
             .unwrap_or_else(|| Val::Text(raw.to_string())),
         _ if node.value.is_none() => Val::Empty,
-        _ => raw.trim().parse::<f64>().map(Val::Number).unwrap_or_else(|_| Val::Text(raw.to_string())),
+        _ => raw
+            .trim()
+            .parse::<f64>()
+            .map(Val::Number)
+            .unwrap_or_else(|_| Val::Text(raw.to_string())),
     }
 }
 
@@ -96,7 +108,13 @@ pub fn sheet_formulas(parsed: &SheetXml) -> Vec<(CellRef, Result<Expr, String>)>
         if let Some(f) = &cell.formula {
             if f.kind.as_deref() == Some("shared") && !f.text.trim().is_empty() {
                 if let Some(si) = f.shared_index {
-                    masters.insert(si, (cell.at, formula::parse(&f.text).map_err(|e| e.message().to_string())));
+                    masters.insert(
+                        si,
+                        (
+                            cell.at,
+                            formula::parse(&f.text).map_err(|e| e.message().to_string()),
+                        ),
+                    );
                 }
             }
         }
@@ -107,13 +125,16 @@ pub fn sheet_formulas(parsed: &SheetXml) -> Vec<(CellRef, Result<Expr, String>)>
         let expr = match f.kind.as_deref() {
             Some("array") => Err("fórmulas matriciales".to_string()),
             Some("dataTable") => Err("tablas de datos".to_string()),
-            Some("shared") if f.text.trim().is_empty() => match f.shared_index.and_then(|si| masters.get(&si)) {
-                Some((anchor, Ok(master))) => {
-                    Ok(master.shifted(cell.at.row as i64 - anchor.row as i64, cell.at.col as i64 - anchor.col as i64))
+            Some("shared") if f.text.trim().is_empty() => {
+                match f.shared_index.and_then(|si| masters.get(&si)) {
+                    Some((anchor, Ok(master))) => Ok(master.shifted(
+                        cell.at.row as i64 - anchor.row as i64,
+                        cell.at.col as i64 - anchor.col as i64,
+                    )),
+                    Some((_, Err(e))) => Err(e.clone()),
+                    None => Err("una fórmula compartida sin celda principal".to_string()),
                 }
-                Some((_, Err(e))) => Err(e.clone()),
-                None => Err("una fórmula compartida sin celda principal".to_string()),
-            },
+            }
             _ => formula::parse(&f.text).map_err(|e| e.message().to_string()),
         };
         out.push((cell.at, expr));
@@ -150,15 +171,21 @@ struct Model<'n> {
 
 impl Context for Model<'_> {
     fn value(&self, sheet: usize, at: CellRef) -> Val {
-        let Some(model) = self.sheets.get(sheet) else { return Val::Error("#REF!".into()) };
+        let Some(model) = self.sheets.get(sheet) else {
+            return Val::Error("#REF!".into());
+        };
         if let Some(&i) = model.formulas.get(&(at.col, at.row)) {
-            return self.results[i].clone().unwrap_or_else(|| self.cells[i].cached.clone());
+            return self.results[i]
+                .clone()
+                .unwrap_or_else(|| self.cells[i].cached.clone());
         }
         model.values.get(&at).cloned().unwrap_or(Val::Empty)
     }
 
     fn sheet_index(&self, name: &str) -> Option<usize> {
-        self.sheet_names.iter().position(|n| n.to_lowercase() == name.to_lowercase())
+        self.sheet_names
+            .iter()
+            .position(|n| n.to_lowercase() == name.to_lowercase())
     }
 
     fn name(&self, name: &str, sheet: usize) -> Option<(&Expr, usize)> {
@@ -167,12 +194,19 @@ impl Context for Model<'_> {
             .names
             .iter()
             .find(|(n, local, _)| *n == upper && *local == Some(sheet))
-            .or_else(|| self.names.iter().find(|(n, local, _)| *n == upper && local.is_none()))?;
+            .or_else(|| {
+                self.names
+                    .iter()
+                    .find(|(n, local, _)| *n == upper && local.is_none())
+            })?;
         found.2.as_ref().map(|e| (e, found.1.unwrap_or(sheet)))
     }
 
     fn bounds(&self, sheet: usize) -> (u32, u32) {
-        self.sheets.get(sheet).map(|s| (s.max_row, s.max_col)).unwrap_or((0, 0))
+        self.sheets
+            .get(sheet)
+            .map(|s| (s.max_row, s.max_col))
+            .unwrap_or((0, 0))
     }
 
     fn date1904(&self) -> bool {
@@ -196,11 +230,24 @@ impl Model<'_> {
                     },
                     None => sheet,
                 };
-                let Some(model) = self.sheets.get(target) else { return };
-                let (r1, r2) = (area.first.row.min(area.last.row), area.first.row.max(area.last.row).min(model.max_row));
-                let (c1, c2) = (area.first.col.min(area.last.col), area.first.col.max(area.last.col).min(model.max_col));
+                let Some(model) = self.sheets.get(target) else {
+                    return;
+                };
+                let (r1, r2) = (
+                    area.first.row.min(area.last.row),
+                    area.first.row.max(area.last.row).min(model.max_row),
+                );
+                let (c1, c2) = (
+                    area.first.col.min(area.last.col),
+                    area.first.col.max(area.last.col).min(model.max_col),
+                );
                 for col in c1..=c2 {
-                    out.extend(model.formulas.range((col, r1)..=(col, r2.max(r1))).map(|(_, i)| *i));
+                    out.extend(
+                        model
+                            .formulas
+                            .range((col, r1)..=(col, r2.max(r1)))
+                            .map(|(_, i)| *i),
+                    );
                 }
             }
             Expr::Name(name) if depth < 16 => {
@@ -245,7 +292,13 @@ pub fn recalculate(
         names: names
             .iter()
             .filter(|n| !n.name.starts_with("_xlnm."))
-            .map(|n| (n.name.to_uppercase(), n.local_sheet, formula::parse(&n.text).ok()))
+            .map(|n| {
+                (
+                    n.name.to_uppercase(),
+                    n.local_sheet,
+                    formula::parse(&n.text).ok(),
+                )
+            })
             .collect(),
         cells: Vec::new(),
         results: Vec::new(),
@@ -265,16 +318,29 @@ pub fn recalculate(
                 }
             }
             for (at, expr) in sheet_formulas(sheet) {
-                let cached = sheet.cell(at).map(|n| node_value(n, strings, date1904)).unwrap_or(Val::Empty);
-                sheet_model.formulas.insert((at.col, at.row), model.cells.len());
-                model.cells.push(FormulaCell { sheet: index, at, expr: expr.ok(), cached });
+                let cached = sheet
+                    .cell(at)
+                    .map(|n| node_value(n, strings, date1904))
+                    .unwrap_or(Val::Empty);
+                sheet_model
+                    .formulas
+                    .insert((at.col, at.row), model.cells.len());
+                model.cells.push(FormulaCell {
+                    sheet: index,
+                    at,
+                    expr: expr.ok(),
+                    cached,
+                });
             }
         }
         model.sheets.push(sheet_model);
     }
     model.results = vec![None; model.cells.len()];
     if model.cells.is_empty() {
-        return Ok(Outcome { sheets: vec![None; xmls.len()], updated: 0 });
+        return Ok(Outcome {
+            sheets: vec![None; xmls.len()],
+            updated: 0,
+        });
     }
 
     // Order: depth-first over precedents, each formula after the ones it reads
@@ -287,7 +353,10 @@ pub fn recalculate(
         }
         edges += list.len();
         if edges > MAX_EDGES {
-            return Ok(Outcome { sheets: vec![None; xmls.len()], updated: 0 });
+            return Ok(Outcome {
+                sheets: vec![None; xmls.len()],
+                updated: 0,
+            });
         }
         precedents.push(list);
     }
@@ -345,14 +414,23 @@ pub fn recalculate(
     let mut edits: Vec<BTreeMap<CellRef, Option<String>>> = vec![BTreeMap::new(); xmls.len()];
     let mut updated = 0;
     for (i, cell) in model.cells.iter().enumerate() {
-        let Some(value) = &model.results[i] else { continue };
+        let Some(value) = &model.results[i] else {
+            continue;
+        };
         if same_value(&cell.cached, value) {
             continue;
         }
-        let sheet = parsed[cell.sheet].as_ref().expect("formula cells come from parsed sheets");
-        let Some(node) = sheet.cell(cell.at) else { continue };
+        let sheet = parsed[cell.sheet]
+            .as_ref()
+            .expect("formula cells come from parsed sheets");
+        let Some(node) = sheet.cell(cell.at) else {
+            continue;
+        };
         let element = &sheet.xml[node.range.clone()];
-        edits[cell.sheet].insert(cell.at, Some(with_cached_value(element, sheet.prefix(), value)?));
+        edits[cell.sheet].insert(
+            cell.at,
+            Some(with_cached_value(element, sheet.prefix(), value)?),
+        );
         updated += 1;
     }
     let sheets = parsed
@@ -369,7 +447,9 @@ pub fn recalculate(
 /// Whether a new result equals the cached one (numbers compared at Excel's 15 digits)
 fn same_value(cached: &Val, new: &Val) -> bool {
     match (cached, new) {
-        (Val::Number(a), Val::Number(b)) => a == b || format!("{:.14e}", a) == format!("{:.14e}", b),
+        (Val::Number(a), Val::Number(b)) => {
+            a == b || format!("{:.14e}", a) == format!("{:.14e}", b)
+        }
         (a, b) => a == b,
     }
 }
@@ -442,12 +522,23 @@ mod tests {
     const NS: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main""#;
 
     fn sheet(cells: &str) -> String {
-        format!(r#"<worksheet {}><sheetData>{}</sheetData></worksheet>"#, NS, cells)
+        format!(
+            r#"<worksheet {}><sheetData>{}</sheetData></worksheet>"#,
+            NS, cells
+        )
     }
 
     fn run(xmls: Vec<Option<String>>, names: &[DefinedName]) -> Outcome {
         let sheet_names: Vec<String> = (1..=xmls.len()).map(|i| format!("Hoja{}", i)).collect();
-        recalculate(&sheet_names, &xmls, &SharedStrings::default(), names, false, 45_000.5).unwrap()
+        recalculate(
+            &sheet_names,
+            &xmls,
+            &SharedStrings::default(),
+            names,
+            false,
+            45_000.5,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -459,7 +550,11 @@ mod tests {
         let out = run(vec![Some(xml.clone())], &[]);
         assert_eq!(out.updated, 2);
         let new = out.sheets[0].as_ref().unwrap();
-        assert!(new.contains(r#"<c r="C1" s="3"><f>B1*2</f><v>12</v></c>"#), "{}", new);
+        assert!(
+            new.contains(r#"<c r="C1" s="3"><f>B1*2</f><v>12</v></c>"#),
+            "{}",
+            new
+        );
         assert!(new.contains(r#"<c r="B1"><f>A1+1</f><v>6</v></c>"#));
         assert!(new.contains(r#"<c r="D1"><f>A1</f><v>5</v></c>"#));
     }
@@ -470,7 +565,11 @@ mod tests {
             r#"<row r="1"><c r="A1"><v>0</v></c><c r="B1" t="str"><f>"n="&amp;A1</f><v>x</v></c><c r="C1"><f>A1=0</f><v>0</v></c><c r="D1"><f>1/A1</f></c><c r="E1" t="str"><f>A1+1</f><v>x</v></c></row>"#,
         );
         let new = run(vec![Some(xml)], &[]).sheets.remove(0).unwrap();
-        assert!(new.contains(r#"<c r="B1" t="str"><f>"n="&amp;A1</f><v>n=0</v></c>"#), "{}", new);
+        assert!(
+            new.contains(r#"<c r="B1" t="str"><f>"n="&amp;A1</f><v>n=0</v></c>"#),
+            "{}",
+            new
+        );
         assert!(new.contains(r#"<c r="C1" t="b"><f>A1=0</f><v>1</v></c>"#));
         assert!(new.contains(r#"<c r="D1" t="e"><f>1/A1</f><v>#DIV/0!</v></c>"#));
         assert!(new.contains(r#"<c r="E1"><f>A1+1</f><v>1</v></c>"#));
@@ -482,11 +581,24 @@ mod tests {
             r#"<row r="1"><c r="A1"><v>2</v></c><c r="B1"><f t="shared" ref="B1:B2" si="0">A1*Tasa</f><v>0</v></c></row><row r="2"><c r="A2"><v>3</v></c><c r="B2"><f t="shared" si="0"/><v>0</v></c></row>"#,
         );
         let summary = sheet(r#"<row r="1"><c r="A1"><f>SUM(Hoja1!B:B)</f><v>0</v></c></row>"#);
-        let names = [DefinedName { name: "Tasa".into(), local_sheet: None, text: "Hoja2!$B$5".into() }];
-        let summary = summary.replace("</row>", r#"</row><row r="5"><c r="B5"><v>10</v></c></row>"#);
+        let names = [DefinedName {
+            name: "Tasa".into(),
+            local_sheet: None,
+            text: "Hoja2!$B$5".into(),
+        }];
+        let summary = summary.replace(
+            "</row>",
+            r#"</row><row r="5"><c r="B5"><v>10</v></c></row>"#,
+        );
         let out = run(vec![Some(data), Some(summary)], &names);
-        assert!(out.sheets[0].as_ref().unwrap().contains(r#"<c r="B2"><f t="shared" si="0"/><v>30</v></c>"#));
-        assert!(out.sheets[1].as_ref().unwrap().contains(r#"<c r="A1"><f>SUM(Hoja1!B:B)</f><v>50</v></c>"#));
+        assert!(out.sheets[0]
+            .as_ref()
+            .unwrap()
+            .contains(r#"<c r="B2"><f t="shared" si="0"/><v>30</v></c>"#));
+        assert!(out.sheets[1]
+            .as_ref()
+            .unwrap()
+            .contains(r#"<c r="A1"><f>SUM(Hoja1!B:B)</f><v>50</v></c>"#));
     }
 
     #[test]
@@ -504,7 +616,9 @@ mod tests {
 
     #[test]
     fn nothing_changes_when_cached_values_are_right() {
-        let xml = sheet(r#"<row r="1"><c r="A1"><v>0.1</v></c><c r="B1"><f>A1+0.2</f><v>0.3</v></c></row>"#);
+        let xml = sheet(
+            r#"<row r="1"><c r="A1"><v>0.1</v></c><c r="B1"><f>A1+0.2</f><v>0.3</v></c></row>"#,
+        );
         let out = run(vec![Some(xml), None], &[]);
         assert_eq!(out.updated, 0);
         assert!(out.sheets.iter().all(Option::is_none));
@@ -515,7 +629,21 @@ mod tests {
         let xml = r#"<workbook><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">Hoja1!$A$1:$B$2</definedName><definedName name="Tasa">Hoja2!$B$5</definedName><definedName name="T&amp;C" localSheetId="1">"a&amp;b"</definedName></definedNames></workbook>"#;
         let names = defined_names(xml);
         assert_eq!(names.len(), 3);
-        assert_eq!((names[1].name.as_str(), names[1].local_sheet, names[1].text.as_str()), ("Tasa", None, "Hoja2!$B$5"));
-        assert_eq!((names[2].name.as_str(), names[2].local_sheet, names[2].text.as_str()), ("T&C", Some(1), "\"a&b\""));
+        assert_eq!(
+            (
+                names[1].name.as_str(),
+                names[1].local_sheet,
+                names[1].text.as_str()
+            ),
+            ("Tasa", None, "Hoja2!$B$5")
+        );
+        assert_eq!(
+            (
+                names[2].name.as_str(),
+                names[2].local_sheet,
+                names[2].text.as_str()
+            ),
+            ("T&C", Some(1), "\"a&b\"")
+        );
     }
 }

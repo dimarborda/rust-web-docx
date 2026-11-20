@@ -126,7 +126,11 @@ fn is_break(c: char) -> bool {
 
 fn field_at(chars: &[char], at: usize) -> Option<Marker> {
     let double = chars.get(at + 1) == Some(&'{');
-    let (open, syntax) = if double { (2, MarkerSyntax::Double) } else { (1, MarkerSyntax::Single) };
+    let (open, syntax) = if double {
+        (2, MarkerSyntax::Double)
+    } else {
+        (1, MarkerSyntax::Single)
+    };
     let close: &[char] = if double { &['}', '}'] } else { &['}'] };
     let end = find_close(chars, at + open, close, &['{', '}'])?;
     let inner: String = chars[at + open..end].iter().collect();
@@ -159,7 +163,9 @@ fn pending_at(chars: &[char], at: usize) -> Option<Marker> {
     if !is_pending(trimmed) {
         return None;
     }
-    let filler = trimmed.chars().all(|c| matches!(c, '.' | '…' | '_' | '-' | ' ' | '\u{a0}'));
+    let filler = trimmed
+        .chars()
+        .all(|c| matches!(c, '.' | '…' | '_' | '-' | ' ' | '\u{a0}'));
     let len = end + 1 - at;
     Some(Marker {
         kind: MarkerKind::Pending,
@@ -178,7 +184,9 @@ fn is_pending(inner: &str) -> bool {
         return false;
     }
     let citation = inner.chars().any(|c| c.is_ascii_digit())
-        && inner.chars().all(|c| c.is_ascii_digit() || matches!(c, ',' | ';' | '-' | '–' | ' '));
+        && inner
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, ',' | ';' | '-' | '–' | ' '));
     !citation
 }
 
@@ -186,7 +194,16 @@ fn is_pending(inner: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn kinds(text: &str) -> Vec<(&'static str, String, Option<String>, Option<String>, usize, usize)> {
+    fn kinds(
+        text: &str,
+    ) -> Vec<(
+        &'static str,
+        String,
+        Option<String>,
+        Option<String>,
+        usize,
+        usize,
+    )> {
         scan(text)
             .into_iter()
             .map(|m| (m.kind.as_str(), m.raw, m.key, m.hint, m.start, m.len))
@@ -203,7 +220,14 @@ mod tests {
             kinds("Hola {{CLIENTE}}, {{ FECHA : dd/mm }} y {ciudad}."),
             vec![
                 ("field", "{{CLIENTE}}".into(), s("CLIENTE"), None, 5, 11),
-                ("field", "{{ FECHA : dd/mm }}".into(), s("FECHA"), s("dd/mm"), 18, 19),
+                (
+                    "field",
+                    "{{ FECHA : dd/mm }}".into(),
+                    s("FECHA"),
+                    s("dd/mm"),
+                    18,
+                    19
+                ),
                 ("field", "{ciudad}".into(), s("ciudad"), None, 40, 8),
             ]
         );
@@ -212,8 +236,22 @@ mod tests {
 
     #[test]
     fn not_fields() {
-        for text in ["{}", "{{}}", "{{ : x }}", "{con espacio}", "{{abierto", "{{a\nb}}", "{a{b}"] {
-            assert!(scan(text).iter().all(|m| m.kind != MarkerKind::Field || m.raw == "{b}"), "{}", text);
+        for text in [
+            "{}",
+            "{{}}",
+            "{{ : x }}",
+            "{con espacio}",
+            "{{abierto",
+            "{{a\nb}}",
+            "{a{b}",
+        ] {
+            assert!(
+                scan(text)
+                    .iter()
+                    .all(|m| m.kind != MarkerKind::Field || m.raw == "{b}"),
+                "{}",
+                text
+            );
         }
     }
 
@@ -222,7 +260,14 @@ mod tests {
         assert_eq!(
             kinds("Alcance: [Completar: objetivos] […] [....] [____]"),
             vec![
-                ("pending", "[Completar: objetivos]".into(), None, s("Completar: objetivos"), 9, 22),
+                (
+                    "pending",
+                    "[Completar: objetivos]".into(),
+                    None,
+                    s("Completar: objetivos"),
+                    9,
+                    22
+                ),
                 ("pending", "[…]".into(), None, None, 32, 3),
                 ("pending", "[....]".into(), None, None, 36, 6),
                 ("pending", "[____]".into(), None, None, 43, 6),
