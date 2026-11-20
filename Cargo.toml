@@ -27,6 +27,19 @@ members = [".", "crates/ooxml-core", "crates/xlsx-engine"]
 # Tests cover every crate with `cargo test --workspace`.
 default-members = [".", "crates/ooxml-core"]
 
+# Clippy runs with `-D warnings` in CI. These three lints are allowed on purpose:
+# - large_enum_variant: RenderCommand and DocumentElement are serialized to JS as they are;
+#   boxing their variants would add an allocation per item and not shrink the JSON.
+# - too_many_arguments: wasm-bindgen methods take flat arguments, which is what JS calls.
+# - type_complexity: tuple summaries in tests and markers read better inline.
+[workspace.lints.clippy]
+large_enum_variant = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints]
+workspace = true
+
 [profile.release]
 opt-level = "s"
 lto = true

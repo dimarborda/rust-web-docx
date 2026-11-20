@@ -334,8 +334,8 @@ fn parse_section(code: &str) -> Section {
                 let lower = inner.to_ascii_lowercase();
                 if let Some(color) = color_name(&inner) {
                     s.color = Some(color.to_string());
-                } else if lower.starts_with("color") {
-                    let n: usize = lower[5..].parse().unwrap_or(0);
+                } else if let Some(index) = lower.strip_prefix("color") {
+                    let n: usize = index.parse().unwrap_or(0);
                     s.color =
                         crate::theme::indexed_color(n.saturating_sub(1)).map(|c| format!("#{}", c));
                 } else if let Some(currency) = inner.strip_prefix('$') {
@@ -623,7 +623,7 @@ fn group_digits(digits: &str, sep: char) -> String {
     let mut out = String::new();
     let len = digits.len();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(sep);
         }
         out.push(c);

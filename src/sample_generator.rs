@@ -148,7 +148,7 @@ fn document_xml() -> String {
                 cell(widths[0], None, aligns[0], &[bold(phase)]),
                 cell(widths[1], None, aligns[1], &[text(description)]),
                 cell(widths[2], None, aligns[2], &[text(due)]),
-                cell(widths[3], None, aligns[3], &[value.clone()]),
+                cell(widths[3], None, aligns[3], std::slice::from_ref(value)),
             )
         })
         .collect();

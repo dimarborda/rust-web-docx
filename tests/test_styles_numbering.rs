@@ -157,38 +157,35 @@ fn test_cto_029_numbering_layout() {
     let items: Vec<&RenderCommand> = layout.pages.iter().flat_map(|p| p.items.iter()).collect();
     let l0 = items
         .iter()
-        .find(|it| match it {
-            RenderCommand::Text {
+        .find(|it| {
+            matches!(it, RenderCommand::Text {
                 paragraph_index,
                 line_index: 0,
                 text,
                 ..
-            } if *paragraph_index == p29.index && text.contains("Entregar") => true,
-            _ => false,
+            } if *paragraph_index == p29.index && text.contains("Entregar"))
         })
         .expect("line 0 text");
     let l1 = items
         .iter()
-        .find(|it| match it {
-            RenderCommand::Text {
+        .find(|it| {
+            matches!(it, RenderCommand::Text {
                 paragraph_index,
                 line_index: 1,
                 text,
                 ..
-            } if *paragraph_index == p29.index && text.contains("cumplimiento") => true,
-            _ => false,
+            } if *paragraph_index == p29.index && text.contains("cumplimiento"))
         })
         .expect("line 1 text");
     let label = items
         .iter()
-        .find(|it| match it {
-            RenderCommand::Text {
+        .find(|it| {
+            matches!(it, RenderCommand::Text {
                 paragraph_index,
                 line_index: 0,
                 text,
                 ..
-            } if *paragraph_index == p29.index && text == "1." => true,
-            _ => false,
+            } if *paragraph_index == p29.index && text == "1.")
         })
         .expect("label text");
 
@@ -220,11 +217,10 @@ fn test_cto_029_numbering_layout() {
 
     let item16 = items
         .iter()
-        .filter(|it| match it {
-            RenderCommand::Text {
+        .filter(|it| {
+            matches!(it, RenderCommand::Text {
                 paragraph_index, ..
-            } if *paragraph_index == 57 => true,
-            _ => false,
+            } if *paragraph_index == 57)
         })
         .count();
     // Item 16 has label + 2 wrapped lines of text = 3 text items (matches Word)
@@ -234,17 +230,15 @@ fn test_cto_029_numbering_layout() {
     );
 
     // Item 16 lands at the bottom of page 3; item 17 lands at the top of page 4
-    let page3_has_item16 = layout.pages[2].items.iter().any(|it| match it {
-        RenderCommand::Text {
+    let page3_has_item16 = layout.pages[2].items.iter().any(|it| {
+        matches!(it, RenderCommand::Text {
             paragraph_index, ..
-        } if *paragraph_index == 57 => true,
-        _ => false,
+        } if *paragraph_index == 57)
     });
-    let page4_has_item17 = layout.pages[3].items.iter().any(|it| match it {
-        RenderCommand::Text {
+    let page4_has_item17 = layout.pages[3].items.iter().any(|it| {
+        matches!(it, RenderCommand::Text {
             paragraph_index, ..
-        } if *paragraph_index == 58 => true,
-        _ => false,
+        } if *paragraph_index == 58)
     });
     assert!(page3_has_item16, "Item 16 must be on page 3");
     assert!(page4_has_item17, "Item 17 must be on page 4");

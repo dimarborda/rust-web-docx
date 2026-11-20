@@ -10,3 +10,6 @@ publish = false
 [dependencies]
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
+
+[lints]
+workspace = true

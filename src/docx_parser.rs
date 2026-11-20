@@ -1707,7 +1707,7 @@ impl DocxModifier {
         let text: String = runs.iter().map(|r| r.text.as_str()).collect();
         let formats: Vec<FormatTarget> = runs
             .iter()
-            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .flat_map(|r| std::iter::repeat_n(FormatTarget::from_run(r), r.text.chars().count()))
             .collect();
         self.edit_body_paragraphs(&[ParagraphEdit {
             index,
@@ -2046,7 +2046,7 @@ impl DocxModifier {
         extract_drawing_embed_ids(doc)
             .into_iter()
             .filter_map(|id| {
-                let url = image_data_url(&self.package.parts(), rels.get(&id)?)?;
+                let url = image_data_url(self.package.parts(), rels.get(&id)?)?;
                 Some((id, url))
             })
             .collect()
@@ -3250,9 +3250,7 @@ pub fn parse_table_with(
                         .unwrap_or(false);
                     let color = if let Some(c) = explicit_color {
                         c
-                    } else if is_dark_bg {
-                        "FAF7F0".to_string()
-                    } else if current_row_is_header && current_cell_bg.is_some() {
+                    } else if is_dark_bg || (current_row_is_header && current_cell_bg.is_some()) {
                         "FAF7F0".to_string()
                     } else {
                         "1B1F1E".to_string()

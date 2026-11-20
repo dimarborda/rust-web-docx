@@ -75,7 +75,7 @@ impl FormatTarget {
             }
         }
         if let Some(sz) = self.font_size {
-            if base.font_size.map_or(true, |b| (b - sz).abs() > 0.01) {
+            if base.font_size.is_none_or(|b| (b - sz).abs() > 0.01) {
                 d.font_size = Some(sz);
             }
         }
@@ -83,7 +83,7 @@ impl FormatTarget {
             if base
                 .font_family
                 .as_deref()
-                .map_or(true, |b| !b.eq_ignore_ascii_case(fam))
+                .is_none_or(|b| !b.eq_ignore_ascii_case(fam))
             {
                 d.font_family = Some(fam.clone());
             }
@@ -1027,7 +1027,7 @@ fn apply_change(
     // 3. Character-level diff (common prefix/suffix)
     let mut owners: Vec<usize> = Vec::new();
     for (r, run) in runs.iter().enumerate() {
-        owners.extend(std::iter::repeat(r).take(run.text().chars().count()));
+        owners.extend(std::iter::repeat_n(r, run.text().chars().count()));
     }
     let old_chars: Vec<char> = runs
         .iter()
@@ -1598,11 +1598,13 @@ mod tests {
         let formats = runs
             .iter()
             .flat_map(|(t, bold)| {
-                std::iter::repeat(FormatTarget {
-                    bold: Some(*bold),
-                    ..Default::default()
-                })
-                .take(t.chars().count())
+                std::iter::repeat_n(
+                    FormatTarget {
+                        bold: Some(*bold),
+                        ..Default::default()
+                    },
+                    t.chars().count(),
+                )
             })
             .collect();
         (text, formats)
@@ -1689,7 +1691,7 @@ mod tests {
         let text: String = runs.iter().map(|r| r.text.as_str()).collect();
         let formats: Vec<FormatTarget> = runs
             .iter()
-            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .flat_map(|r| std::iter::repeat_n(FormatTarget::from_run(r), r.text.chars().count()))
             .collect();
         let out = edit_paragraph(p, &styles, &text, Some(&formats), None).unwrap();
         // Schema order: vertAlign goes before lang
@@ -1739,7 +1741,7 @@ mod tests {
                     highlight: None,
                     ..r.clone()
                 };
-                std::iter::repeat(FormatTarget::from_run(&plain)).take(r.text.chars().count())
+                std::iter::repeat_n(FormatTarget::from_run(&plain), r.text.chars().count())
             })
             .collect();
         let out = edit_paragraph(&out, &styles, &text, Some(&cleared), None).unwrap();

@@ -905,9 +905,7 @@ fn to_letters(n: i64) -> String {
         return n.to_string();
     }
     let letter = (b'A' + ((n - 1) % 26) as u8) as char;
-    std::iter::repeat(letter)
-        .take(((n - 1) / 26 + 1) as usize)
-        .collect()
+    std::iter::repeat_n(letter, ((n - 1) / 26 + 1) as usize).collect()
 }
 
 fn to_roman(mut n: i64) -> String {
