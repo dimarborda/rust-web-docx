@@ -612,7 +612,7 @@ fn with_page_numbers(
 /// Replaces the cached result of each page field of `p` with the real value
 fn substitute_fields(p: &mut ParagraphInfo, page: usize, total: usize) {
     let mut fields = p.fields.clone();
-    fields.sort_by(|a, b| b.start.cmp(&a.start));
+    fields.sort_by_key(|f| std::cmp::Reverse(f.start));
     // Every character tagged with the run it belongs to
     let mut chars: Vec<(char, usize)> = p
         .runs

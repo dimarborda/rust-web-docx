@@ -113,16 +113,13 @@ impl Theme {
         } else if let Some(theme) = get_attr_value(e, "theme").and_then(|v| v.parse::<usize>().ok())
         {
             self.colors.get(theme)?.clone()
-        } else if let Some(indexed) =
-            get_attr_value(e, "indexed").and_then(|v| v.parse::<usize>().ok())
-        {
+        } else {
+            let indexed = get_attr_value(e, "indexed").and_then(|v| v.parse::<usize>().ok())?;
             match indexed {
                 64 => "000000".to_string(),
                 65 => "FFFFFF".to_string(),
                 n => INDEXED.get(n)?.to_string(),
             }
-        } else {
-            return None;
         };
         let tint = get_attr_value(e, "tint")
             .and_then(|v| v.parse::<f64>().ok())

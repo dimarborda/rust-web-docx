@@ -812,7 +812,7 @@ impl DocxModifier {
                 inserts.push((span.start, 1, std::cmp::Reverse(0), opening.as_str()));
                 inserts.push((span.end, 0, std::cmp::Reverse(span.start), SECTION_CLOSE));
             }
-            inserts.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)));
+            inserts.sort_by_key(|a| (a.0, a.1, a.2));
             let mut out =
                 String::with_capacity(xml.len() + inserts.iter().map(|i| i.3.len()).sum::<usize>());
             let mut pos = 0;

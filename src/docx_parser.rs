@@ -1768,7 +1768,7 @@ impl DocxModifier {
 
         // Splice from the end so earlier byte ranges stay valid
         let mut ordered: Vec<&ParagraphEdit> = edits.iter().collect();
-        ordered.sort_by(|a, b| b.index.cmp(&a.index));
+        ordered.sort_by_key(|e| std::cmp::Reverse(e.index));
         for edit in &ordered {
             let range = ranges
                 .get(edit.index)
@@ -1872,7 +1872,7 @@ impl DocxModifier {
             }
         }
 
-        edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+        edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
         for (range, replacement) in edits {
             xml.replace_range(range, &replacement);
         }
@@ -3488,10 +3488,8 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
                     groups.push(std::mem::take(&mut current_group));
                 }
             }
-            Event::End(e) if is_text_flow_break(e.name().as_ref()) => {
-                if !current_group.is_empty() {
-                    groups.push(std::mem::take(&mut current_group));
-                }
+            Event::End(e) if is_text_flow_break(e.name().as_ref()) && !current_group.is_empty() => {
+                groups.push(std::mem::take(&mut current_group));
             }
             _ => {}
         }
