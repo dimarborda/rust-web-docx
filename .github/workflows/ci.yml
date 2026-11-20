@@ -1,0 +1,76 @@
+# Checks every pull request before it can be merged: formatting, Clippy, Rust tests,
+# dependency audits, the WebAssembly + Vite build and the JS tests of both packages.
+# It deploys nothing; deploy.yml runs the same checks on master and then publishes.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests, audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # Lints allowed on purpose are listed in [workspace.lints.clippy] in Cargo.toml
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+
+  web:
+    name: WebAssembly build and JS tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Audit npm dependencies
+        run: npm audit --omit=dev --audit-level=high -w packages/docx-editor
+
+      - name: Build (wasm-pack for docx and xlsx + Vite)
+        run: npm run build
+
+      - name: docx-editor tests
+        run: npm test -w packages/docx-editor
+
+      - name: xlsx-editor tests
+        run: npm test -w packages/xlsx-editor
