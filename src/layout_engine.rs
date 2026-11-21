@@ -1,6 +1,6 @@
 use crate::docx_parser::{
     is_dark_hex_str, BorderInfo, CellBorders, DocumentElement, HeaderFooterInfo, ImageRef,
-    PageSetup, ParagraphInfo, RunInfo, TableCellData, TableInfo, PAGE_BREAK,
+    PageSetup, ParagraphInfo, RunInfo, SectionHeaderFooter, TableCellData, TableInfo, PAGE_BREAK,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -281,11 +281,30 @@ impl LayoutEngine {
         let margin_top = page_setup.margin_top.max(24.0);
         let margin_bottom = page_setup.margin_bottom.max(24.0);
         let hf = header_footer;
+        // One entry per section; a value built by hand only has the last section's fields
+        let legacy;
+        let sections: &[SectionHeaderFooter] = if hf.sections.is_empty() {
+            legacy = [SectionHeaderFooter {
+                header: hf.header.clone(),
+                footer: hf.footer.clone(),
+                first_header: hf.first_header.clone(),
+                first_footer: hf.first_footer.clone(),
+                even_header: None,
+                even_footer: None,
+            }];
+            &legacy
+        } else {
+            &hf.sections
+        };
         // Documents read before header content was laid out only carry the header's pictures
-        let laid_out_parts = !hf.header.is_empty()
-            || !hf.footer.is_empty()
-            || hf.first_header.is_some()
-            || hf.first_footer.is_some();
+        let laid_out_parts = sections.iter().any(|s| {
+            !s.header.is_empty()
+                || !s.footer.is_empty()
+                || s.first_header.is_some()
+                || s.first_footer.is_some()
+                || s.even_header.is_some()
+                || s.even_footer.is_some()
+        });
         let header_inline_bottom = if laid_out_parts {
             0.0
         } else {
@@ -311,38 +330,42 @@ impl LayoutEngine {
             bg: css_color(bg_color, "#FFFFFF"),
         };
 
-        // Header and footer: laid out once to know their height. A header taller than the top
-        // margin pushes the body down, a tall footer pulls its end up, as in Word.
+        // Header and footer of each kind of page of each section: laid out once to know their
+        // height. A header taller than the top margin pushes the body down, a tall footer
+        // pulls its end up, as in Word.
         let header_top = page_setup.header_margin.max(0.0);
-        let first_header = hf.first_header.as_deref().unwrap_or(&hf.header);
-        let first_footer = hf.first_footer.as_deref().unwrap_or(&hf.footer);
-        let part_height = |els: &[DocumentElement], m: &mut dyn TextMeasurer| {
-            if els.is_empty() {
-                0.0
-            } else {
-                render_part(els, &geo, 0.0, &hf.images, m).1
+        let mut heights: HashMap<(usize, bool, u8), f64> = HashMap::new();
+        let mut bounds = PageBounds {
+            sections: Vec::with_capacity(sections.len()),
+        };
+        for (si, section) in sections.iter().enumerate() {
+            let mut kinds = [(geo.top, geo.bottom); 4];
+            for (k, kind) in kinds.iter_mut().enumerate() {
+                let (first, page_number) = (k & 1 == 1, if k & 2 == 2 { 2 } else { 1 });
+                let mut height = |is_header: bool| {
+                    let (variant, els) = page_part(section, is_header, first, page_number);
+                    *heights.entry((si, is_header, variant)).or_insert_with(|| {
+                        if els.is_empty() {
+                            0.0
+                        } else {
+                            render_part(els, &geo, 0.0, &hf.images, measurer).1
+                        }
+                    })
+                };
+                let (header_h, footer_h) = (height(true), height(false));
+                if laid_out_parts {
+                    let top = margin_top.max(header_top + header_h);
+                    let footer_space = page_setup.footer_margin.max(0.0) + footer_h;
+                    let bottom = (page_h - margin_bottom)
+                        .min(page_h - footer_space)
+                        .max(top + 48.0);
+                    *kind = (top, bottom);
+                }
             }
-        };
-        let header_h = part_height(&hf.header, measurer);
-        let first_header_h = if hf.first_header.is_some() {
-            part_height(first_header, measurer)
-        } else {
-            header_h
-        };
-        let footer_h = part_height(&hf.footer, measurer);
-        let first_footer_h = if hf.first_footer.is_some() {
-            part_height(first_footer, measurer)
-        } else {
-            footer_h
-        };
-        if laid_out_parts {
-            geo.top = margin_top.max(header_top + header_h);
-            geo.top_first = margin_top.max(header_top + first_header_h);
-            let footer_space = page_setup.footer_margin.max(0.0) + footer_h.max(first_footer_h);
-            geo.bottom = (page_h - margin_bottom)
-                .min(page_h - footer_space)
-                .max(geo.top + 48.0);
+            bounds.sections.push(kinds);
         }
+        // The usual page (first section, not its first page) for what still reads `geo`
+        (geo.top, geo.bottom) = bounds.get(0, false, 1);
 
         // Pass 1: measure every block; pass 2: paginate with look-ahead for keep rules
         let blocks: Vec<Block> = elements
@@ -360,7 +383,8 @@ impl LayoutEngine {
             })
             .collect();
 
-        let mut pag = Paginator::new(&geo, watermark, watermark_opacity, &self.images);
+        let mut pag =
+            Paginator::new(&geo, watermark, watermark_opacity, &self.images).with_bounds(&bounds);
         let mut flow = FlowState::default();
         for (i, block) in blocks.iter().enumerate() {
             match block {
@@ -370,31 +394,26 @@ impl LayoutEngine {
                 Block::Table(t) => place_table(&mut pag, t, &mut flow),
             }
         }
-        let mut pages = pag.finish();
+        let (mut pages, page_sections) = pag.finish();
         let total_pages = pages.len();
 
-        // Header and footer of each page: laid out once per variant, or per page when they
-        // show page numbers
-        let mut part_cache: HashMap<(bool, bool), Vec<RenderCommand>> = HashMap::new();
+        // Header and footer of each page: the ones of the section the page starts in, laid
+        // out once per kind of page, or per page when they show page numbers
+        let mut part_cache: HashMap<(usize, bool, u8), Vec<RenderCommand>> = HashMap::new();
         if laid_out_parts {
             for (i, page) in pages.iter_mut().enumerate() {
-                let first = i == 0;
+                let (section, first) = page_sections.get(i).copied().unwrap_or((0, i == 0));
+                let si = section.min(sections.len() - 1);
                 let mut prefix = Vec::new();
-                for (is_header, els, height) in [
-                    (
-                        true,
-                        if first { first_header } else { &hf.header[..] },
-                        if first { first_header_h } else { header_h },
-                    ),
-                    (
-                        false,
-                        if first { first_footer } else { &hf.footer[..] },
-                        if first { first_footer_h } else { footer_h },
-                    ),
-                ] {
+                for is_header in [true, false] {
+                    let (variant, els) = page_part(&sections[si], is_header, first, i + 1);
                     if els.is_empty() {
                         continue;
                     }
+                    let height = heights
+                        .get(&(si, is_header, variant))
+                        .copied()
+                        .unwrap_or(0.0);
                     let top = if is_header {
                         header_top
                     } else {
@@ -405,19 +424,12 @@ impl LayoutEngine {
                             prefix.extend(render_part(&numbered, &geo, top, &hf.images, measurer).0)
                         }
                         None => {
-                            let items = part_cache
-                                .entry((
-                                    is_header,
-                                    first
-                                        && (if is_header {
-                                            hf.first_header.is_some()
-                                        } else {
-                                            hf.first_footer.is_some()
-                                        }),
-                                ))
-                                .or_insert_with(|| {
-                                    render_part(els, &geo, top, &hf.images, measurer).0
-                                });
+                            let items =
+                                part_cache
+                                    .entry((si, is_header, variant))
+                                    .or_insert_with(|| {
+                                        render_part(els, &geo, top, &hf.images, measurer).0
+                                    });
                             prefix.extend(items.iter().cloned());
                         }
                     }
@@ -530,6 +542,40 @@ impl LayoutEngine {
             page_height: page_h,
             pages,
         }
+    }
+}
+
+/// The header (or footer) a page shows, and which kind it is (0 usual, 1 first page of the
+/// section, 2 even page): the first-page one when the page opens a section with a different
+/// first page, the even one on even pages when the document has them, otherwise the usual one
+fn page_part(
+    section: &SectionHeaderFooter,
+    is_header: bool,
+    first: bool,
+    page_number: usize,
+) -> (u8, &[DocumentElement]) {
+    let (usual, first_page, even) = if is_header {
+        (&section.header, &section.first_header, &section.even_header)
+    } else {
+        (&section.footer, &section.first_footer, &section.even_footer)
+    };
+    match (first_page, even) {
+        (Some(els), _) if first => (1, els),
+        (_, Some(els)) if page_number.is_multiple_of(2) => (2, els),
+        _ => (0, usual),
+    }
+}
+
+/// Body top and bottom of each kind of page of each section
+struct PageBounds {
+    /// Per section, indexed by `first page + 2 × even page`
+    sections: Vec<[(f64, f64); 4]>,
+}
+
+impl PageBounds {
+    fn get(&self, section: usize, first: bool, page_number: usize) -> (f64, f64) {
+        let kinds = &self.sections[section.min(self.sections.len().saturating_sub(1))];
+        kinds[usize::from(first) + 2 * usize::from(page_number.is_multiple_of(2))]
     }
 }
 
@@ -1289,6 +1335,21 @@ struct Paginator<'a> {
     /// Areas of the current page that floating pictures keep free of text
     exclusions: Vec<Exclusion>,
     cursor_y: f64,
+    /// Body top and bottom of each kind of page of each section (the header and footer
+    /// shown there decide them); `None` keeps `geo`'s for every page
+    bounds: Option<&'a PageBounds>,
+    /// Body top and bottom of the current page
+    top: f64,
+    bottom: f64,
+    /// Section the next block belongs to
+    section: usize,
+    /// Section the current page started in, and whether that section starts with it
+    open_section: usize,
+    open_first: bool,
+    /// The next page opens a section (a section break asked for it)
+    section_start: bool,
+    /// (section, opens the section) of every finished page
+    page_sections: Vec<(usize, bool)>,
 }
 
 impl<'a> Paginator<'a> {
@@ -1309,15 +1370,54 @@ impl<'a> Paginator<'a> {
             front: Vec::new(),
             exclusions: Vec::new(),
             cursor_y: geo.top_first,
+            bounds: None,
+            top: geo.top_first,
+            bottom: geo.bottom,
+            section: 0,
+            open_section: 0,
+            open_first: true,
+            section_start: false,
+            page_sections: Vec::new(),
         }
     }
 
+    /// Uses per-page body bounds from now on, starting with the first page
+    fn with_bounds(mut self, bounds: &'a PageBounds) -> Self {
+        self.bounds = Some(bounds);
+        (self.top, self.bottom) = bounds.get(0, true, 1);
+        self.cursor_y = self.top;
+        self
+    }
+
     fn page_top(&self) -> f64 {
-        if self.pages.is_empty() {
-            self.geo.top_first
-        } else {
-            self.geo.top
+        self.top
+    }
+
+    /// The paragraph just placed ends its section; with `page_break` the next section starts
+    /// on a new page (or on this one, if nothing was placed on it yet)
+    fn end_section(&mut self, page_break: bool) {
+        self.section += 1;
+        if !page_break {
+            return;
         }
+        if self.at_top() {
+            self.open_section = self.section;
+            self.open_first = true;
+            self.open_bounds();
+        } else {
+            self.section_start = true;
+            self.new_page();
+        }
+    }
+
+    /// Takes the body bounds of the page now open
+    fn open_bounds(&mut self) {
+        let page_number = self.pages.len() + 1;
+        (self.top, self.bottom) = match self.bounds {
+            Some(b) => b.get(self.open_section, self.open_first, page_number),
+            None => (self.geo.top, self.geo.bottom),
+        };
+        self.cursor_y = self.top;
     }
 
     fn at_top(&self) -> bool {
@@ -1325,11 +1425,12 @@ impl<'a> Paginator<'a> {
     }
 
     fn remaining(&self) -> f64 {
-        self.geo.bottom - self.cursor_y
+        self.bottom - self.cursor_y
     }
 
+    /// Room on the current page from its top: what any block taller than this can never fit
     fn capacity(&self) -> f64 {
-        self.geo.bottom - self.geo.top
+        self.bottom - self.top
     }
 
     /// Adds a floating object's commands behind or in front of the text
@@ -1378,11 +1479,16 @@ impl<'a> Paginator<'a> {
             bg_color: self.geo.bg.clone(),
             items,
         });
-        self.cursor_y = self.geo.top;
+        self.page_sections
+            .push((self.open_section, self.open_first));
+        self.open_section = self.section;
+        self.open_first = std::mem::take(&mut self.section_start);
+        self.open_bounds();
         self.exclusions.clear();
     }
 
-    fn finish(mut self) -> Vec<PageLayout> {
+    /// The pages, and the (section, opens the section) of each
+    fn finish(mut self) -> (Vec<PageLayout>, Vec<(usize, bool)>) {
         if !self.items.is_empty()
             || !self.front.is_empty()
             || !self.behind.is_empty()
@@ -1390,7 +1496,7 @@ impl<'a> Paginator<'a> {
         {
             self.new_page();
         }
-        self.pages
+        (self.pages, self.page_sections)
     }
 }
 
@@ -1578,7 +1684,9 @@ fn place_paragraph(
     flow.prev_style = Some(p.style.clone());
     flow.prev_contextual = p.contextual_spacing;
 
-    if p.section_break_after && !pag.at_top() {
+    if p.ends_section {
+        pag.end_section(p.section_break_after);
+    } else if p.section_break_after && !pag.at_top() {
         pag.new_page();
     }
 }
@@ -1976,14 +2084,14 @@ fn wrap_around_floats<'a>(
     }
     let column = (b.left, b.left + b.width);
     let heights: Vec<f64> = b.lines.iter().map(|l| l.height).collect();
-    let slots = line_slots(&pag.exclusions, column, top, pag.geo.bottom, &heights);
+    let slots = line_slots(&pag.exclusions, column, top, pag.bottom, &heights);
     if slots.is_empty() {
         return None;
     }
     let first = prepare_paragraph(b.p, b.left, b.width, None, m, &slots);
     // Narrower lines may change line heights (pictures, mixed sizes): settle once more
     let heights: Vec<f64> = first.lines.iter().map(|l| l.height).collect();
-    let again = line_slots(&pag.exclusions, column, top, pag.geo.bottom, &heights);
+    let again = line_slots(&pag.exclusions, column, top, pag.bottom, &heights);
     let mut wrapped = if again == slots {
         first
     } else {
