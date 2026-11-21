@@ -1,0 +1,9 @@
+# The Rust version every build uses: local, CI (ci.yml) and deploy (deploy.yml).
+# Pinned so that a new stable release, and the new lints its Clippy brings, can't fail an
+# unrelated pull request. To upgrade: change the version, run
+# `cargo clippy --workspace --all-targets -- -D warnings`, fix what it reports, commit both.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

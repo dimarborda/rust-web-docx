@@ -103,7 +103,7 @@ Si un documento tuyo se ve distinto que en Word, abre un *issue* con una captura
 
 ## Desarrollo local
 
-Requisitos: Rust con el target `wasm32-unknown-unknown`, [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) y Node.js 20 o superior.
+Requisitos: [`rustup`](https://rustup.rs), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) y Node.js 20 o superior. La versión de Rust está fijada en [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` la instala sola, con Clippy, rustfmt y el target `wasm32-unknown-unknown`, la primera vez que ejecutes `cargo` en el repositorio. Para subir de versión, cámbiala ahí, corrige lo que reporte `cargo clippy` y confirma ambos cambios juntos.
 
 ```bash
 git clone https://github.com/dimarborda/rust-web-docx.git
