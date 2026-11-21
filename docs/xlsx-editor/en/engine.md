@@ -70,12 +70,14 @@ Formulas are written with `{ formula: '=SUM(B2:B10)*TAX' }` and calculated right
 
 It uses the English syntax Excel saves (`SUM`, `IF`, `,` between arguments; `;` is also accepted). Relative and absolute references, ranges, whole columns (`A:A`), other sheets (`'My data'!B2`), defined names, shared formulas and constant arrays (`{1,2;3,4}`) are supported, with Excel's conversions between text, number and boolean and its error codes. Functions:
 
-- **Math:** `SUM`, `PRODUCT`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `COUNT`, `COUNTA`, `COUNTBLANK`, `ROUND`, `ROUNDUP`, `ROUNDDOWN`, `INT`, `TRUNC`, `ABS`, `SIGN`, `SQRT`, `POWER`, `MOD`, `PI`, `CEILING`, `FLOOR`, `CEILING.MATH`, `FLOOR.MATH`, `SUMPRODUCT`.
+- **Math:** `SUM`, `PRODUCT`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `COUNT`, `COUNTA`, `COUNTBLANK`, `ROUND`, `ROUNDUP`, `ROUNDDOWN`, `INT`, `TRUNC`, `ABS`, `SIGN`, `SQRT`, `POWER`, `MOD`, `PI`, `CEILING`, `FLOOR`, `CEILING.MATH`, `FLOOR.MATH`, `SUMPRODUCT`, `SUMSQ`, `LN`, `LOG`, `LOG10`, `EXP`, `EVEN`, `ODD`, `MROUND`, `QUOTIENT`, `GCD`, `LCM`.
 - **Conditional:** `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS`, `MINIFS` (criteria such as `">5"`, `"<>x"`, `"n*"`).
-- **Logic and information:** `IF`, `IFS`, `SWITCH`, `IFERROR`, `IFNA`, `AND`, `OR`, `XOR`, `NOT`, `TRUE`, `FALSE`, `ISBLANK`, `ISNUMBER`, `ISTEXT`, `ISNONTEXT`, `ISLOGICAL`, `ISERROR`, `ISERR`, `ISNA`, `NA`.
+- **Logic and information:** `IF`, `IFS`, `SWITCH`, `IFERROR`, `IFNA`, `AND`, `OR`, `XOR`, `NOT`, `TRUE`, `FALSE`, `ISBLANK`, `ISNUMBER`, `ISTEXT`, `ISNONTEXT`, `ISLOGICAL`, `ISERROR`, `ISERR`, `ISNA`, `ISEVEN`, `ISODD`, `NA`.
 - **Lookup:** `VLOOKUP`, `HLOOKUP`, `XLOOKUP`, `MATCH`, `INDEX`, `CHOOSE`, `ROW`, `COLUMN`, `ROWS`, `COLUMNS`.
-- **Text:** `CONCATENATE`, `CONCAT`, `TEXTJOIN`, `LEFT`, `RIGHT`, `MID`, `LEN`, `UPPER`, `LOWER`, `PROPER`, `TRIM`, `SUBSTITUTE`, `REPT`, `EXACT`, `FIND`, `SEARCH`, `VALUE`, `TEXT`.
-- **Dates:** `TODAY`, `NOW`, `DATE`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `EDATE`, `EOMONTH`, `DAYS`.
+- **Text:** `CONCATENATE`, `CONCAT`, `TEXTJOIN`, `LEFT`, `RIGHT`, `MID`, `LEN`, `UPPER`, `LOWER`, `PROPER`, `TRIM`, `SUBSTITUTE`, `REPT`, `EXACT`, `FIND`, `SEARCH`, `VALUE`, `TEXT`, `CHAR`, `CODE`, `CLEAN`.
+- **Statistics:** `LARGE`, `SMALL`, `RANK`, `RANK.EQ`, `STDEV`, `STDEV.S`, `STDEV.P`, `VAR`, `VAR.S`, `VAR.P`, `MODE`, `MODE.SNGL`.
+- **Dates and times:** `TODAY`, `NOW`, `DATE`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `EDATE`, `EOMONTH`, `DAYS`, `DATEDIF`, `TIME`, `HOUR`, `MINUTE`, `SECOND`, `WEEKNUM`, `ISOWEEKNUM`, `NETWORKDAYS`, `WORKDAY` (Monday to Friday, with optional holidays).
+- **Finance:** `PMT`, `PV`, `FV`, `NPER`.
 
 A formula that uses anything else (a function not on the list, `OFFSET`, `INDIRECT`, references to other workbooks or to tables, array formulas, results that spill over several cells) or that forms a circular reference keeps the value Excel saved, and those depending on it use that value. When the file opens, Excel calculates it (see [Lossless](#lossless)).
 
