@@ -36,13 +36,24 @@ const TEXT_WIDTH: u32 = 9026;
 
 /// A run: `props` is the inner XML of `w:rPr` (empty for none)
 fn run(props: &str, text: &str) -> String {
-    let rpr = if props.is_empty() { String::new() } else { format!("<w:rPr>{}</w:rPr>", props) };
-    format!(r#"<w:r>{}<w:t xml:space="preserve">{}</w:t></w:r>"#, rpr, text)
+    let rpr = if props.is_empty() {
+        String::new()
+    } else {
+        format!("<w:rPr>{}</w:rPr>", props)
+    };
+    format!(
+        r#"<w:r>{}<w:t xml:space="preserve">{}</w:t></w:r>"#,
+        rpr, text
+    )
 }
 
 /// A paragraph: `props` is the inner XML of `w:pPr`
 fn paragraph(props: &str, runs: &[String]) -> String {
-    let ppr = if props.is_empty() { String::new() } else { format!("<w:pPr>{}</w:pPr>", props) };
+    let ppr = if props.is_empty() {
+        String::new()
+    } else {
+        format!("<w:pPr>{}</w:pPr>", props)
+    };
     format!("<w:p>{}{}</w:p>", ppr, runs.concat())
 }
 
@@ -55,13 +66,20 @@ fn cell(width: u32, shading: Option<&str>, align: &str, runs: &[String]) -> Stri
         r#"<w:tc><w:tcPr><w:tcW w:w="{}" w:type="dxa"/>{}</w:tcPr>{}</w:tc>"#,
         width,
         shd,
-        paragraph(&format!(r#"<w:spacing w:before="0" w:after="0"/><w:jc w:val="{}"/>"#, align), runs)
+        paragraph(
+            &format!(
+                r#"<w:spacing w:before="0" w:after="0"/><w:jc w:val="{}"/>"#,
+                align
+            ),
+            runs
+        )
     )
 }
 
 fn document_xml() -> String {
     // Template variables keep their own color so they stand out while editing
-    let var = |color: &str, name: &str| run(&format!(r#"<w:b/><w:color w:val="{}"/>"#, color), name);
+    let var =
+        |color: &str, name: &str| run(&format!(r#"<w:b/><w:color w:val="{}"/>"#, color), name);
     let text = |t: &str| run("", t);
     let bold = |t: &str| run("<w:b/>", t);
 
@@ -84,18 +102,43 @@ fn document_xml() -> String {
 
     // Deliverables table: a header row repeated on each page, then one row per phase
     let widths = [2100, 3326, 1600, TEXT_WIDTH - 2100 - 3326 - 1600];
-    let header = ["Hito / Fase", "Descripción del Entregable", "Plazo Estimado", "Valor / Importe"];
+    let header = [
+        "Hito / Fase",
+        "Descripción del Entregable",
+        "Plazo Estimado",
+        "Valor / Importe",
+    ];
     let aligns = ["left", "left", "center", "right"];
     let header_row = format!(
         r#"<w:tr><w:trPr><w:tblHeader/></w:trPr>{}</w:tr>"#,
         (0..4)
-            .map(|i| cell(widths[i], Some("EEF2FF"), aligns[i], &[run(r#"<w:b/><w:color w:val="1E3A8A"/>"#, header[i])]))
+            .map(|i| cell(
+                widths[i],
+                Some("EEF2FF"),
+                aligns[i],
+                &[run(r#"<w:b/><w:color w:val="1E3A8A"/>"#, header[i])]
+            ))
             .collect::<String>()
     );
     let phases = [
-        ("Fase 1: Arquitectura", "Diseño de base de datos y especificación técnica", "Semana 2", text("$5,000,000 COP")),
-        ("Fase 2: Motor Rust WASM", "Implementación de algoritmos de procesamiento local", "Semana 6", text("$12,000,000 COP")),
-        ("Fase 3: Interfaz &amp; QA", "Editor visual directo y pruebas de compatibilidad", "Semana 8", var("059669", "{{VALOR_PROYECTO}}")),
+        (
+            "Fase 1: Arquitectura",
+            "Diseño de base de datos y especificación técnica",
+            "Semana 2",
+            text("$5,000,000 COP"),
+        ),
+        (
+            "Fase 2: Motor Rust WASM",
+            "Implementación de algoritmos de procesamiento local",
+            "Semana 6",
+            text("$12,000,000 COP"),
+        ),
+        (
+            "Fase 3: Interfaz &amp; QA",
+            "Editor visual directo y pruebas de compatibilidad",
+            "Semana 8",
+            var("059669", "{{VALOR_PROYECTO}}"),
+        ),
     ];
     let phase_rows: String = phases
         .iter()
@@ -105,11 +148,14 @@ fn document_xml() -> String {
                 cell(widths[0], None, aligns[0], &[bold(phase)]),
                 cell(widths[1], None, aligns[1], &[text(description)]),
                 cell(widths[2], None, aligns[2], &[text(due)]),
-                cell(widths[3], None, aligns[3], &[value.clone()]),
+                cell(widths[3], None, aligns[3], std::slice::from_ref(value)),
             )
         })
         .collect();
-    let grid: String = widths.iter().map(|w| format!(r#"<w:gridCol w:w="{}"/>"#, w)).collect();
+    let grid: String = widths
+        .iter()
+        .map(|w| format!(r#"<w:gridCol w:w="{}"/>"#, w))
+        .collect();
     let deliverables = format!(
         r#"<w:tbl><w:tblPr><w:tblStyle w:val="TablaContrato"/><w:tblW w:w="{}" w:type="dxa"/><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr><w:tblGrid>{}</w:tblGrid>{}{}</w:tbl>"#,
         TEXT_WIDTH, grid, header_row, phase_rows
@@ -120,9 +166,18 @@ fn document_xml() -> String {
     let signer = |role: &str, variable: &str| {
         format!(
             r#"<w:tc><w:tcPr><w:tcW w:w="{half}" w:type="dxa"/></w:tcPr>{}{}{}</w:tc>"#,
-            paragraph(r#"<w:spacing w:before="480" w:after="0"/><w:jc w:val="center"/>"#, &[text("______________________________")]),
-            paragraph(r#"<w:spacing w:after="0"/><w:jc w:val="center"/>"#, &[bold(role)]),
-            paragraph(r#"<w:spacing w:after="0"/><w:jc w:val="center"/>"#, &[run(r#"<w:color w:val="64748B"/>"#, variable)]),
+            paragraph(
+                r#"<w:spacing w:before="480" w:after="0"/><w:jc w:val="center"/>"#,
+                &[text("______________________________")]
+            ),
+            paragraph(
+                r#"<w:spacing w:after="0"/><w:jc w:val="center"/>"#,
+                &[bold(role)]
+            ),
+            paragraph(
+                r#"<w:spacing w:after="0"/><w:jc w:val="center"/>"#,
+                &[run(r#"<w:color w:val="64748B"/>"#, variable)]
+            ),
         )
     };
     let signatures = format!(
@@ -133,15 +188,26 @@ fn document_xml() -> String {
     );
 
     let body = [
-        paragraph(r#"<w:pStyle w:val="Titulo"/>"#, &[text("CONTRATO DE PRESTACIÓN DE SERVICIOS")]),
+        paragraph(
+            r#"<w:pStyle w:val="Titulo"/>"#,
+            &[text("CONTRATO DE PRESTACIÓN DE SERVICIOS")],
+        ),
         paragraph(
             r#"<w:pStyle w:val="Subtitulo"/>"#,
-            &[text("Documento generado y gestionado en tiempo real con Rust y WebAssembly")],
+            &[text(
+                "Documento generado y gestionado en tiempo real con Rust y WebAssembly",
+            )],
         ),
         intro,
-        paragraph(r#"<w:pStyle w:val="Ttulo1"/>"#, &[text("Cláusula Primera: Hitos y Cronograma de Entregas")]),
+        paragraph(
+            r#"<w:pStyle w:val="Ttulo1"/>"#,
+            &[text("Cláusula Primera: Hitos y Cronograma de Entregas")],
+        ),
         deliverables,
-        paragraph(r#"<w:pStyle w:val="Ttulo1"/>"#, &[text("Cláusula Segunda: Firmas de Conformidad")]),
+        paragraph(
+            r#"<w:pStyle w:val="Ttulo1"/>"#,
+            &[text("Cláusula Segunda: Firmas de Conformidad")],
+        ),
         signatures,
         paragraph("", &[]),
     ]
@@ -231,20 +297,40 @@ mod tests {
     #[test]
     fn test_sample_is_a_complete_word_document() {
         let m = DocxModifier::from_bytes(&generate_sample_docx().unwrap()).unwrap();
-        assert!(m.get_file_string("word/styles.xml").unwrap().contains(r#"w:lang w:val="es-CO""#));
+        assert!(m
+            .get_file_string("word/styles.xml")
+            .unwrap()
+            .contains(r#"w:lang w:val="es-CO""#));
 
         let paragraphs = m.extract_paragraphs().unwrap();
         let title = &paragraphs[0];
         assert_eq!(title.style, "Titulo");
-        assert_eq!((title.align.as_str(), title.runs[0].bold, title.runs[0].font_size), ("center", true, Some(20.0)));
-        assert_eq!(title.runs[0].font_family.as_deref(), Some("Calibri"), "fonts come from docDefaults");
+        assert_eq!(
+            (
+                title.align.as_str(),
+                title.runs[0].bold,
+                title.runs[0].font_size
+            ),
+            ("center", true, Some(20.0))
+        );
+        assert_eq!(
+            title.runs[0].font_family.as_deref(),
+            Some("Calibri"),
+            "fonts come from docDefaults"
+        );
 
         let table = m.extract_tables().unwrap().remove(0);
         assert!(table.rich_rows[0].is_header && !table.rich_rows[1].is_header);
-        assert!(table.borders.top.as_ref().is_some_and(|b| b.is_visible()), "borders from the table style");
+        assert!(
+            table.borders.top.as_ref().is_some_and(|b| b.is_visible()),
+            "borders from the table style"
+        );
         assert!(!table.borders.inside_v.as_ref().unwrap().is_visible());
         let cell_paragraph = &table.rich_rows[1].cells[0].paragraphs[0];
-        assert_eq!((cell_paragraph.space_before, cell_paragraph.space_after), (0.0, 0.0));
+        assert_eq!(
+            (cell_paragraph.space_before, cell_paragraph.space_after),
+            (0.0, 0.0)
+        );
         assert_eq!(table.grid_cols.iter().sum::<f64>(), TEXT_WIDTH as f64);
     }
 }

@@ -7,7 +7,10 @@
 //! (highlight, rStyle, lang, ...), and everything that is not text — hyperlinks,
 //! fields, bookmarks, comments, drawings — stays exactly where it was.
 
-use crate::docx_parser::{break_char, general_ref_text, parse_paragraph_with, tag_is, unescaped, ParagraphInfo, RunInfo, PAGE_BREAK};
+use crate::docx_parser::{
+    break_char, general_ref_text, parse_paragraph_with, tag_is, unescaped, ParagraphInfo, RunInfo,
+    PAGE_BREAK,
+};
 use crate::styles::{highlight_name, StyleSheet};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -51,7 +54,10 @@ impl FormatTarget {
     /// Keeps only the properties that differ from `base`; `None` when nothing changes
     fn diff_against(&self, base: &RunInfo) -> Option<FormatTarget> {
         if self.clear {
-            return Some(FormatTarget { clear: true, ..Default::default() });
+            return Some(FormatTarget {
+                clear: true,
+                ..Default::default()
+            });
         }
         let mut d = FormatTarget::default();
         if self.bold.is_some_and(|b| b != base.bold) {
@@ -69,12 +75,16 @@ impl FormatTarget {
             }
         }
         if let Some(sz) = self.font_size {
-            if base.font_size.map_or(true, |b| (b - sz).abs() > 0.01) {
+            if base.font_size.is_none_or(|b| (b - sz).abs() > 0.01) {
                 d.font_size = Some(sz);
             }
         }
         if let Some(fam) = &self.font_family {
-            if base.font_family.as_deref().map_or(true, |b| !b.eq_ignore_ascii_case(fam)) {
+            if base
+                .font_family
+                .as_deref()
+                .is_none_or(|b| !b.eq_ignore_ascii_case(fam))
+            {
                 d.font_family = Some(fam.clone());
             }
         }
@@ -128,27 +138,104 @@ fn normalize_align(a: &str) -> &'static str {
 
 /// Canonical child order of `w:rPr` (CT_RPr). Word rejects files with out-of-order children.
 const RPR_ORDER: &[&str] = &[
-    "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike", "dstrike",
-    "outline", "shadow", "emboss", "imprint", "noProof", "snapToGrid", "vanish", "webHidden",
-    "color", "spacing", "w", "kern", "position", "sz", "szCs", "highlight", "u", "effect",
-    "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
-    "specVanish", "oMath", "rPrChange",
+    "rStyle",
+    "rFonts",
+    "b",
+    "bCs",
+    "i",
+    "iCs",
+    "caps",
+    "smallCaps",
+    "strike",
+    "dstrike",
+    "outline",
+    "shadow",
+    "emboss",
+    "imprint",
+    "noProof",
+    "snapToGrid",
+    "vanish",
+    "webHidden",
+    "color",
+    "spacing",
+    "w",
+    "kern",
+    "position",
+    "sz",
+    "szCs",
+    "highlight",
+    "u",
+    "effect",
+    "bdr",
+    "shd",
+    "fitText",
+    "vertAlign",
+    "rtl",
+    "cs",
+    "em",
+    "lang",
+    "eastAsianLayout",
+    "specVanish",
+    "oMath",
+    "rPrChange",
 ];
 
 /// Direct run formatting removed by "clear formatting": what the editor models (character
 /// styles such as a hyperlink's stay)
 const CLEARED_RPR: &[&str] = &[
-    "rFonts", "b", "bCs", "i", "iCs", "strike", "dstrike", "color", "sz", "szCs", "highlight", "u", "vertAlign",
+    "rFonts",
+    "b",
+    "bCs",
+    "i",
+    "iCs",
+    "strike",
+    "dstrike",
+    "color",
+    "sz",
+    "szCs",
+    "highlight",
+    "u",
+    "vertAlign",
 ];
 
 /// Canonical child order of `w:pPr` (CT_PPr)
 const PPR_ORDER: &[&str] = &[
-    "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr",
-    "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap",
-    "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd",
-    "snapToGrid", "spacing", "ind", "contextualSpacing", "mirrorIndents", "suppressOverlap",
-    "jc", "textDirection", "textAlignment", "textboxTightWrap", "outlineLvl", "divId",
-    "cnfStyle", "rPr", "sectPr", "pPrChange",
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
+    "sectPr",
+    "pPrChange",
 ];
 
 pub(crate) struct Token<'a> {
@@ -166,7 +253,10 @@ pub(crate) fn tokenize(xml: &str) -> Result<Vec<Token<'_>>, String> {
             Ok(Event::Eof) => break,
             Ok(ev) => {
                 let end = reader.buffer_position() as usize;
-                tokens.push(Token { ev, span: start..end });
+                tokens.push(Token {
+                    ev,
+                    span: start..end,
+                });
             }
             Err(e) => return Err(format!("XML error: {:?}", e)),
         }
@@ -215,7 +305,9 @@ fn local_name_of(name: &str) -> &str {
 /// Namespace prefix of an element name ("w" for "w:r"), used to name generated elements
 pub(crate) fn prefix_of(name: &str) -> String {
     let s = name;
-    s.split_once(':').map(|(p, _)| p.to_string()).unwrap_or_default()
+    s.split_once(':')
+        .map(|(p, _)| p.to_string())
+        .unwrap_or_default()
 }
 
 fn qualified(prefix: &str, local: &str) -> String {
@@ -227,7 +319,9 @@ fn qualified(prefix: &str, local: &str) -> String {
 }
 
 fn escape_text(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn escape_attr(s: &str) -> String {
@@ -244,8 +338,20 @@ pub fn body_paragraph_ranges(xml: &str) -> Result<Vec<Range<usize>>, String> {
     while i < tokens.len() {
         match &tokens[i].ev {
             // Headers and footers (w:hdr / w:ftr) number their paragraphs the same way
-            Event::Start(e) if ["body", "hdr", "ftr"].iter().any(|t| tag_is(e.name().as_ref(), t)) => in_body = true,
-            Event::End(e) if ["body", "hdr", "ftr"].iter().any(|t| tag_is(e.name().as_ref(), t)) => in_body = false,
+            Event::Start(e)
+                if ["body", "hdr", "ftr"]
+                    .iter()
+                    .any(|t| tag_is(e.name().as_ref(), t)) =>
+            {
+                in_body = true
+            }
+            Event::End(e)
+                if ["body", "hdr", "ftr"]
+                    .iter()
+                    .any(|t| tag_is(e.name().as_ref(), t)) =>
+            {
+                in_body = false
+            }
             Event::Start(e) | Event::Empty(e) if in_body && tag_is(e.name().as_ref(), "p") => {
                 let end = element_end(&tokens, i);
                 ranges.push(tokens[i].span.start..tokens[end].span.end);
@@ -268,7 +374,12 @@ pub fn table_cell_paragraph_ranges(
     col: usize,
 ) -> Result<Vec<Range<usize>>, String> {
     let tokens = tokenize(xml)?;
-    let not_found = || format!("No se encontró la celda ({}, {}) de la tabla {}", row, col, table_index);
+    let not_found = || {
+        format!(
+            "No se encontró la celda ({}, {}) de la tabla {}",
+            row, col, table_index
+        )
+    };
 
     // 1. Locate the top-level body table
     let mut in_body = false;
@@ -330,7 +441,11 @@ pub fn table_cell_paragraph_ranges(
     Err(not_found())
 }
 
-fn cell_paragraphs(tokens: &[Token], tc_start: usize, tc_end: usize) -> Result<Vec<Range<usize>>, String> {
+fn cell_paragraphs(
+    tokens: &[Token],
+    tc_start: usize,
+    tc_end: usize,
+) -> Result<Vec<Range<usize>>, String> {
     let mut ranges = Vec::new();
     let mut j = tc_start + 1;
     while j < tc_end {
@@ -356,7 +471,11 @@ fn cell_paragraphs(tokens: &[Token], tc_start: usize, tc_end: usize) -> Result<V
 /// comment ranges stay in the first half so their ids remain unique; a section break moves to
 /// the second half (the paragraph that now ends the section). At the end of a paragraph the
 /// new one takes the style's "next" style, as in Word.
-pub fn split_paragraph(p_xml: &str, styles: &StyleSheet, offset: usize) -> Result<(String, String), String> {
+pub fn split_paragraph(
+    p_xml: &str,
+    styles: &StyleSheet,
+    offset: usize,
+) -> Result<(String, String), String> {
     let info = parse_paragraph_fragment(p_xml, styles);
     let len = info.text.chars().count();
     let offset = offset.min(len);
@@ -364,7 +483,11 @@ pub fn split_paragraph(p_xml: &str, styles: &StyleSheet, offset: usize) -> Resul
     let first = apply_change(
         p_xml,
         styles,
-        Change::Range { start: offset, end: len, text: "" },
+        Change::Range {
+            start: offset,
+            end: len,
+            text: "",
+        },
         None,
         None,
         OpaquePolicy::KeepBefore { offset, len },
@@ -374,7 +497,11 @@ pub fn split_paragraph(p_xml: &str, styles: &StyleSheet, offset: usize) -> Resul
     let second = apply_change(
         p_xml,
         styles,
-        Change::Range { start: 0, end: offset, text: "" },
+        Change::Range {
+            start: 0,
+            end: offset,
+            text: "",
+        },
         None,
         None,
         OpaquePolicy::KeepFrom { offset, len },
@@ -402,7 +529,9 @@ fn last_text_run_rpr(p_xml: &str) -> Result<Option<String>, String> {
         if matches!(tokens[i].ev, Event::Start(_)) && is_element(&tokens[i], "r") {
             let end = element_end(&tokens, i);
             let run = &tokens[i + 1..end];
-            let has_text = run.iter().any(|t| matches!(t.ev, Event::Text(_) | Event::GeneralRef(_)));
+            let has_text = run
+                .iter()
+                .any(|t| matches!(t.ev, Event::Text(_) | Event::GeneralRef(_)));
             if has_text {
                 last = run
                     .iter()
@@ -431,9 +560,20 @@ pub fn merge_paragraphs(a: &str, b: &str, styles: &StyleSheet) -> Result<String,
     let pa = paragraph_parts(&ta, a)?;
     let pb = paragraph_parts(&tb, b)?;
     let a_is_empty = parse_paragraph_fragment(a, styles).text.is_empty()
-        && !ta.iter().any(|t| ["drawing", "pict", "object"].iter().any(|n| is_element(t, n)));
-    let (start, ppr, end) = if a_is_empty { (&pb.start, &pb.ppr, &pb.end) } else { (&pa.start, &pa.ppr, &pa.end) };
-    Ok(format!("{}{}{}{}{}", start, ppr, pa.content, pb.content, end))
+        && !ta.iter().any(|t| {
+            ["drawing", "pict", "object"]
+                .iter()
+                .any(|n| is_element(t, n))
+        });
+    let (start, ppr, end) = if a_is_empty {
+        (&pb.start, &pb.ppr, &pb.end)
+    } else {
+        (&pa.start, &pa.ppr, &pa.end)
+    };
+    Ok(format!(
+        "{}{}{}{}{}",
+        start, ppr, pa.content, pb.content, end
+    ))
 }
 
 /// A paragraph as start tag, `w:pPr`, remaining content and end tag (raw XML)
@@ -445,10 +585,16 @@ struct ParagraphParts {
 }
 
 fn paragraph_parts(tokens: &[Token], xml: &str) -> Result<ParagraphParts, String> {
-    let name = element_name(tokens.first().ok_or("Párrafo vacío")?).ok_or("El fragmento no es un párrafo.")?;
+    let name = element_name(tokens.first().ok_or("Párrafo vacío")?)
+        .ok_or("El fragmento no es un párrafo.")?;
     let end = format!("</{}>", name);
     if matches!(tokens[0].ev, Event::Empty(_)) {
-        return Ok(ParagraphParts { start: open_tag_of(tokens, xml, 0, 0), ppr: String::new(), content: String::new(), end });
+        return Ok(ParagraphParts {
+            start: open_tag_of(tokens, xml, 0, 0),
+            ppr: String::new(),
+            content: String::new(),
+            end,
+        });
     }
     let last = tokens.len() - 1;
     let mut i = 1;
@@ -467,13 +613,18 @@ fn paragraph_parts(tokens: &[Token], xml: &str) -> Result<ParagraphParts, String
     Ok(ParagraphParts {
         start: xml[tokens[0].span.clone()].to_string(),
         ppr,
-        content: xml[tokens[i].span.start.min(tokens[last].span.start)..tokens[last].span.start].to_string(),
+        content: xml[tokens[i].span.start.min(tokens[last].span.start)..tokens[last].span.start]
+            .to_string(),
         end,
     })
 }
 
 /// Sets (or with `None` removes) one child of the paragraph's `w:pPr`, in schema order
-pub fn set_paragraph_property(p_xml: &str, local: &str, element: Option<&str>) -> Result<String, String> {
+pub fn set_paragraph_property(
+    p_xml: &str,
+    local: &str,
+    element: Option<&str>,
+) -> Result<String, String> {
     let tokens = tokenize(p_xml)?;
     let parts = paragraph_parts(&tokens, p_xml)?;
     let mut kids: Vec<(String, String)> = if parts.ppr.is_empty() {
@@ -494,15 +645,25 @@ pub fn set_paragraph_property(p_xml: &str, local: &str, element: Option<&str>) -
     let ppr = if kids.is_empty() {
         String::new()
     } else {
-        format!("<w:pPr>{}</w:pPr>", kids.into_iter().map(|(_, x)| x).collect::<String>())
+        format!(
+            "<w:pPr>{}</w:pPr>",
+            kids.into_iter().map(|(_, x)| x).collect::<String>()
+        )
     };
-    Ok(format!("{}{}{}{}", parts.start, ppr, parts.content, parts.end))
+    Ok(format!(
+        "{}{}{}{}",
+        parts.start, ppr, parts.content, parts.end
+    ))
 }
 
 /// Sets or removes (`None`) attributes of one empty child of `w:pPr` (`spacing`, `ind`),
 /// keeping its other attributes; the child is created when missing and dropped when it
 /// ends up without attributes. Names are local (`"line"` → `w:line`).
-pub fn set_paragraph_attrs(p_xml: &str, local: &str, changes: &[(&str, Option<String>)]) -> Result<String, String> {
+pub fn set_paragraph_attrs(
+    p_xml: &str,
+    local: &str,
+    changes: &[(&str, Option<String>)],
+) -> Result<String, String> {
     let tokens = tokenize(p_xml)?;
     let parts = paragraph_parts(&tokens, p_xml)?;
     let mut attrs: Vec<(String, String)> = Vec::new();
@@ -531,7 +692,10 @@ pub fn set_paragraph_attrs(p_xml: &str, local: &str, changes: &[(&str, Option<St
     let element = if attrs.is_empty() {
         None
     } else {
-        let list: String = attrs.iter().map(|(k, v)| format!(" {}=\"{}\"", k, v)).collect();
+        let list: String = attrs
+            .iter()
+            .map(|(k, v)| format!(" {}=\"{}\"", k, v))
+            .collect();
         Some(format!("<w:{}{}/>", local, list))
     };
     set_paragraph_property(p_xml, local, element.as_deref())
@@ -541,7 +705,12 @@ pub fn set_paragraph_attrs(p_xml: &str, local: &str, changes: &[(&str, Option<St
 /// permissions) and the paragraph's own ids, for a paragraph cloned from another one
 fn strip_unique_markers(p_xml: &str) -> Result<String, String> {
     const MARKERS: &[&str] = &[
-        "bookmarkStart", "bookmarkEnd", "commentRangeStart", "commentRangeEnd", "permStart", "permEnd",
+        "bookmarkStart",
+        "bookmarkEnd",
+        "commentRangeStart",
+        "commentRangeEnd",
+        "permStart",
+        "permEnd",
     ];
     let tokens = tokenize(p_xml)?;
     let mut out = String::with_capacity(p_xml.len());
@@ -558,7 +727,11 @@ fn strip_unique_markers(p_xml: &str) -> Result<String, String> {
                     }
                     tag.push_str(&format!(" {}=\"{}\"", key, attr.value));
                 }
-                tag.push_str(if matches!(tok.ev, Event::Empty(_)) { "/>" } else { ">" });
+                tag.push_str(if matches!(tok.ev, Event::Empty(_)) {
+                    "/>"
+                } else {
+                    ">"
+                });
                 out.push_str(&tag);
                 i += 1;
                 continue;
@@ -576,7 +749,9 @@ fn strip_unique_markers(p_xml: &str) -> Result<String, String> {
 
 /// True when `xml` contains only complete elements (safe to cut out of the document)
 pub fn is_balanced(xml: &str) -> bool {
-    let Ok(tokens) = tokenize(xml) else { return false };
+    let Ok(tokens) = tokenize(xml) else {
+        return false;
+    };
     let mut depth = 0i64;
     for tok in &tokens {
         match tok.ev {
@@ -653,7 +828,13 @@ impl RunModel {
 }
 
 fn parse_run(tokens: &[Token], start: usize, end: usize) -> Result<RunModel, String> {
-    let mut run = RunModel { start, end, rpr: None, atoms: Vec::new(), info: None };
+    let mut run = RunModel {
+        start,
+        end,
+        rpr: None,
+        atoms: Vec::new(),
+        info: None,
+    };
     let mut j = start + 1;
     while j < end {
         let child_end = element_end(tokens, j);
@@ -685,7 +866,11 @@ fn parse_run(tokens: &[Token], start: usize, end: usize) -> Result<RunModel, Str
                 Some(AtomKind::Opaque)
             };
             if let Some(kind) = kind {
-                run.atoms.push(Atom { kind, first: j, last: child_end });
+                run.atoms.push(Atom {
+                    kind,
+                    first: j,
+                    last: child_end,
+                });
             }
         }
         j = child_end + 1;
@@ -696,8 +881,15 @@ fn parse_run(tokens: &[Token], start: usize, end: usize) -> Result<RunModel, Str
 /// One piece of a rebuilt run
 enum Item {
     /// A character; `atom` holds the original tokens of a kept tab/break
-    Char { ch: char, atom: Option<(usize, usize)>, format: Option<FormatTarget> },
-    Opaque { first: usize, last: usize },
+    Char {
+        ch: char,
+        atom: Option<(usize, usize)>,
+        format: Option<FormatTarget>,
+    },
+    Opaque {
+        first: usize,
+        last: usize,
+    },
 }
 
 /// Applies `new_text` (and optionally per-character formatting and paragraph alignment)
@@ -709,7 +901,14 @@ pub fn edit_paragraph(
     formats: Option<&[FormatTarget]>,
     align: Option<&str>,
 ) -> Result<String, String> {
-    apply_change(p_xml, styles, Change::Text(new_text), formats, align, OpaquePolicy::Keep)
+    apply_change(
+        p_xml,
+        styles,
+        Change::Text(new_text),
+        formats,
+        align,
+        OpaquePolicy::Keep,
+    )
 }
 
 /// Replaces the characters `start..end` of the paragraph text with `text`. Unlike
@@ -722,13 +921,24 @@ pub fn edit_paragraph_range(
     end: usize,
     text: &str,
 ) -> Result<String, String> {
-    apply_change(p_xml, styles, Change::Range { start, end, text }, None, None, OpaquePolicy::Keep)
+    apply_change(
+        p_xml,
+        styles,
+        Change::Range { start, end, text },
+        None,
+        None,
+        OpaquePolicy::Keep,
+    )
 }
 
 enum Change<'a> {
     /// The whole new text; the edited region is inferred (common prefix/suffix)
     Text(&'a str),
-    Range { start: usize, end: usize, text: &'a str },
+    Range {
+        start: usize,
+        end: usize,
+        text: &'a str,
+    },
 }
 
 /// What happens to zero-width content (drawings, fields, note references) of a paragraph
@@ -737,9 +947,15 @@ enum OpaquePolicy {
     Keep,
     /// First half of a split at `offset` (of `len` characters): content before the split point.
     /// At the very end of the paragraph everything stays in the first half.
-    KeepBefore { offset: usize, len: usize },
+    KeepBefore {
+        offset: usize,
+        len: usize,
+    },
     /// Second half of a split: content from the split point on
-    KeepFrom { offset: usize, len: usize },
+    KeepFrom {
+        offset: usize,
+        len: usize,
+    },
 }
 
 impl OpaquePolicy {
@@ -811,9 +1027,12 @@ fn apply_change(
     // 3. Character-level diff (common prefix/suffix)
     let mut owners: Vec<usize> = Vec::new();
     for (r, run) in runs.iter().enumerate() {
-        owners.extend(std::iter::repeat(r).take(run.text().chars().count()));
+        owners.extend(std::iter::repeat_n(r, run.text().chars().count()));
     }
-    let old_chars: Vec<char> = runs.iter().flat_map(|r| r.text().chars().collect::<Vec<_>>()).collect();
+    let old_chars: Vec<char> = runs
+        .iter()
+        .flat_map(|r| r.text().chars().collect::<Vec<_>>())
+        .collect();
     let old_len = old_chars.len();
     let (new_chars, prefix, suffix) = match change {
         Change::Text(text) => {
@@ -866,7 +1085,11 @@ fn apply_change(
     let insert_items = |run: Option<&RunInfo>| -> Vec<Item> {
         inserted
             .clone()
-            .map(|p| Item::Char { ch: new_chars[p], atom: None, format: format_for(p, run) })
+            .map(|p| Item::Char {
+                ch: new_chars[p],
+                atom: None,
+                format: format_for(p, run),
+            })
             .collect()
     };
 
@@ -880,7 +1103,10 @@ fn apply_change(
             let chars: Vec<(char, Option<(usize, usize)>)> = match &atom.kind {
                 AtomKind::Opaque => {
                     if opaque.keeps(k) {
-                        items[r].push(Item::Opaque { first: atom.first, last: atom.last });
+                        items[r].push(Item::Opaque {
+                            first: atom.first,
+                            last: atom.last,
+                        });
                     } else {
                         dirty[r] = true;
                     }
@@ -900,7 +1126,11 @@ fn apply_change(
                 } else {
                     let format = format_for(new_pos(k), info);
                     dirty[r] |= format.is_some();
-                    items[r].push(Item::Char { ch, atom: original, format });
+                    items[r].push(Item::Char {
+                        ch,
+                        atom: original,
+                        format,
+                    });
                 }
                 if prefix > 0 && k + 1 == prefix && insert_owner == Some(r) {
                     items[r].extend(insert_items(info));
@@ -915,7 +1145,10 @@ fn apply_change(
         .map(normalize_align)
         .filter(|a| *a != normalize_align(&info.align));
 
-    if !dirty.contains(&true) && new_align.is_none() && (inserted.is_empty() || insert_owner.is_some()) {
+    if !dirty.contains(&true)
+        && new_align.is_none()
+        && (inserted.is_empty() || insert_owner.is_some())
+    {
         return Ok(p_xml.to_string());
     }
 
@@ -1043,28 +1276,51 @@ fn open_tag_of(tokens: &[Token], xml: &str, first: usize, last: usize) -> String
     }
 }
 
-fn rebuild_ppr_with_jc(tokens: &[Token], xml: &str, first: usize, last: usize, align: &str) -> String {
+fn rebuild_ppr_with_jc(
+    tokens: &[Token],
+    xml: &str,
+    first: usize,
+    last: usize,
+    align: &str,
+) -> String {
     let name = element_name(&tokens[first]).unwrap_or("w:pPr");
     let prefix = prefix_of(name);
     let mut kids = children(tokens, xml, first, last);
     kids.retain(|(n, _)| n != "jc");
     kids.push((
         "jc".to_string(),
-        format!("<{} {}=\"{}\"/>", qualified(&prefix, "jc"), qualified(&prefix, "val"), align),
+        format!(
+            "<{} {}=\"{}\"/>",
+            qualified(&prefix, "jc"),
+            qualified(&prefix, "val"),
+            align
+        ),
     ));
     sort_children(&mut kids, PPR_ORDER);
     let body: String = kids.into_iter().map(|(_, x)| x).collect();
-    format!("{}{}</{}>", open_tag_of(tokens, xml, first, last), body, name)
+    format!(
+        "{}{}</{}>",
+        open_tag_of(tokens, xml, first, last),
+        body,
+        name
+    )
 }
 
 /// The `w:rPr` inside `w:pPr` (paragraph mark formatting) as a list of children
-fn paragraph_mark_rpr(tokens: &[Token], xml: &str, first: usize, last: usize) -> Option<Vec<(String, String)>> {
+fn paragraph_mark_rpr(
+    tokens: &[Token],
+    xml: &str,
+    first: usize,
+    last: usize,
+) -> Option<Vec<(String, String)>> {
     let mut j = first + 1;
     while j < last {
         let end = element_end(tokens, j);
         if is_element(&tokens[j], "rPr") {
             let mut kids = children(tokens, xml, j, end);
-            kids.retain(|(n, _)| n != "ins" && n != "del" && n != "rPrChange" && n != "moveFrom" && n != "moveTo");
+            kids.retain(|(n, _)| {
+                n != "ins" && n != "del" && n != "rPrChange" && n != "moveFrom" && n != "moveTo"
+            });
             return Some(kids);
         }
         j = end + 1;
@@ -1087,19 +1343,43 @@ fn patch_rpr(kids: &mut Vec<(String, String)>, prefix: &str, diff: &FormatTarget
         kids.retain(|(n, _)| !CLEARED_RPR.contains(&n.as_str()));
     }
     if let Some(b) = diff.bold {
-        set(kids, "b", Some(if b { el("b", "") } else { el("b", &val("0")) }));
+        set(
+            kids,
+            "b",
+            Some(if b { el("b", "") } else { el("b", &val("0")) }),
+        );
     }
     if let Some(i) = diff.italic {
-        set(kids, "i", Some(if i { el("i", "") } else { el("i", &val("0")) }));
+        set(
+            kids,
+            "i",
+            Some(if i { el("i", "") } else { el("i", &val("0")) }),
+        );
     }
     if let Some(u) = diff.underline {
-        set(kids, "u", Some(el("u", &val(if u { "single" } else { "none" }))));
+        set(
+            kids,
+            "u",
+            Some(el("u", &val(if u { "single" } else { "none" }))),
+        );
     }
     if let Some(c) = &diff.color {
-        set(kids, "color", if c.is_empty() { None } else { Some(el("color", &val(c))) });
+        set(
+            kids,
+            "color",
+            if c.is_empty() {
+                None
+            } else {
+                Some(el("color", &val(c)))
+            },
+        );
     }
     if let Some(sz) = diff.font_size {
-        set(kids, "sz", Some(el("sz", &val(&((sz * 2.0).round() as i64).to_string()))));
+        set(
+            kids,
+            "sz",
+            Some(el("sz", &val(&((sz * 2.0).round() as i64).to_string()))),
+        );
     }
     if let Some(fam) = &diff.font_family {
         let f = escape_attr(fam);
@@ -1112,13 +1392,37 @@ fn patch_rpr(kids: &mut Vec<(String, String)>, prefix: &str, diff: &FormatTarget
     }
     if let Some(on) = diff.strike {
         kids.retain(|(n, _)| n != "dstrike");
-        set(kids, "strike", Some(if on { el("strike", "") } else { el("strike", &val("0")) }));
+        set(
+            kids,
+            "strike",
+            Some(if on {
+                el("strike", "")
+            } else {
+                el("strike", &val("0"))
+            }),
+        );
     }
     if let Some(v) = &diff.vert_align {
-        set(kids, "vertAlign", if v.is_empty() { None } else { Some(el("vertAlign", &val(v))) });
+        set(
+            kids,
+            "vertAlign",
+            if v.is_empty() {
+                None
+            } else {
+                Some(el("vertAlign", &val(v)))
+            },
+        );
     }
     if let Some(h) = &diff.highlight {
-        set(kids, "highlight", if h.is_empty() { None } else { Some(el("highlight", &val(highlight_name(h)))) });
+        set(
+            kids,
+            "highlight",
+            if h.is_empty() {
+                None
+            } else {
+                Some(el("highlight", &val(highlight_name(h))))
+            },
+        );
     }
     sort_children(kids, RPR_ORDER);
 }
@@ -1132,7 +1436,9 @@ fn emit_run(out: &mut String, tokens: &[Token], xml: &str, run: &RunModel, items
     let prefix = prefix_of(run_name);
     let open = &xml[tokens[run.start].span.clone()];
     let close = format!("</{}>", run_name);
-    let original_rpr = run.rpr.map(|(a, b)| &xml[tokens[a].span.start..tokens[b].span.end]);
+    let original_rpr = run
+        .rpr
+        .map(|(a, b)| &xml[tokens[a].span.start..tokens[b].span.end]);
 
     for group in group_items(items) {
         out.push_str(open);
@@ -1143,7 +1449,10 @@ fn emit_run(out: &mut String, tokens: &[Token], xml: &str, run: &RunModel, items
                 }
             }
             Some(diff) => {
-                let mut kids = run.rpr.map(|(a, b)| children(tokens, xml, a, b)).unwrap_or_default();
+                let mut kids = run
+                    .rpr
+                    .map(|(a, b)| children(tokens, xml, a, b))
+                    .unwrap_or_default();
                 patch_rpr(&mut kids, &prefix, diff);
                 let rpr_open = run
                     .rpr
@@ -1152,19 +1461,31 @@ fn emit_run(out: &mut String, tokens: &[Token], xml: &str, run: &RunModel, items
                 write_rpr(out, &prefix, &rpr_open, &kids);
             }
         }
-        write_items(out, &prefix, group, |first, last| &xml[tokens[first].span.start..tokens[last].span.end]);
+        write_items(out, &prefix, group, |first, last| {
+            &xml[tokens[first].span.start..tokens[last].span.end]
+        });
         out.push_str(&close);
     }
 }
 
-fn emit_new_run(out: &mut String, prefix: &str, base_rpr: Option<Vec<(String, String)>>, items: &[Item]) {
+fn emit_new_run(
+    out: &mut String,
+    prefix: &str,
+    base_rpr: Option<Vec<(String, String)>>,
+    items: &[Item],
+) {
     for group in group_items(items) {
         out.push_str(&format!("<{}>", qualified(prefix, "r")));
         let mut kids = base_rpr.clone().unwrap_or_default();
         if let Some(diff) = group_format(group) {
             patch_rpr(&mut kids, prefix, diff);
         }
-        write_rpr(out, prefix, &format!("<{}>", qualified(prefix, "rPr")), &kids);
+        write_rpr(
+            out,
+            prefix,
+            &format!("<{}>", qualified(prefix, "rPr")),
+            &kids,
+        );
         write_items(out, prefix, group, |_, _| "");
         out.push_str(&format!("</{}>", qualified(prefix, "r")));
     }
@@ -1212,18 +1533,29 @@ fn group_format(group: &[Item]) -> Option<&FormatTarget> {
     })?
 }
 
-fn write_items<'x>(out: &mut String, prefix: &str, group: &[Item], raw: impl Fn(usize, usize) -> &'x str) {
+fn write_items<'x>(
+    out: &mut String,
+    prefix: &str,
+    group: &[Item],
+    raw: impl Fn(usize, usize) -> &'x str,
+) {
     let mut pending = String::new();
     let flush = |out: &mut String, pending: &mut String| {
         if !pending.is_empty() {
             let t = qualified(prefix, "t");
-            out.push_str(&format!("<{t} xml:space=\"preserve\">{}</{t}>", escape_text(pending)));
+            out.push_str(&format!(
+                "<{t} xml:space=\"preserve\">{}</{t}>",
+                escape_text(pending)
+            ));
             pending.clear();
         }
     };
     for item in group {
         match item {
-            Item::Char { atom: Some((first, last)), .. } => {
+            Item::Char {
+                atom: Some((first, last)),
+                ..
+            } => {
                 flush(out, &mut pending);
                 out.push_str(raw(*first, *last));
             }
@@ -1266,7 +1598,13 @@ mod tests {
         let formats = runs
             .iter()
             .flat_map(|(t, bold)| {
-                std::iter::repeat(FormatTarget { bold: Some(*bold), ..Default::default() }).take(t.chars().count())
+                std::iter::repeat_n(
+                    FormatTarget {
+                        bold: Some(*bold),
+                        ..Default::default()
+                    },
+                    t.chars().count(),
+                )
             })
             .collect();
         (text, formats)
@@ -1275,7 +1613,10 @@ mod tests {
     #[test]
     fn test_noop_edit_is_byte_identical() {
         let p = r#"<w:p w:rsidR="00A1"><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>Hola</w:t></w:r></w:p>"#;
-        assert_eq!(edit_paragraph(p, &StyleSheet::default(), "Hola", None, Some("center")).unwrap(), p);
+        assert_eq!(
+            edit_paragraph(p, &StyleSheet::default(), "Hola", None, Some("center")).unwrap(),
+            p
+        );
     }
 
     #[test]
@@ -1285,19 +1626,37 @@ mod tests {
         let p = format!(
             r#"<w:p><w:r><w:rPr><w:highlight w:val="yellow"/><w:lang w:val="es-CO"/></w:rPr><w:t xml:space="preserve">Hola </w:t></w:r>{link}{tail}</w:p>"#
         );
-        let out = edit_paragraph(&p, &StyleSheet::default(), &plain("Hola mundo enlace final"), None, None).unwrap();
+        let out = edit_paragraph(
+            &p,
+            &StyleSheet::default(),
+            &plain("Hola mundo enlace final"),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(out.contains(r#"<w:rPr><w:highlight w:val="yellow"/><w:lang w:val="es-CO"/></w:rPr><w:t xml:space="preserve">Hola mundo </w:t>"#), "{}", out);
         assert!(out.contains(link), "hyperlink must be untouched: {}", out);
-        assert!(out.contains(tail), "untouched runs are copied verbatim: {}", out);
-        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "Hola mundo enlace final");
+        assert!(
+            out.contains(tail),
+            "untouched runs are copied verbatim: {}",
+            out
+        );
+        assert_eq!(
+            parse_paragraph_fragment(&out, &StyleSheet::default()).text,
+            "Hola mundo enlace final"
+        );
     }
 
     #[test]
     fn test_drawing_keeps_its_position() {
         let drawing = r#"<w:r><w:drawing><wp:inline><a:graphic/></wp:inline></w:drawing></w:r>"#;
-        let p = format!(r#"<w:p><w:r><w:t>Antes</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#);
+        let p = format!(
+            r#"<w:p><w:r><w:t>Antes</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#
+        );
         let out = edit_paragraph(&p, &StyleSheet::default(), "AhoraDespués", None, None).unwrap();
-        let expected = format!(r#"<w:p><w:r><w:t xml:space="preserve">Ahora</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#);
+        let expected = format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Ahora</w:t></w:r>{drawing}<w:r><w:t>Después</w:t></w:r></w:p>"#
+        );
         assert_eq!(out, expected);
     }
 
@@ -1308,13 +1667,18 @@ mod tests {
         let out = edit_paragraph(p, &StyleSheet::default(), &text, Some(&formats), None).unwrap();
         assert!(out.contains(r#"<w:rPr><w:b/><w:highlight w:val="cyan"/><w:lang w:val="es-ES"/></w:rPr><w:t xml:space="preserve">dos</w:t>"#), "{}", out);
         let info = parse_paragraph_fragment(&out, &StyleSheet::default());
-        let bold: Vec<(&str, bool)> = info.runs.iter().map(|r| (r.text.as_str(), r.bold)).collect();
+        let bold: Vec<(&str, bool)> = info
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), r.bold))
+            .collect();
         assert_eq!(bold, vec![("uno ", false), ("dos", true), (" tres", false)]);
     }
 
     #[test]
     fn test_strike_script_and_highlight_round_trip() {
-        let p = r#"<w:p><w:r><w:rPr><w:lang w:val="es-ES"/></w:rPr><w:t>H2O y E=mc2</w:t></w:r></w:p>"#;
+        let p =
+            r#"<w:p><w:r><w:rPr><w:lang w:val="es-ES"/></w:rPr><w:t>H2O y E=mc2</w:t></w:r></w:p>"#;
         let styles = StyleSheet::default();
         let info = parse_paragraph_fragment(p, &styles);
         let mut runs = vec![info.runs[0].clone(); 3];
@@ -1327,22 +1691,43 @@ mod tests {
         let text: String = runs.iter().map(|r| r.text.as_str()).collect();
         let formats: Vec<FormatTarget> = runs
             .iter()
-            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .flat_map(|r| std::iter::repeat_n(FormatTarget::from_run(r), r.text.chars().count()))
             .collect();
         let out = edit_paragraph(p, &styles, &text, Some(&formats), None).unwrap();
         // Schema order: vertAlign goes before lang
-        assert!(out.contains(r#"<w:rPr><w:vertAlign w:val="subscript"/><w:lang w:val="es-ES"/></w:rPr>"#), "{}", out);
-        assert!(out.contains(r#"<w:strike/>"#) && out.contains(r#"<w:highlight w:val="yellow"/>"#), "{}", out);
+        assert!(
+            out.contains(
+                r#"<w:rPr><w:vertAlign w:val="subscript"/><w:lang w:val="es-ES"/></w:rPr>"#
+            ),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains(r#"<w:strike/>"#) && out.contains(r#"<w:highlight w:val="yellow"/>"#),
+            "{}",
+            out
+        );
 
         let back = parse_paragraph_fragment(&out, &styles);
         let got: Vec<(&str, bool, Option<&str>, Option<&str>)> = back
             .runs
             .iter()
-            .map(|r| (r.text.as_str(), r.strike, r.vert_align.as_deref(), r.highlight.as_deref()))
+            .map(|r| {
+                (
+                    r.text.as_str(),
+                    r.strike,
+                    r.vert_align.as_deref(),
+                    r.highlight.as_deref(),
+                )
+            })
             .collect();
         assert_eq!(
             got,
-            vec![("H", false, None, None), ("2", false, Some("subscript"), None), ("O y E=mc2", true, None, Some("FFFF00"))]
+            vec![
+                ("H", false, None, None),
+                ("2", false, Some("subscript"), None),
+                ("O y E=mc2", true, None, Some("FFFF00"))
+            ]
         );
 
         // Clearing them removes the elements (strike is switched off explicitly, as Word does)
@@ -1350,22 +1735,42 @@ mod tests {
             .runs
             .iter()
             .flat_map(|r| {
-                let plain = RunInfo { strike: false, vert_align: None, highlight: None, ..r.clone() };
-                std::iter::repeat(FormatTarget::from_run(&plain)).take(r.text.chars().count())
+                let plain = RunInfo {
+                    strike: false,
+                    vert_align: None,
+                    highlight: None,
+                    ..r.clone()
+                };
+                std::iter::repeat_n(FormatTarget::from_run(&plain), r.text.chars().count())
             })
             .collect();
         let out = edit_paragraph(&out, &styles, &text, Some(&cleared), None).unwrap();
-        assert!(!out.contains("vertAlign") && !out.contains("highlight"), "{}", out);
-        assert!(parse_paragraph_fragment(&out, &styles).runs.iter().all(|r| !r.strike));
+        assert!(
+            !out.contains("vertAlign") && !out.contains("highlight"),
+            "{}",
+            out
+        );
+        assert!(parse_paragraph_fragment(&out, &styles)
+            .runs
+            .iter()
+            .all(|r| !r.strike));
     }
 
     #[test]
     fn test_font_size_not_lost_when_editor_omits_it() {
         let p = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="28"/></w:rPr><w:t>Título</w:t></w:r></w:p>"#;
-        let run = RunInfo { text: "Título nuevo".into(), ..Default::default() };
+        let run = RunInfo {
+            text: "Título nuevo".into(),
+            ..Default::default()
+        };
         let formats = vec![FormatTarget::from_run(&run); run.text.chars().count()];
-        let out = edit_paragraph(p, &StyleSheet::default(), &run.text, Some(&formats), None).unwrap();
-        assert!(out.contains(r#"<w:sz w:val="28"/>"#) && out.contains("Georgia"), "{}", out);
+        let out =
+            edit_paragraph(p, &StyleSheet::default(), &run.text, Some(&formats), None).unwrap();
+        assert!(
+            out.contains(r#"<w:sz w:val="28"/>"#) && out.contains("Georgia"),
+            "{}",
+            out
+        );
     }
 
     #[test]
@@ -1374,7 +1779,10 @@ mod tests {
         let p = format!(r#"<w:p><w:r><w:t xml:space="preserve">Página </w:t></w:r>{field}</w:p>"#);
         let out = edit_paragraph(&p, &StyleSheet::default(), "Pág. 3", None, None).unwrap();
         assert!(out.contains(field), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, "Pág. 3");
+        assert_eq!(
+            parse_paragraph_fragment(&out, &StyleSheet::default()).text,
+            "Pág. 3"
+        );
     }
 
     #[test]
@@ -1392,8 +1800,15 @@ mod tests {
         let p = r#"<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br w:type="page"/><w:t>c</w:t></w:r></w:p>"#;
         let text = format!("a\tb{}cX", PAGE_BREAK);
         let out = edit_paragraph(p, &StyleSheet::default(), &text, None, None).unwrap();
-        assert!(out.contains(r#"<w:tab/>"#) && out.contains(r#"<w:br w:type="page"/>"#), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, text);
+        assert!(
+            out.contains(r#"<w:tab/>"#) && out.contains(r#"<w:br w:type="page"/>"#),
+            "{}",
+            out
+        );
+        assert_eq!(
+            parse_paragraph_fragment(&out, &StyleSheet::default()).text,
+            text
+        );
     }
 
     #[test]
@@ -1402,7 +1817,10 @@ mod tests {
         let text = format!("uno{}dos", PAGE_BREAK);
         let out = edit_paragraph(p, &StyleSheet::default(), &text, None, None).unwrap();
         assert!(out.contains(r#"<w:br w:type="page"/>"#), "{}", out);
-        assert_eq!(parse_paragraph_fragment(&out, &StyleSheet::default()).text, text);
+        assert_eq!(
+            parse_paragraph_fragment(&out, &StyleSheet::default()).text,
+            text
+        );
     }
 
     #[test]
@@ -1411,8 +1829,12 @@ mod tests {
         let out = edit_paragraph(p, &StyleSheet::default(), "Nuevo", None, None).unwrap();
         assert!(out.contains(r#"<w:r><w:rPr><w:color w:val="1F6F6B"/></w:rPr><w:t xml:space="preserve">Nuevo</w:t></w:r></w:p>"#), "{}", out);
 
-        let out = edit_paragraph("<w:p/>", &StyleSheet::default(), "x", None, Some("center")).unwrap();
-        assert_eq!(out, r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">x</w:t></w:r></w:p>"#);
+        let out =
+            edit_paragraph("<w:p/>", &StyleSheet::default(), "x", None, Some("center")).unwrap();
+        assert_eq!(
+            out,
+            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">x</w:t></w:r></w:p>"#
+        );
     }
 
     #[test]
@@ -1429,32 +1851,48 @@ mod tests {
         let parsed = crate::docx_parser::parse_document_elements(xml);
         assert_eq!(ranges.len(), 3);
         assert_eq!(parsed.len(), 3);
-        assert_eq!(parse_paragraph_fragment(&xml[ranges[0].clone()], &StyleSheet::default()).text, "uno");
-        assert_eq!(parse_paragraph_fragment(&xml[ranges[2].clone()], &StyleSheet::default()).text, "tres");
+        assert_eq!(
+            parse_paragraph_fragment(&xml[ranges[0].clone()], &StyleSheet::default()).text,
+            "uno"
+        );
+        assert_eq!(
+            parse_paragraph_fragment(&xml[ranges[2].clone()], &StyleSheet::default()).text,
+            "tres"
+        );
     }
 
     #[test]
     fn test_edits_compare_against_style_resolved_formatting() {
         let styles = StyleSheet::load(
-            Some(r#"<w:styles><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:color w:val="2F5496"/></w:rPr></w:style></w:styles>"#),
+            Some(
+                r#"<w:styles><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:color w:val="2F5496"/></w:rPr></w:style></w:styles>"#,
+            ),
             None,
             None,
         );
-        let p = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#;
+        let p =
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Título</w:t></w:r></w:p>"#;
         let info = parse_paragraph_fragment(p, &styles);
         assert!(info.runs[0].bold, "bold comes from the style");
         assert_eq!(info.runs[0].color, "2F5496");
 
         // The editor sends back what it was shown: nothing to write
         let same: Vec<FormatTarget> = vec![FormatTarget::from_run(&info.runs[0]); 6];
-        assert_eq!(edit_paragraph(p, &styles, "Título", Some(&same), None).unwrap(), p);
+        assert_eq!(
+            edit_paragraph(p, &styles, "Título", Some(&same), None).unwrap(),
+            p
+        );
 
         // Turning bold off must override the style explicitly
         let mut plain = info.runs[0].clone();
         plain.bold = false;
         let formats = vec![FormatTarget::from_run(&plain); 6];
         let out = edit_paragraph(p, &styles, "Título", Some(&formats), None).unwrap();
-        assert!(out.contains(r#"<w:rPr><w:b w:val="0"/></w:rPr>"#), "{}", out);
+        assert!(
+            out.contains(r#"<w:rPr><w:b w:val="0"/></w:rPr>"#),
+            "{}",
+            out
+        );
         assert!(!parse_paragraph_fragment(&out, &styles).runs[0].bold);
     }
 
@@ -1462,10 +1900,15 @@ mod tests {
     fn test_range_edits_land_exactly_at_the_caret() {
         let styles = StyleSheet::default();
         // "ba|nana" + "a": a prefix/suffix diff would place the insertion at offset 4
-        let p = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>ba</w:t></w:r><w:r><w:t>nana</w:t></w:r></w:p>"#;
+        let p =
+            r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>ba</w:t></w:r><w:r><w:t>nana</w:t></w:r></w:p>"#;
         let out = edit_paragraph_range(p, &styles, 2, 2, "a").unwrap();
         let runs = parse_paragraph_fragment(&out, &styles).runs;
-        assert_eq!((runs[0].text.as_str(), runs[0].bold), ("baa", true), "typed text takes the previous character's format");
+        assert_eq!(
+            (runs[0].text.as_str(), runs[0].bold),
+            ("baa", true),
+            "typed text takes the previous character's format"
+        );
         assert_eq!(runs[1].text, "nana");
 
         // Backspace over a run boundary and replacing a selection
@@ -1479,4 +1922,3 @@ mod tests {
         assert_eq!(parse_paragraph_fragment(&out, &styles).text, "banana!");
     }
 }
-

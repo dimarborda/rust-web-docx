@@ -38,7 +38,10 @@ pub fn unix_ms_to_serial(ms: f64, date1904: bool) -> Result<f64, String> {
     };
     if serial < if date1904 { 0.0 } else { 1.0 } {
         let first = if date1904 { "1904" } else { "1900" };
-        return Err(format!("Excel no guarda fechas anteriores al 1 de enero de {} en este libro.", first));
+        return Err(format!(
+            "Excel no guarda fechas anteriores al 1 de enero de {} en este libro.",
+            first
+        ));
     }
     // Rounded to the millisecond, as Excel shows it
     Ok((serial * MS_PER_DAY).round() / MS_PER_DAY)
@@ -141,15 +144,33 @@ mod tests {
         assert_eq!(serial_to_unix_ms(45306.0, false), JAN_15_2024);
         assert_eq!(serial_to_unix_ms(45306.0 - 1462.0, true), JAN_15_2024);
         assert_eq!(serial_to_unix_ms(25569.0, false), 0.0);
-        assert_eq!(serial_to_unix_ms(45306.5, false), JAN_15_2024 + 43_200_000.0);
+        assert_eq!(
+            serial_to_unix_ms(45306.5, false),
+            JAN_15_2024 + 43_200_000.0
+        );
         // 1900-01-01 is serial 1; 1900-03-01 is 61 (60 is the phantom 29 February)
-        assert_eq!(serial_to_unix_ms(1.0, false), days_from_civil(1900, 1, 1) as f64 * MS_PER_DAY);
-        assert_eq!(serial_to_unix_ms(61.0, false), days_from_civil(1900, 3, 1) as f64 * MS_PER_DAY);
+        assert_eq!(
+            serial_to_unix_ms(1.0, false),
+            days_from_civil(1900, 1, 1) as f64 * MS_PER_DAY
+        );
+        assert_eq!(
+            serial_to_unix_ms(61.0, false),
+            days_from_civil(1900, 3, 1) as f64 * MS_PER_DAY
+        );
 
         assert_eq!(unix_ms_to_serial(JAN_15_2024, false).unwrap(), 45306.0);
-        assert_eq!(unix_ms_to_serial(JAN_15_2024, true).unwrap(), 45306.0 - 1462.0);
-        assert_eq!(unix_ms_to_serial(days_from_civil(1900, 1, 1) as f64 * MS_PER_DAY, false).unwrap(), 1.0);
-        assert_eq!(unix_ms_to_serial(days_from_civil(1900, 3, 1) as f64 * MS_PER_DAY, false).unwrap(), 61.0);
+        assert_eq!(
+            unix_ms_to_serial(JAN_15_2024, true).unwrap(),
+            45306.0 - 1462.0
+        );
+        assert_eq!(
+            unix_ms_to_serial(days_from_civil(1900, 1, 1) as f64 * MS_PER_DAY, false).unwrap(),
+            1.0
+        );
+        assert_eq!(
+            unix_ms_to_serial(days_from_civil(1900, 3, 1) as f64 * MS_PER_DAY, false).unwrap(),
+            61.0
+        );
         assert!(unix_ms_to_serial(days_from_civil(1899, 6, 1) as f64 * MS_PER_DAY, false).is_err());
         assert!(unix_ms_to_serial(days_from_civil(1903, 6, 1) as f64 * MS_PER_DAY, true).is_err());
         assert!(has_time(JAN_15_2024 + 1000.0) && !has_time(JAN_15_2024));
@@ -158,19 +179,39 @@ mod tests {
     #[test]
     fn reads_iso_dates() {
         assert_eq!(iso_to_unix_ms("2024-01-15"), Some(JAN_15_2024));
-        assert_eq!(iso_to_unix_ms("2024-01-15T12:00:00Z"), Some(JAN_15_2024 + 43_200_000.0));
+        assert_eq!(
+            iso_to_unix_ms("2024-01-15T12:00:00Z"),
+            Some(JAN_15_2024 + 43_200_000.0)
+        );
         assert_eq!(iso_to_unix_ms("2024-13-01"), None);
         assert_eq!(iso_to_unix_ms("hola"), None);
     }
 
     #[test]
     fn recognises_date_formats() {
-        for code in ["dd/mm/yyyy", "m/d/yy h:mm", "[h]:mm:ss", "yyyy\\-mm", "[$-es-ES]d \"de\" mmmm", "hh:mm AM/PM"] {
+        for code in [
+            "dd/mm/yyyy",
+            "m/d/yy h:mm",
+            "[h]:mm:ss",
+            "yyyy\\-mm",
+            "[$-es-ES]d \"de\" mmmm",
+            "hh:mm AM/PM",
+        ] {
             assert!(is_date_format_code(code), "{}", code);
         }
-        for code in ["General", "0.00", "#,##0 \"días\"", "[Red]0.0", "_-* #,##0_-", "0\\d", "@"] {
+        for code in [
+            "General",
+            "0.00",
+            "#,##0 \"días\"",
+            "[Red]0.0",
+            "_-* #,##0_-",
+            "0\\d",
+            "@",
+        ] {
             assert!(!is_date_format_code(code), "{}", code);
         }
-        assert!(is_builtin_date_format(14) && is_builtin_date_format(22) && !is_builtin_date_format(4));
+        assert!(
+            is_builtin_date_format(14) && is_builtin_date_format(22) && !is_builtin_date_format(4)
+        );
     }
 }

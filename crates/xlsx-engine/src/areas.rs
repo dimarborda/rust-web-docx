@@ -73,9 +73,24 @@ pub struct Area {
 impl Area {
     /// Rows of data: below the titles and header, above the totals
     pub fn body(&self) -> Option<CellRange> {
-        let first = self.header_row.map(|r| r + 1).unwrap_or(self.range.first.row + self.title_rows);
-        let last = self.totals_row.map(|r| r - 1).unwrap_or(self.range.last.row);
-        (first <= last).then_some(CellRange { first: CellRef { row: first, col: self.range.first.col }, last: CellRef { row: last, col: self.range.last.col } })
+        let first = self
+            .header_row
+            .map(|r| r + 1)
+            .unwrap_or(self.range.first.row + self.title_rows);
+        let last = self
+            .totals_row
+            .map(|r| r - 1)
+            .unwrap_or(self.range.last.row);
+        (first <= last).then_some(CellRange {
+            first: CellRef {
+                row: first,
+                col: self.range.first.col,
+            },
+            last: CellRef {
+                row: last,
+                col: self.range.last.col,
+            },
+        })
     }
 
     pub fn to_json(&self, sheet_name: &str) -> Value {
@@ -97,7 +112,8 @@ impl Area {
 
 /// `'Mis datos'!A1:C3`
 pub fn address(sheet: &str, range: &CellRange) -> String {
-    let plain = sheet.chars().all(|c| c.is_alphanumeric() || c == '_') && !sheet.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let plain = sheet.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !sheet.chars().next().is_some_and(|c| c.is_ascii_digit());
     if plain {
         format!("{}!{}", sheet, range)
     } else {
@@ -115,10 +131,22 @@ pub fn parse_table(xml: &str) -> Option<(String, CellRange, u32, u32, Vec<String
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let name = e.name();
                 if tag_is(name.as_ref(), "table") {
-                    let range = get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok())?;
-                    let title = get_attr_value(&e, "displayName").or_else(|| get_attr_value(&e, "name")).unwrap_or_default();
-                    let count = |a: &str, default: u32| get_attr_value(&e, a).and_then(|v| v.trim().parse().ok()).unwrap_or(default);
-                    table = Some((title, range, count("headerRowCount", 1), count("totalsRowCount", 0)));
+                    let range =
+                        get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok())?;
+                    let title = get_attr_value(&e, "displayName")
+                        .or_else(|| get_attr_value(&e, "name"))
+                        .unwrap_or_default();
+                    let count = |a: &str, default: u32| {
+                        get_attr_value(&e, a)
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(default)
+                    };
+                    table = Some((
+                        title,
+                        range,
+                        count("headerRowCount", 1),
+                        count("totalsRowCount", 0),
+                    ));
                 } else if tag_is(name.as_ref(), "tableColumn") {
                     columns.push(get_attr_value(&e, "name").unwrap_or_default());
                 }
@@ -132,10 +160,15 @@ pub fn parse_table(xml: &str) -> Option<(String, CellRange, u32, u32, Vec<String
 
 /// Range of the `<autoFilter>` of a worksheet
 fn sheet_filter(xml: &str) -> Option<CellRange> {
-    let range = element_ranges(xml, "autoFilter", |_| true).ok()?.into_iter().next()?;
+    let range = element_ranges(xml, "autoFilter", |_| true)
+        .ok()?
+        .into_iter()
+        .next()?;
     let mut reader = Reader::from_str(&xml[range]);
     match reader.read_event() {
-        Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok()),
+        Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok())
+        }
         _ => None,
     }
 }
@@ -144,7 +177,16 @@ fn sheet_filter(xml: &str) -> Option<CellRange> {
 fn name_range(text: &str) -> Option<(String, CellRange)> {
     match formula::parse(text).ok()? {
         Expr::Ref(area) if !area.whole_cols => {
-            let range = CellRange::around(CellRef { row: area.first.row, col: area.first.col }, CellRef { row: area.last.row, col: area.last.col });
+            let range = CellRange::around(
+                CellRef {
+                    row: area.first.row,
+                    col: area.first.col,
+                },
+                CellRef {
+                    row: area.last.row,
+                    col: area.last.col,
+                },
+            );
             Some((area.sheet?, range))
         }
         _ => None,
@@ -162,17 +204,26 @@ pub fn regions(filled: &HashSet<CellRef>) -> Vec<CellRange> {
         if !seen.insert(*start) {
             continue;
         }
-        let mut range = CellRange { first: *start, last: *start };
+        let mut range = CellRange {
+            first: *start,
+            last: *start,
+        };
         let mut queue = VecDeque::from([*start]);
         while let Some(at) = queue.pop_front() {
-            range = range.union(CellRange { first: at, last: at });
+            range = range.union(CellRange {
+                first: at,
+                last: at,
+            });
             for dr in -1i64..=1 {
                 for dc in -1i64..=1 {
                     let (r, c) = (at.row as i64 + dr, at.col as i64 + dc);
                     if r < 1 || c < 1 {
                         continue;
                     }
-                    let next = CellRef { row: r as u32, col: c as u32 };
+                    let next = CellRef {
+                        row: r as u32,
+                        col: c as u32,
+                    };
                     if filled.contains(&next) && seen.insert(next) {
                         queue.push_back(next);
                     }
@@ -187,7 +238,10 @@ pub fn regions(filled: &HashSet<CellRef>) -> Vec<CellRange> {
         'outer: for i in 0..boxes.len() {
             for j in i + 1..boxes.len() {
                 let (a, b) = (boxes[i], boxes[j]);
-                let touch = a.first.row <= b.last.row + 1 && b.first.row <= a.last.row + 1 && a.first.col <= b.last.col + 1 && b.first.col <= a.last.col + 1;
+                let touch = a.first.row <= b.last.row + 1
+                    && b.first.row <= a.last.row + 1
+                    && a.first.col <= b.last.col + 1
+                    && b.first.col <= a.last.col + 1;
                 if touch {
                     boxes[i] = a.union(b);
                     boxes.remove(j);
@@ -205,7 +259,10 @@ pub fn regions(filled: &HashSet<CellRef>) -> Vec<CellRange> {
 }
 
 pub(crate) fn overlaps_range(a: &CellRange, b: &CellRange) -> bool {
-    a.first.row <= b.last.row && b.first.row <= a.last.row && a.first.col <= b.last.col && b.first.col <= a.last.col
+    a.first.row <= b.last.row
+        && b.first.row <= a.last.row
+        && a.first.col <= b.last.col
+        && b.first.col <= a.last.col
 }
 
 pub(crate) fn range_contains(a: &CellRange, at: CellRef) -> bool {
@@ -223,12 +280,19 @@ fn is_empty(v: &CellValue) -> bool {
 /// Title rows and header row of a block of cells read by row: leading rows with a single filled
 /// cell (or one merged range) are titles; then a row of at least two texts, with no numbers,
 /// followed by a row that is not all text (or shown in bold), is the header
-fn structure(rows: &[Vec<CellData>], merges: &[CellRange], bold: &dyn Fn(CellRef) -> bool) -> (Vec<String>, Option<usize>) {
+fn structure(
+    rows: &[Vec<CellData>],
+    merges: &[CellRange],
+    bold: &dyn Fn(CellRef) -> bool,
+) -> (Vec<String>, Option<usize>) {
     let mut titles = Vec::new();
     let mut i = 0;
     while i + 1 < rows.len() {
         let filled: Vec<&CellData> = rows[i].iter().filter(|c| !is_empty(&c.value)).collect();
-        let one_merge = filled.len() == 1 && merges.iter().any(|m| m.first == filled[0].at && m.first.row == m.last.row);
+        let one_merge = filled.len() == 1
+            && merges
+                .iter()
+                .any(|m| m.first == filled[0].at && m.first.row == m.last.row);
         let lone = filled.len() == 1 && (one_merge || rows[i].len() > 1);
         if !lone || !is_text(&filled[0].value) {
             break;
@@ -244,7 +308,10 @@ fn structure(rows: &[Vec<CellData>], merges: &[CellRange], bold: &dyn Fn(CellRef
         if texts < 2.min(row.len()) || texts != filled.len() {
             return None;
         }
-        let next_has_data = rows.get(i + 1).is_some_and(|next| next.iter().any(|c| !is_empty(&c.value) && !is_text(&c.value)));
+        let next_has_data = rows.get(i + 1).is_some_and(|next| {
+            next.iter()
+                .any(|c| !is_empty(&c.value) && !is_text(&c.value))
+        });
         let shown_bold = filled.iter().all(|c| bold(c.at));
         (next_has_data || shown_bold && rows.len() > i + 1).then_some(i)
     });
@@ -254,11 +321,17 @@ fn structure(rows: &[Vec<CellData>], merges: &[CellRange], bold: &dyn Fn(CellRef
 impl Workbook {
     /// Tables of a worksheet: (name, range, header rows, totals rows, column names)
     fn sheet_tables(&self, part: &str) -> Vec<(String, CellRange, u32, u32, Vec<String>)> {
-        let Ok(rels) = self.package.get_string(&rels_part_for(part)) else { return Vec::new() };
+        let Ok(rels) = self.package.get_string(&rels_part_for(part)) else {
+            return Vec::new();
+        };
         parse_relationships(&rels)
             .into_iter()
             .filter(|r| type_is(&r.rel_type, "table") && !r.external)
-            .filter_map(|r| self.package.get_string(&resolve_target(part, &r.target)).ok())
+            .filter_map(|r| {
+                self.package
+                    .get_string(&resolve_target(part, &r.target))
+                    .ok()
+            })
             .filter_map(|xml| parse_table(&xml))
             .collect()
     }
@@ -287,7 +360,9 @@ impl Workbook {
                 });
             }
             for name in &names {
-                let Some((sheet_name, range)) = name_range(&name.text) else { continue };
+                let Some((sheet_name, range)) = name_range(&name.text) else {
+                    continue;
+                };
                 if !sheet_name.eq_ignore_ascii_case(&sheet.name) {
                     continue;
                 }
@@ -296,12 +371,19 @@ impl Workbook {
                     n if n.starts_with("_xlnm.") => continue,
                     _ => AreaKind::Name,
                 };
-                let shown = if kind == AreaKind::PrintArea { None } else { Some(name.name.clone()) };
+                let shown = if kind == AreaKind::PrintArea {
+                    None
+                } else {
+                    Some(name.name.clone())
+                };
                 found.push(self.described(index, range, kind, shown)?);
             }
             let xml = self.package.get_string(&sheet.part)?;
             if let Some(range) = sheet_filter(&xml) {
-                if !found.iter().any(|a| a.kind == AreaKind::Table && a.range == range) {
+                if !found
+                    .iter()
+                    .any(|a| a.kind == AreaKind::Table && a.range == range)
+                {
                     found.push(self.described(index, range, AreaKind::Filter, None)?);
                 }
             }
@@ -310,7 +392,10 @@ impl Workbook {
             let layout = SheetLayout::parse(&xml)?;
             let mut filled: HashSet<CellRef> = HashSet::new();
             for cell in parsed.rows.iter().flat_map(|r| &r.cells) {
-                if cell.value.as_deref().is_some_and(|v| !v.trim().is_empty()) || cell.inline.as_deref().is_some_and(|v| !v.trim().is_empty()) || cell.formula.is_some() {
+                if cell.value.as_deref().is_some_and(|v| !v.trim().is_empty())
+                    || cell.inline.as_deref().is_some_and(|v| !v.trim().is_empty())
+                    || cell.formula.is_some()
+                {
                     filled.insert(cell.at);
                 }
             }
@@ -326,7 +411,13 @@ impl Workbook {
             let blocks = regions(&filled);
             for range in &blocks {
                 let range = *range;
-                if range.cell_count() < 2 || found.iter().any(|a| a.range == range || matches!(a.kind, AreaKind::Table | AreaKind::Filter) && overlaps_range(&a.range, &range)) {
+                if range.cell_count() < 2
+                    || found.iter().any(|a| {
+                        a.range == range
+                            || matches!(a.kind, AreaKind::Table | AreaKind::Filter)
+                                && overlaps_range(&a.range, &range)
+                    })
+                {
                     continue;
                 }
                 let mut area = self.described(index, range, AreaKind::Region, None)?;
@@ -354,7 +445,13 @@ impl Workbook {
     }
 
     /// An area with its titles, header and columns worked out from the cells
-    fn described(&self, sheet: usize, range: CellRange, kind: AreaKind, name: Option<String>) -> Result<Area, String> {
+    fn described(
+        &self,
+        sheet: usize,
+        range: CellRange,
+        kind: AreaKind,
+        name: Option<String>,
+    ) -> Result<Area, String> {
         let range = self.clip_to_used(sheet, range)?;
         let rows = self.range(sheet, &range.to_string())?;
         let xml = self.package.get_string(&self.worksheet_part(sheet)?)?;
@@ -363,14 +460,27 @@ impl Workbook {
         let (title, header) = structure(&rows, &merges, &|at| bold.contains(&at));
         let header_row = header.map(|i| range.first.row + i as u32);
         let columns = match header {
-            Some(i) => rows[i].iter().map(|c| match &c.value {
-                CellValue::Text(t) => t.trim().to_string(),
-                _ => String::new(),
-            }).collect(),
+            Some(i) => rows[i]
+                .iter()
+                .map(|c| match &c.value {
+                    CellValue::Text(t) => t.trim().to_string(),
+                    _ => String::new(),
+                })
+                .collect(),
             None => Vec::new(),
         };
         let title_rows = title.len() as u32;
-        Ok(Area { kind, name, sheet, range, title, title_rows, header_row, totals_row: None, columns })
+        Ok(Area {
+            kind,
+            name,
+            sheet,
+            range,
+            title,
+            title_rows,
+            header_row,
+            totals_row: None,
+            columns,
+        })
     }
 
     /// Cells shown in bold (to tell headers apart)
@@ -382,7 +492,13 @@ impl Workbook {
             .rows
             .iter()
             .flat_map(|r| &r.cells)
-            .filter(|c| styles.xfs.get(c.style as usize).and_then(|x| styles.fonts.get(x.font)).is_some_and(|f| f.bold))
+            .filter(|c| {
+                styles
+                    .xfs
+                    .get(c.style as usize)
+                    .and_then(|x| styles.fonts.get(x.font))
+                    .is_some_and(|f| f.bold)
+            })
             .map(|c| c.at)
             .collect())
     }
@@ -396,8 +512,14 @@ impl Workbook {
             max_row = max_row.max(cell.at.row);
             max_col = max_col.max(cell.at.col);
         }
-        let last = CellRef { row: range.last.row.min(max_row.max(range.first.row)), col: range.last.col.min(max_col.max(range.first.col)) };
-        Ok(CellRange { first: range.first, last })
+        let last = CellRef {
+            row: range.last.row.min(max_row.max(range.first.row)),
+            col: range.last.col.min(max_col.max(range.first.col)),
+        };
+        Ok(CellRange {
+            first: range.first,
+            last,
+        })
     }
 
     /// The area `target` points at: the name of a table or defined name, an address with its
@@ -406,7 +528,11 @@ impl Workbook {
     pub fn resolve_area(&self, target: &str, sheet: Option<usize>) -> Result<Area, String> {
         let target = target.trim();
         let areas = self.areas()?;
-        if let Some(area) = areas.iter().find(|a| a.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(target))) {
+        if let Some(area) = areas.iter().find(|a| {
+            a.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(target))
+        }) {
             return Ok(area.clone());
         }
         let (sheet, range_text) = match target.rsplit_once('!') {
@@ -437,28 +563,57 @@ impl Workbook {
             .min_by_key(|a| (a.kind != AreaKind::Table, a.range.cell_count()));
         match best {
             Some(area) => Ok(area.clone()),
-            None => self.described(sheet, CellRange { first: at, last: at }, AreaKind::Region, None),
+            None => self.described(
+                sheet,
+                CellRange {
+                    first: at,
+                    last: at,
+                },
+                AreaKind::Region,
+                None,
+            ),
         }
     }
 
     /// What an agent needs to work on an area: its description, each column with its type,
     /// formulas and number totals, and the first `max_rows` rows of data as the cells show them
     /// in `locale`, also as a Markdown table
-    pub fn area_context(&self, area: &Area, max_rows: usize, locale: &Locale) -> Result<Value, String> {
+    pub fn area_context(
+        &self,
+        area: &Area,
+        max_rows: usize,
+        locale: &Locale,
+    ) -> Result<Value, String> {
         let sheets = self.sheets()?;
-        let sheet_name = sheets.get(area.sheet).map(|s| s.name.clone()).unwrap_or_default();
+        let sheet_name = sheets
+            .get(area.sheet)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let rows = self.range(area.sheet, &area.range.to_string())?;
         let shown: HashMap<(u32, u32), String> = self
             .cell_views(area.sheet, locale)?
             .into_iter()
-            .filter(|v| range_contains(&area.range, CellRef { row: v.row, col: v.col }))
+            .filter(|v| {
+                range_contains(
+                    &area.range,
+                    CellRef {
+                        row: v.row,
+                        col: v.col,
+                    },
+                )
+            })
             .map(|v| ((v.row, v.col), v.text))
             .collect();
         let text_at = |at: CellRef| shown.get(&(at.row, at.col)).cloned().unwrap_or_default();
         let body = area.body();
         let body_rows: Vec<&Vec<CellData>> = rows
             .iter()
-            .filter(|r| body.is_some_and(|b| r.first().is_some_and(|c| c.at.row >= b.first.row && c.at.row <= b.last.row)))
+            .filter(|r| {
+                body.is_some_and(|b| {
+                    r.first()
+                        .is_some_and(|c| c.at.row >= b.first.row && c.at.row <= b.last.row)
+                })
+            })
             .collect();
 
         let width = (area.range.last.col - area.range.first.col + 1) as usize;
@@ -466,7 +621,8 @@ impl Workbook {
         for i in 0..width {
             let col = area.range.first.col + i as u32;
             let mut kinds: Vec<&str> = Vec::new();
-            let (mut count, mut sum, mut min, mut max) = (0usize, 0.0, f64::INFINITY, f64::NEG_INFINITY);
+            let (mut count, mut sum, mut min, mut max) =
+                (0usize, 0.0, f64::INFINITY, f64::NEG_INFINITY);
             let mut formulas = 0;
             let mut example_formula: Option<String> = None;
             let mut filled = 0;
@@ -475,7 +631,8 @@ impl Workbook {
                 if cell.formula.is_some() {
                     formulas += 1;
                     if example_formula.is_none() {
-                        example_formula = cell.formula.clone().map(|f| format!("{}: ={}", cell.at, f));
+                        example_formula =
+                            cell.formula.clone().map(|f| format!("{}: ={}", cell.at, f));
                     }
                 }
                 let kind = match &cell.value {
@@ -520,14 +677,28 @@ impl Workbook {
             columns.push(column);
         }
 
-        let shown_rows: Vec<Vec<String>> = body_rows.iter().take(max_rows).map(|r| r.iter().map(|c| text_at(c.at)).collect()).collect();
-        let totals: Option<Vec<String>> = area.totals_row.map(|row| (0..width).map(|i| text_at(CellRef { row, col: area.range.first.col + i as u32 })).collect());
-        let merges: Vec<String> = SheetLayout::parse(&self.package.get_string(&self.worksheet_part(area.sheet)?)?)?
-            .merges
+        let shown_rows: Vec<Vec<String>> = body_rows
             .iter()
-            .filter(|m| overlaps_range(m, &area.range))
-            .map(|m| m.to_string())
+            .take(max_rows)
+            .map(|r| r.iter().map(|c| text_at(c.at)).collect())
             .collect();
+        let totals: Option<Vec<String>> = area.totals_row.map(|row| {
+            (0..width)
+                .map(|i| {
+                    text_at(CellRef {
+                        row,
+                        col: area.range.first.col + i as u32,
+                    })
+                })
+                .collect()
+        });
+        let merges: Vec<String> =
+            SheetLayout::parse(&self.package.get_string(&self.worksheet_part(area.sheet)?)?)?
+                .merges
+                .iter()
+                .filter(|m| overlaps_range(m, &area.range))
+                .map(|m| m.to_string())
+                .collect();
 
         // Markdown table: header (or column letters), the rows shown, the totals
         let escape = |t: &str| t.replace('|', "\\|").replace('\n', " ");
@@ -545,10 +716,26 @@ impl Workbook {
         md.push_str(&format!("|---|{}\n", "---|".repeat(width)));
         for (row, cells) in body_rows.iter().take(max_rows).zip(&shown_rows) {
             let number = row.first().map(|c| c.at.row).unwrap_or(0);
-            md.push_str(&format!("| {} | {} |\n", number, cells.iter().map(|t| escape(t)).collect::<Vec<_>>().join(" | ")));
+            md.push_str(&format!(
+                "| {} | {} |\n",
+                number,
+                cells
+                    .iter()
+                    .map(|t| escape(t))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ));
         }
         if let (Some(totals), Some(row)) = (&totals, area.totals_row) {
-            md.push_str(&format!("| {} (totales) | {} |\n", row, totals.iter().map(|t| escape(t)).collect::<Vec<_>>().join(" | ")));
+            md.push_str(&format!(
+                "| {} (totales) | {} |\n",
+                row,
+                totals
+                    .iter()
+                    .map(|t| escape(t))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ));
         }
 
         let mut out = area.to_json(&sheet_name);
@@ -580,16 +767,25 @@ mod tests {
         let refs: Vec<String> = found.iter().map(|r| r.to_string()).collect();
         assert_eq!(refs, ["A1:C2", "E1:E2", "A5:B6"]);
         // Diagonals connect, and touching rectangles grow into one
-        assert_eq!(regions(&set(&["A1", "B2", "C3", "D2"]))[0].to_string(), "A1:D3");
+        assert_eq!(
+            regions(&set(&["A1", "B2", "C3", "D2"]))[0].to_string(),
+            "A1:D3"
+        );
     }
 
     #[test]
     fn reads_tables_and_defined_names() {
         let table = r#"<table xmlns="x" id="1" name="Tabla1" displayName="Ventas" ref="B3:D10" totalsRowCount="1"><autoFilter ref="B3:D9"/><tableColumns count="3"><tableColumn id="1" name="Producto"/><tableColumn id="2" name="Unidades"/><tableColumn id="3" name="Importe"/></tableColumns></table>"#;
         let (name, range, header, totals, columns) = parse_table(table).unwrap();
-        assert_eq!((name.as_str(), range.to_string(), header, totals), ("Ventas", "B3:D10".to_string(), 1, 1));
+        assert_eq!(
+            (name.as_str(), range.to_string(), header, totals),
+            ("Ventas", "B3:D10".to_string(), 1, 1)
+        );
         assert_eq!(columns, ["Producto", "Unidades", "Importe"]);
-        assert_eq!(name_range("'Mis datos'!$A$1:$C$4"), Some(("Mis datos".to_string(), CellRange::parse("A1:C4").unwrap())));
+        assert_eq!(
+            name_range("'Mis datos'!$A$1:$C$4"),
+            Some(("Mis datos".to_string(), CellRange::parse("A1:C4").unwrap()))
+        );
         assert_eq!(name_range("0.21"), None);
     }
 
@@ -597,14 +793,21 @@ mod tests {
         let mut wb = Workbook::from_bytes(&crate::blank::blank_xlsx().unwrap()).unwrap();
         let t = |s: &str| Some(CellInput::Text(s.to_string()));
         let n = |x: f64| Some(CellInput::Number(x));
-        wb.set_values(0, "A1", vec![
-            vec![t("Ventas del trimestre")],
-            vec![t("Región"), t("Pedidos"), t("Importe")],
-            vec![t("Norte"), n(3.0), n(120.5)],
-            vec![t("Sur"), n(5.0), n(80.0)],
-        ]).unwrap();
-        wb.set_value(0, "C5", CellInput::Formula("SUM(C3:C4)".into())).unwrap();
-        wb.set_values(0, "F1", vec![vec![t("Notas")], vec![t("revisar")]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![
+                vec![t("Ventas del trimestre")],
+                vec![t("Región"), t("Pedidos"), t("Importe")],
+                vec![t("Norte"), n(3.0), n(120.5)],
+                vec![t("Sur"), n(5.0), n(80.0)],
+            ],
+        )
+        .unwrap();
+        wb.set_value(0, "C5", CellInput::Formula("SUM(C3:C4)".into()))
+            .unwrap();
+        wb.set_values(0, "F1", vec![vec![t("Notas")], vec![t("revisar")]])
+            .unwrap();
         wb
     }
 
@@ -614,7 +817,10 @@ mod tests {
         let areas = wb.areas().unwrap();
         assert_eq!(areas.len(), 2);
         let sales = &areas[0];
-        assert_eq!((sales.kind, sales.range.to_string()), (AreaKind::Region, "A1:C5".to_string()));
+        assert_eq!(
+            (sales.kind, sales.range.to_string()),
+            (AreaKind::Region, "A1:C5".to_string())
+        );
         assert_eq!(sales.title, ["Ventas del trimestre"]);
         assert_eq!(sales.header_row, Some(2));
         assert_eq!(sales.columns, ["Región", "Pedidos", "Importe"]);
@@ -643,15 +849,30 @@ mod tests {
         wb.package.put("xl/workbook.xml".into(), xml.into_bytes());
 
         let areas = wb.areas().unwrap();
-        let summary: Vec<(&str, Option<&str>, String)> = areas.iter().map(|a| (a.kind.as_str(), a.name.as_deref(), a.range.to_string())).collect();
-        assert_eq!(summary, [
-            ("table", Some("Ventas"), "A2:C5".to_string()),
-            ("name", Some("Notas"), "F1:F2".to_string()),
-            ("printArea", None, "A1:F5".to_string()),
-        ]);
+        let summary: Vec<(&str, Option<&str>, String)> = areas
+            .iter()
+            .map(|a| (a.kind.as_str(), a.name.as_deref(), a.range.to_string()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("table", Some("Ventas"), "A2:C5".to_string()),
+                ("name", Some("Notas"), "F1:F2".to_string()),
+                ("printArea", None, "A1:F5".to_string()),
+            ]
+        );
         let table = wb.resolve_area("ventas", None).unwrap();
-        assert_eq!((table.header_row, table.totals_row, table.body().unwrap().to_string()), (Some(2), Some(5), "A3:C4".to_string()));
-        let context = wb.area_context(&table, 10, &Locale::from_tag("en")).unwrap();
+        assert_eq!(
+            (
+                table.header_row,
+                table.totals_row,
+                table.body().unwrap().to_string()
+            ),
+            (Some(2), Some(5), "A3:C4".to_string())
+        );
+        let context = wb
+            .area_context(&table, 10, &Locale::from_tag("en"))
+            .unwrap();
         assert_eq!(context["totals"], json!(["", "", "200.5"]));
         assert_eq!(wb.region_at(0, "B3").unwrap().kind, AreaKind::Table);
     }
@@ -665,9 +886,15 @@ mod tests {
         assert_eq!(context["title"], "Ventas del trimestre");
         assert_eq!(context["rowCount"], 3);
         assert_eq!(context["truncated"], true);
-        assert_eq!(context["rows"], json!([["Norte", "3", "120.5"], ["Sur", "5", "80"]]));
+        assert_eq!(
+            context["rows"],
+            json!([["Norte", "3", "120.5"], ["Sur", "5", "80"]])
+        );
         let importe = &context["columnsInfo"][2];
-        assert_eq!((importe["name"].as_str(), importe["type"].as_str()), (Some("Importe"), Some("number")));
+        assert_eq!(
+            (importe["name"].as_str(), importe["type"].as_str()),
+            (Some("Importe"), Some("number"))
+        );
         assert_eq!(importe["numbers"]["sum"], 401.0);
         assert_eq!(importe["formulas"], 1);
         assert_eq!(importe["exampleFormula"], "C5: =SUM(C3:C4)");

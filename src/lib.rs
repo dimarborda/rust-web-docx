@@ -6,11 +6,13 @@ pub mod paragraph_edit;
 pub mod sample_generator;
 pub mod styles;
 
-use docx_parser::{DocxModifier, KeyValuePair, ParagraphUpdate};
 use caret::TextPosition;
+use docx_parser::{DocxModifier, KeyValuePair, ParagraphUpdate};
+use layout_engine::{
+    CachedMeasurer, DocumentLayout, EstimateMeasurer, FontSpec, LayoutEngine, TextMeasurer,
+};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use layout_engine::{CachedMeasurer, DocumentLayout, EstimateMeasurer, FontSpec, LayoutEngine, TextMeasurer};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -22,8 +24,7 @@ pub fn main_js() -> Result<(), JsValue> {
 /// Generates a sample contract DOCX file in memory with tables, alignments and styles
 #[wasm_bindgen]
 pub fn generate_sample_docx_wasm() -> Result<js_sys::Uint8Array, JsValue> {
-    let bytes = sample_generator::generate_sample_docx()
-        .map_err(|e| JsValue::from_str(&e))?;
+    let bytes = sample_generator::generate_sample_docx().map_err(|e| JsValue::from_str(&e))?;
     Ok(js_sys::Uint8Array::from(&bytes[..]))
 }
 
@@ -32,8 +33,8 @@ pub fn generate_sample_docx_wasm() -> Result<js_sys::Uint8Array, JsValue> {
 /// with `item` the position of the text in the array and offsets in code points
 #[wasm_bindgen]
 pub fn scan_markers_json(texts_json: &str) -> Result<String, JsValue> {
-    let texts: Vec<String> =
-        serde_json::from_str(texts_json).map_err(|e| JsValue::from_str(&format!("Se esperaba una lista de textos: {}", e)))?;
+    let texts: Vec<String> = serde_json::from_str(texts_json)
+        .map_err(|e| JsValue::from_str(&format!("Se esperaba una lista de textos: {}", e)))?;
     let found: Vec<serde_json::Value> = texts
         .iter()
         .enumerate()
@@ -91,7 +92,8 @@ fn with_measurer<R>(
 ) -> R {
     match measure {
         Some(func) => {
-            let mut measurer = CachedMeasurer::with_cache(JsMeasurer { func }, std::mem::take(cache));
+            let mut measurer =
+                CachedMeasurer::with_cache(JsMeasurer { func }, std::mem::take(cache));
             let result = f(&mut measurer);
             *cache = measurer.into_cache();
             result
@@ -107,9 +109,22 @@ fn image_json(img: &docx_parser::ImageRef) -> serde_json::Value {
         obj.remove("rel_id");
         obj.remove("text_box");
         obj.remove("vml");
-        let kind = if img.text_box.is_some() { "textbox" } else if img.shape.is_some() { "shape" } else { "picture" };
+        let kind = if img.text_box.is_some() {
+            "textbox"
+        } else if img.shape.is_some() {
+            "shape"
+        } else {
+            "picture"
+        };
         obj.insert("kind".into(), kind.into());
-        obj.insert("text".into(), img.text_box.as_ref().map(|t| t.text()).unwrap_or_default().into());
+        obj.insert(
+            "text".into(),
+            img.text_box
+                .as_ref()
+                .map(|t| t.text())
+                .unwrap_or_default()
+                .into(),
+        );
     }
     value
 }
@@ -117,14 +132,30 @@ fn image_json(img: &docx_parser::ImageRef) -> serde_json::Value {
 impl DocxSession {
     /// Where the last layout drew a body picture: `{ page, x, y, width, height }` or null
     fn image_bounds(&self, paragraph: usize, index: usize) -> serde_json::Value {
-        let Some(layout) = &self.layout else { return serde_json::Value::Null };
+        let Some(layout) = &self.layout else {
+            return serde_json::Value::Null;
+        };
         for page in &layout.pages {
             for item in &page.items {
                 let found = match item {
-                    layout_engine::RenderCommand::Image { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. }
-                    | layout_engine::RenderCommand::Shape { x, y, width, height, paragraph_index: Some(p), image_index: Some(i), .. } => {
-                        (*p == paragraph && *i == index).then_some((*x, *y, *width, *height))
+                    layout_engine::RenderCommand::Image {
+                        x,
+                        y,
+                        width,
+                        height,
+                        paragraph_index: Some(p),
+                        image_index: Some(i),
+                        ..
                     }
+                    | layout_engine::RenderCommand::Shape {
+                        x,
+                        y,
+                        width,
+                        height,
+                        paragraph_index: Some(p),
+                        image_index: Some(i),
+                        ..
+                    } => (*p == paragraph && *i == index).then_some((*x, *y, *width, *height)),
                     _ => None,
                 };
                 if let Some((x, y, width, height)) = found {
@@ -150,7 +181,12 @@ impl DocxSession {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<DocxSession, JsValue> {
         let modifier = DocxModifier::from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
-        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
+        Ok(DocxSession {
+            modifier,
+            layout: None,
+            measure_cache: HashMap::new(),
+            page_hashes: Vec::new(),
+        })
     }
 
     /// Creates a session with sample contract docx
@@ -158,17 +194,29 @@ impl DocxSession {
     pub fn new_sample() -> Result<DocxSession, JsValue> {
         let bytes = sample_generator::generate_sample_docx().map_err(|e| JsValue::from_str(&e))?;
         let modifier = DocxModifier::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
-        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
+        Ok(DocxSession {
+            modifier,
+            layout: None,
+            measure_cache: HashMap::new(),
+            page_hashes: Vec::new(),
+        })
     }
 
     /// Creates a session with an empty document: one empty paragraph and Word's default
     /// styles. `page_size` is "a4" (default), "letter" or "legal".
     #[wasm_bindgen]
     pub fn new_blank(page_size: Option<String>) -> Result<DocxSession, JsValue> {
-        let page = blank_generator::PageSize::parse(page_size.as_deref()).map_err(|e| JsValue::from_str(&e))?;
-        let bytes = blank_generator::generate_blank_docx(page).map_err(|e| JsValue::from_str(&e))?;
+        let page = blank_generator::PageSize::parse(page_size.as_deref())
+            .map_err(|e| JsValue::from_str(&e))?;
+        let bytes =
+            blank_generator::generate_blank_docx(page).map_err(|e| JsValue::from_str(&e))?;
         let modifier = DocxModifier::from_bytes(&bytes).map_err(|e| JsValue::from_str(&e))?;
-        Ok(DocxSession { modifier, layout: None, measure_cache: HashMap::new(), page_hashes: Vec::new() })
+        Ok(DocxSession {
+            modifier,
+            layout: None,
+            measure_cache: HashMap::new(),
+            page_hashes: Vec::new(),
+        })
     }
 
     /// Computes multi-page layout and render commands for high-performance Canvas rendering.
@@ -184,19 +232,27 @@ impl DocxSession {
         measure: Option<js_sys::Function>,
         only_changed: Option<bool>,
     ) -> Result<String, JsValue> {
-        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
-        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let elements = self
+            .modifier
+            .elements_shared()
+            .map_err(|e| JsValue::from_str(&e))?;
+        let inputs = self
+            .modifier
+            .layout_inputs()
+            .map_err(|e| JsValue::from_str(&e))?;
         let layout = with_measurer(&mut self.measure_cache, measure, |m| {
-            LayoutEngine::new().with_images(inputs.body_images.clone()).compute_layout_with(
-                &elements,
-                &inputs.background_color,
-                &inputs.page_setup,
-                &inputs.header_footer,
-                inputs.bg_image_data_url.as_deref(),
-                watermark_text.as_deref(),
-                watermark_opacity,
-                m,
-            )
+            LayoutEngine::new()
+                .with_images(inputs.body_images.clone())
+                .compute_layout_with(
+                    &elements,
+                    &inputs.background_color,
+                    &inputs.page_setup,
+                    &inputs.header_footer,
+                    inputs.bg_image_data_url.as_deref(),
+                    watermark_text.as_deref(),
+                    watermark_opacity,
+                    m,
+                )
         });
 
         let mut pages_json = Vec::with_capacity(layout.pages.len());
@@ -207,7 +263,10 @@ impl DocxSession {
             json.hash(&mut hasher);
             let hash = hasher.finish();
             if only_changed.unwrap_or(false) && self.page_hashes.get(i) == Some(&hash) {
-                pages_json.push(format!(r#"{{"page_number":{},"unchanged":true}}"#, page.page_number));
+                pages_json.push(format!(
+                    r#"{{"page_number":{},"unchanged":true}}"#,
+                    page.page_number
+                ));
             } else {
                 pages_json.push(json);
             }
@@ -243,7 +302,9 @@ impl DocxSession {
         measure: Option<js_sys::Function>,
         header_footer: Option<bool>,
     ) -> Result<String, JsValue> {
-        let Some(layout) = &self.layout else { return Ok("null".into()) };
+        let Some(layout) = &self.layout else {
+            return Ok("null".into());
+        };
         to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
             if header_footer.unwrap_or(false) {
                 caret::hit_test_header_footer(layout, page, x, y, m)
@@ -256,10 +317,20 @@ impl DocxSession {
     /// Caret box `{page, x, y, height, line_start, line_end}` for a text position, or `null`.
     /// A header or footer paragraph is drawn on every page: `page` picks the copy to use.
     #[wasm_bindgen]
-    pub fn caret_box(&mut self, paragraph: usize, offset: usize, measure: Option<js_sys::Function>, page: Option<usize>) -> Result<String, JsValue> {
-        let Some(layout) = &self.layout else { return Ok("null".into()) };
+    pub fn caret_box(
+        &mut self,
+        paragraph: usize,
+        offset: usize,
+        measure: Option<js_sys::Function>,
+        page: Option<usize>,
+    ) -> Result<String, JsValue> {
+        let Some(layout) = &self.layout else {
+            return Ok("null".into());
+        };
         let pos = TextPosition { paragraph, offset };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::caret_box_on(layout, pos, page, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
+            caret::caret_box_on(layout, pos, page, m)
+        }))
     }
 
     /// Header and footer paragraphs, numbered from `HEADER_FOOTER_BASE`, each with the part it
@@ -269,26 +340,39 @@ impl DocxSession {
     /// `HEADER_FOOTER_TEXTBOX_BASE`) reach the JS the same way the body's do.
     #[wasm_bindgen]
     pub fn header_footer_paragraphs_json(&self) -> Result<String, JsValue> {
-        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let inputs = self
+            .modifier
+            .layout_inputs()
+            .map_err(|e| JsValue::from_str(&e))?;
         let hf = &inputs.header_footer;
         let mut seen = std::collections::HashSet::new();
         let mut out: Vec<serde_json::Value> = Vec::new();
-        let groups = [Some(&hf.header), Some(&hf.footer), hf.first_header.as_ref(), hf.first_footer.as_ref()];
+        let groups = [
+            Some(&hf.header),
+            Some(&hf.footer),
+            hf.first_header.as_ref(),
+            hf.first_footer.as_ref(),
+        ];
         for elements in groups.into_iter().flatten() {
             let mut paragraphs: Vec<&docx_parser::ParagraphInfo> = Vec::new();
             for el in elements.iter() {
                 match el {
                     docx_parser::DocumentElement::Paragraph(p) => paragraphs.push(p),
                     docx_parser::DocumentElement::Table(t) => {
-                        t.rich_rows.iter().flat_map(|r| r.cells.iter()).for_each(|c| paragraphs.extend(c.paragraphs.iter()));
+                        t.rich_rows
+                            .iter()
+                            .flat_map(|r| r.cells.iter())
+                            .for_each(|c| paragraphs.extend(c.paragraphs.iter()));
                     }
                 }
             }
             for p in paragraphs {
                 if p.index >= docx_parser::HEADER_FOOTER_BASE && seen.insert(p.index) {
-                    let mut value = serde_json::to_value(p).map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    let mut value =
+                        serde_json::to_value(p).map_err(|e| JsValue::from_str(&e.to_string()))?;
                     if let Some(obj) = value.as_object_mut() {
-                        let slot = (p.index - docx_parser::HEADER_FOOTER_BASE) / docx_parser::PART_SLOT;
+                        let slot =
+                            (p.index - docx_parser::HEADER_FOOTER_BASE) / docx_parser::PART_SLOT;
                         obj.insert("part_slot".into(), slot.into());
                     }
                     out.push(value);
@@ -309,9 +393,13 @@ impl DocxSession {
         measure: Option<js_sys::Function>,
         page: Option<usize>,
     ) -> Result<String, JsValue> {
-        let Some(layout) = &self.layout else { return Ok("null".into()) };
+        let Some(layout) = &self.layout else {
+            return Ok("null".into());
+        };
         let pos = TextPosition { paragraph, offset };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::move_vertical_on(layout, pos, direction, goal_x, page, m)))
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
+            caret::move_vertical_on(layout, pos, direction, goal_x, page, m)
+        }))
     }
 
     /// Highlight rectangles `[{page, x, y, width, height}]` for characters `start..end`
@@ -323,14 +411,24 @@ impl DocxSession {
         end: usize,
         measure: Option<js_sys::Function>,
     ) -> Result<String, JsValue> {
-        let Some(layout) = &self.layout else { return Ok("[]".into()) };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects(layout, paragraph, start, end, m)))
+        let Some(layout) = &self.layout else {
+            return Ok("[]".into());
+        };
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
+            caret::selection_rects(layout, paragraph, start, end, m)
+        }))
     }
 
     /// Replaces characters `start..end` of a body paragraph with `text` (offsets in Unicode
     /// code points). Typed text takes the formatting of the character before the caret.
     #[wasm_bindgen]
-    pub fn replace_text(&mut self, paragraph: usize, start: usize, end: usize, text: &str) -> Result<bool, JsValue> {
+    pub fn replace_text(
+        &mut self,
+        paragraph: usize,
+        start: usize,
+        end: usize,
+        text: &str,
+    ) -> Result<bool, JsValue> {
         self.modifier.checkpoint(None);
         self.modifier
             .replace_paragraph_range(paragraph, start, end, text)
@@ -384,7 +482,10 @@ impl DocxSession {
             .modifier
             .insert_paragraphs(paragraph, offset, &paragraphs)
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
@@ -406,7 +507,10 @@ impl DocxSession {
             .modifier
             .replace_paragraphs(from, to, &paragraphs)
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
@@ -414,11 +518,26 @@ impl DocxSession {
     /// Deletes the blocks from paragraph `from` to `to` (included) as one undo step (see
     /// `DocxModifier::delete_paragraphs`). Returns `{ "count", "caret" }`.
     #[wasm_bindgen]
-    pub fn delete_paragraphs(&mut self, from: usize, to: usize, selection_before: Option<String>) -> Result<String, JsValue> {
+    pub fn delete_paragraphs(
+        &mut self,
+        from: usize,
+        to: usize,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
         self.modifier.checkpoint(selection_before);
-        let count = self.modifier.delete_paragraphs(from, to).map_err(|e| JsValue::from_str(&e))?;
-        let left = self.modifier.extract_paragraphs().map(|p| p.len()).unwrap_or(1);
-        let caret = TextPosition { paragraph: from.min(left.saturating_sub(1)), offset: 0 };
+        let count = self
+            .modifier
+            .delete_paragraphs(from, to)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let left = self
+            .modifier
+            .extract_paragraphs()
+            .map(|p| p.len())
+            .unwrap_or(1);
+        let caret = TextPosition {
+            paragraph: from.min(left.saturating_sub(1)),
+            offset: 0,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "count": count, "caret": caret }))
     }
@@ -427,10 +546,22 @@ impl DocxSession {
     /// as one undo step, keeping their XML (see `DocxModifier::move_paragraphs`). Returns
     /// `{ "first", "count", "caret" }`.
     #[wasm_bindgen]
-    pub fn move_paragraphs(&mut self, from: usize, to: usize, before: usize, selection_before: Option<String>) -> Result<String, JsValue> {
+    pub fn move_paragraphs(
+        &mut self,
+        from: usize,
+        to: usize,
+        before: usize,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
         self.modifier.checkpoint(selection_before);
-        let first = self.modifier.move_paragraphs(from, to, before).map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: first, offset: 0 };
+        let first = self
+            .modifier
+            .move_paragraphs(from, to, before)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let caret = TextPosition {
+            paragraph: first,
+            offset: 0,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "first": first, "count": to - from + 1, "caret": caret }))
     }
@@ -439,7 +570,10 @@ impl DocxSession {
     /// (see `DocxModifier::sections`)
     #[wasm_bindgen]
     pub fn sections_json(&self) -> Result<String, JsValue> {
-        let sections = self.modifier.sections().map_err(|e| JsValue::from_str(&e))?;
+        let sections = self
+            .modifier
+            .sections()
+            .map_err(|e| JsValue::from_str(&e))?;
         to_json(&sections)
     }
 
@@ -482,16 +616,25 @@ impl DocxSession {
             .modifier
             .replace_section(key, &paragraphs, keep_heading)
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "first": first, "count": paragraphs.len(), "caret": caret }))
     }
 
     /// Removes a logical section's marker, keeping its content, as one undo step
     #[wasm_bindgen]
-    pub fn unwrap_section(&mut self, key: &str, selection_before: Option<String>) -> Result<(), JsValue> {
+    pub fn unwrap_section(
+        &mut self,
+        key: &str,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.unwrap_section(key).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .unwrap_section(key)
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
@@ -520,7 +663,11 @@ impl DocxSession {
     /// "after" | "before" | "inside" | "end", "relativeTo", "paragraphs": [...], "locked",
     /// "contentLocked" }]`. Returns `[{ "section": {…}, "first": n, "count": n }]`.
     #[wasm_bindgen]
-    pub fn insert_sections(&mut self, sections_json: &str, selection_before: Option<String>) -> Result<String, JsValue> {
+    pub fn insert_sections(
+        &mut self,
+        sections_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct NewSection {
@@ -540,21 +687,35 @@ impl DocxSession {
             .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
         let mut places = Vec::with_capacity(sections.len());
         for s in &sections {
-            let other = || s.relative_to.clone().ok_or_else(|| JsValue::from_str(&format!("Falta la sección de referencia de «{}».", s.key)));
+            let other = || {
+                s.relative_to.clone().ok_or_else(|| {
+                    JsValue::from_str(&format!("Falta la sección de referencia de «{}».", s.key))
+                })
+            };
             places.push(match s.place.as_str() {
                 "after" => docx_parser::SectionPlace::After(other()?),
                 "before" => docx_parser::SectionPlace::Before(other()?),
                 "inside" => docx_parser::SectionPlace::Inside(other()?),
                 "end" => docx_parser::SectionPlace::End,
-                p => return Err(JsValue::from_str(&format!("Posición no válida: {}. Usa after, before, inside o end.", p))),
+                p => {
+                    return Err(JsValue::from_str(&format!(
+                        "Posición no válida: {}. Usa after, before, inside o end.",
+                        p
+                    )))
+                }
             });
         }
         self.modifier.checkpoint(selection_before.clone());
         let mut out = Vec::with_capacity(sections.len());
         for (s, place) in sections.iter().zip(&places) {
-            let inserted = self
-                .modifier
-                .insert_section(&s.key, s.title.as_deref(), place, &s.paragraphs, s.locked, s.content_locked);
+            let inserted = self.modifier.insert_section(
+                &s.key,
+                s.title.as_deref(),
+                place,
+                &s.paragraphs,
+                s.locked,
+                s.content_locked,
+            );
             match inserted {
                 Ok((section, first)) => out.push(serde_json::json!({ "section": section, "first": first, "count": s.paragraphs.len() })),
                 Err(e) => {
@@ -573,7 +734,12 @@ impl DocxSession {
     /// Creates logical sections from the headings of levels `from_level`–`to_level` as one
     /// undo step (see `DocxModifier::sections_from_headings`). Returns `{ "created", "skipped" }`.
     #[wasm_bindgen]
-    pub fn sections_from_headings(&mut self, from_level: u32, to_level: u32, selection_before: Option<String>) -> Result<String, JsValue> {
+    pub fn sections_from_headings(
+        &mut self,
+        from_level: u32,
+        to_level: u32,
+        selection_before: Option<String>,
+    ) -> Result<String, JsValue> {
         self.modifier.checkpoint(selection_before.clone());
         let result = self
             .modifier
@@ -586,18 +752,27 @@ impl DocxSession {
     /// The document's section schema (`{ "type", "title", "sections": [...] }`) or `null`
     #[wasm_bindgen]
     pub fn section_schema_json(&self) -> Result<String, JsValue> {
-        let schema = self.modifier.section_schema().map_err(|e| JsValue::from_str(&e))?;
+        let schema = self
+            .modifier
+            .section_schema()
+            .map_err(|e| JsValue::from_str(&e))?;
         to_json(&schema)
     }
 
     /// Stores the section schema (JSON like `section_schema_json`; "null" removes it) as one
     /// undo step
     #[wasm_bindgen]
-    pub fn set_section_schema(&mut self, schema_json: &str, selection_before: Option<String>) -> Result<(), JsValue> {
+    pub fn set_section_schema(
+        &mut self,
+        schema_json: &str,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
         let schema: Option<docx_parser::SectionSchema> = serde_json::from_str(schema_json)
             .map_err(|e| JsValue::from_str(&format!("Esquema no válido: {}", e)))?;
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.set_section_schema(schema.as_ref()).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .set_section_schema(schema.as_ref())
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
@@ -620,7 +795,10 @@ impl DocxSession {
             .modifier
             .insert_table(paragraph, offset, &table)
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "first": first, "caret": caret }))
     }
@@ -644,7 +822,10 @@ impl DocxSession {
             .modifier
             .insert_image(paragraph, offset, bytes, &options)
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "paragraph": index, "caret": caret }))
     }
@@ -664,7 +845,9 @@ impl DocxSession {
         let content: docx_parser::TextBoxContent = serde_json::from_str(content_json)
             .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?;
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.fill_text_box(paragraph, &content).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .fill_text_box(paragraph, &content)
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
@@ -677,7 +860,10 @@ impl DocxSession {
     /// VML shapes are drawn but left out (they cannot be edited).
     #[wasm_bindgen]
     pub fn list_images(&self) -> Result<String, JsValue> {
-        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
+        let elements = self
+            .modifier
+            .elements_shared()
+            .map_err(|e| JsValue::from_str(&e))?;
         let mut paragraphs: Vec<&docx_parser::ParagraphInfo> = Vec::new();
         for el in elements.iter() {
             match el {
@@ -694,9 +880,17 @@ impl DocxSession {
         // Header/footer paragraphs (same traversal as header_footer_paragraphs_json): their own
         // pictures/shapes, and the text boxes anchored there, need to list here too, or the JS
         // layer can never select/move them (`selectImage`, `updateImage`'s return value).
-        let inputs = self.modifier.layout_inputs().map_err(|e| JsValue::from_str(&e))?;
+        let inputs = self
+            .modifier
+            .layout_inputs()
+            .map_err(|e| JsValue::from_str(&e))?;
         let hf = &inputs.header_footer;
-        let groups = [Some(&hf.header), Some(&hf.footer), hf.first_header.as_ref(), hf.first_footer.as_ref()];
+        let groups = [
+            Some(&hf.header),
+            Some(&hf.footer),
+            hf.first_header.as_ref(),
+            hf.first_footer.as_ref(),
+        ];
         let mut seen = std::collections::HashSet::new();
         for els in groups.into_iter().flatten() {
             for el in els.iter() {
@@ -723,7 +917,12 @@ impl DocxSession {
         paragraphs.sort_by_key(|p| p.index);
         let images: Vec<serde_json::Value> = paragraphs
             .iter()
-            .flat_map(|p| p.images.iter().enumerate().map(move |(i, img)| (p.index, i, img)))
+            .flat_map(|p| {
+                p.images
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, img)| (p.index, i, img))
+            })
             .filter(|(_, _, img)| !img.vml)
             .map(|(paragraph, index, img)| {
                 let mut value = image_json(img);
@@ -768,9 +967,16 @@ impl DocxSession {
 
     /// Deletes picture `index` of `paragraph` as one undo step
     #[wasm_bindgen]
-    pub fn delete_image(&mut self, paragraph: usize, index: usize, selection_before: Option<String>) -> Result<(), JsValue> {
+    pub fn delete_image(
+        &mut self,
+        paragraph: usize,
+        index: usize,
+        selection_before: Option<String>,
+    ) -> Result<(), JsValue> {
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.delete_image(paragraph, index).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .delete_image(paragraph, index)
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
@@ -808,43 +1014,67 @@ impl DocxSession {
         measure: Option<js_sys::Function>,
         page: Option<usize>,
     ) -> Result<String, JsValue> {
-        let Some(layout) = &self.layout else { return Ok("[]".into()) };
-        let from = TextPosition { paragraph: p1, offset: o1 };
-        let to = TextPosition { paragraph: p2, offset: o2 };
-        to_json(&with_measurer(&mut self.measure_cache, measure, |m| caret::selection_rects_range_on(layout, from, to, page, m)))
+        let Some(layout) = &self.layout else {
+            return Ok("[]".into());
+        };
+        let from = TextPosition {
+            paragraph: p1,
+            offset: o1,
+        };
+        let to = TextPosition {
+            paragraph: p2,
+            offset: o2,
+        };
+        to_json(&with_measurer(&mut self.measure_cache, measure, |m| {
+            caret::selection_rects_range_on(layout, from, to, page, m)
+        }))
     }
 
     /// Gets all document elements (paragraphs and tables in order) as JSON
     #[wasm_bindgen]
     pub fn get_document_elements_json(&self) -> Result<String, JsValue> {
-        let elements = self.modifier.elements_shared().map_err(|e| JsValue::from_str(&e))?;
+        let elements = self
+            .modifier
+            .elements_shared()
+            .map_err(|e| JsValue::from_str(&e))?;
         to_json(&*elements)
     }
 
     /// Gets paragraphs list in JSON format
     #[wasm_bindgen]
     pub fn get_paragraphs_json(&self) -> Result<String, JsValue> {
-        let paragraphs = self.modifier.extract_paragraphs().map_err(|e| JsValue::from_str(&e))?;
+        let paragraphs = self
+            .modifier
+            .extract_paragraphs()
+            .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&paragraphs).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Gets tables list in JSON format
     #[wasm_bindgen]
     pub fn get_tables_json(&self) -> Result<String, JsValue> {
-        let tables = self.modifier.extract_tables().map_err(|e| JsValue::from_str(&e))?;
+        let tables = self
+            .modifier
+            .extract_tables()
+            .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&tables).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Gets full document plain text
     #[wasm_bindgen]
     pub fn get_raw_text(&self) -> Result<String, JsValue> {
-        self.modifier.extract_raw_text().map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .extract_raw_text()
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Gets statistics in JSON format
     #[wasm_bindgen]
     pub fn get_stats_json(&self) -> Result<String, JsValue> {
-        let stats = self.modifier.get_statistics().map_err(|e| JsValue::from_str(&e))?;
+        let stats = self
+            .modifier
+            .get_statistics()
+            .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&stats).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -871,7 +1101,10 @@ impl DocxSession {
         self.modifier.checkpoint(None);
         let pairs: Vec<KeyValuePair> = serde_json::from_str(pairs_json)
             .map_err(|e| JsValue::from_str(&format!("JSON inválido para batch replace: {}", e)))?;
-        let res = self.modifier.batch_replace(&pairs).map_err(|e| JsValue::from_str(&e))?;
+        let res = self
+            .modifier
+            .batch_replace(&pairs)
+            .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&res).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -883,7 +1116,10 @@ impl DocxSession {
             index,
             text: new_text.to_string(),
         }];
-        let count = self.modifier.update_paragraphs(&update).map_err(|e| JsValue::from_str(&e))?;
+        let count = self
+            .modifier
+            .update_paragraphs(&update)
+            .map_err(|e| JsValue::from_str(&e))?;
         Ok(count > 0)
     }
 
@@ -927,16 +1163,23 @@ impl DocxSession {
     /// Paragraph styles for a style gallery: `[{ "id", "name", "builtin" }]`, default style first
     #[wasm_bindgen]
     pub fn paragraph_styles_json(&self) -> String {
-        serde_json::to_string(&self.modifier.paragraph_styles()).unwrap_or_else(|_| "[]".to_string())
+        serde_json::to_string(&self.modifier.paragraph_styles())
+            .unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Applies a paragraph style (an id from `paragraph_styles_json`) to the paragraphs
     /// `indices_json` (`[3, 4]`) as one undo step
     #[wasm_bindgen]
-    pub fn set_paragraph_style(&mut self, indices_json: &str, style_id: &str) -> Result<(), JsValue> {
+    pub fn set_paragraph_style(
+        &mut self,
+        indices_json: &str,
+        style_id: &str,
+    ) -> Result<(), JsValue> {
         let indices = parse_indices(indices_json)?;
         self.modifier.checkpoint(None);
-        self.modifier.set_paragraph_style(&indices, style_id).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .set_paragraph_style(&indices, style_id)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Line spacing as a multiple of single spacing (1, 1.15, 1.5, 2) as one undo step
@@ -944,15 +1187,24 @@ impl DocxSession {
     pub fn set_line_spacing(&mut self, indices_json: &str, multiple: f64) -> Result<(), JsValue> {
         let indices = parse_indices(indices_json)?;
         self.modifier.checkpoint(None);
-        self.modifier.set_line_spacing(&indices, multiple).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .set_line_spacing(&indices, multiple)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Space before and after the paragraphs in points (undefined keeps it) as one undo step
     #[wasm_bindgen]
-    pub fn set_paragraph_spacing(&mut self, indices_json: &str, before: Option<f64>, after: Option<f64>) -> Result<(), JsValue> {
+    pub fn set_paragraph_spacing(
+        &mut self,
+        indices_json: &str,
+        before: Option<f64>,
+        after: Option<f64>,
+    ) -> Result<(), JsValue> {
         let indices = parse_indices(indices_json)?;
         self.modifier.checkpoint(None);
-        self.modifier.set_paragraph_spacing(&indices, before, after).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .set_paragraph_spacing(&indices, before, after)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Increase (`steps` > 0) or decrease indent: list items change level, other paragraphs
@@ -961,14 +1213,24 @@ impl DocxSession {
     pub fn change_indent(&mut self, indices_json: &str, steps: i32) -> Result<(), JsValue> {
         let indices = parse_indices(indices_json)?;
         self.modifier.checkpoint(None);
-        self.modifier.change_indent(&indices, steps).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .change_indent(&indices, steps)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Removes direct character formatting from (`p1`, `o1`) to (`p2`, `o2`) as one undo step
     #[wasm_bindgen]
-    pub fn clear_formatting(&mut self, p1: usize, o1: usize, p2: usize, o2: usize) -> Result<(), JsValue> {
+    pub fn clear_formatting(
+        &mut self,
+        p1: usize,
+        o1: usize,
+        p2: usize,
+        o2: usize,
+    ) -> Result<(), JsValue> {
         self.modifier.checkpoint(None);
-        self.modifier.clear_formatting(p1, o1, p2, o2).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .clear_formatting(p1, o1, p2, o2)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Makes the paragraphs a "bullet" or "number" list, or takes them out of it ("none");
@@ -977,7 +1239,9 @@ impl DocxSession {
     pub fn set_list(&mut self, indices_json: &str, kind: &str) -> Result<(), JsValue> {
         let indices = parse_indices(indices_json)?;
         self.modifier.checkpoint(None);
-        self.modifier.set_list(&indices, kind).map_err(|e| JsValue::from_str(&e))
+        self.modifier
+            .set_list(&indices, kind)
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Updates paragraph with full rich formatting (alignment, color, bold, italic, text)
@@ -1016,7 +1280,10 @@ impl DocxSession {
     /// (see `DocxModifier::table_summaries`)
     #[wasm_bindgen]
     pub fn tables_json(&self) -> Result<String, JsValue> {
-        let tables = self.modifier.table_summaries().map_err(|e| JsValue::from_str(&e))?;
+        let tables = self
+            .modifier
+            .table_summaries()
+            .map_err(|e| JsValue::from_str(&e))?;
         to_json(&tables)
     }
 
@@ -1031,7 +1298,9 @@ impl DocxSession {
         selection_before: Option<String>,
     ) -> Result<(), JsValue> {
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.set_table_cell(table, row, col, text).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .set_table_cell(table, row, col, text)
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
@@ -1072,7 +1341,8 @@ impl DocxSession {
         selection_before: Option<String>,
     ) -> Result<String, JsValue> {
         let values: Option<Vec<Vec<Option<String>>>> = match values_json {
-            Some(json) => serde_json::from_str(&json).map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?,
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))?,
             None => None,
         };
         self.modifier.checkpoint(selection_before);
@@ -1080,7 +1350,10 @@ impl DocxSession {
             .modifier
             .duplicate_table(table, paragraph, offset, values.as_deref())
             .map_err(|e| JsValue::from_str(&e))?;
-        let caret = TextPosition { paragraph: p, offset: o };
+        let caret = TextPosition {
+            paragraph: p,
+            offset: o,
+        };
         self.modifier.set_selection_after(Some(to_json(&caret)?));
         to_json(&serde_json::json!({ "table": new_table, "first": first, "caret": caret }))
     }
@@ -1095,14 +1368,21 @@ impl DocxSession {
         selection_before: Option<String>,
     ) -> Result<(), JsValue> {
         self.modifier.checkpoint(selection_before.clone());
-        self.modifier.delete_table_rows(table, from, count).map_err(|e| JsValue::from_str(&e))?;
+        self.modifier
+            .delete_table_rows(table, from, count)
+            .map_err(|e| JsValue::from_str(&e))?;
         self.modifier.set_selection_after(selection_before);
         Ok(())
     }
 
     /// Inserts a new table into document
     #[wasm_bindgen]
-    pub fn add_table(&mut self, rows: usize, cols: usize, headers_json: &str) -> Result<bool, JsValue> {
+    pub fn add_table(
+        &mut self,
+        rows: usize,
+        cols: usize,
+        headers_json: &str,
+    ) -> Result<bool, JsValue> {
         self.modifier.checkpoint(None);
         let headers: Vec<String> = serde_json::from_str(headers_json)
             .unwrap_or_else(|_| (1..=cols).map(|i| format!("Columna {}", i)).collect());
@@ -1132,11 +1412,15 @@ impl DocxSession {
     /// Exports the modified docx file as Uint8Array
     #[wasm_bindgen]
     pub fn export_bytes(&self) -> Result<js_sys::Uint8Array, JsValue> {
-        let bytes = self.modifier.to_bytes().map_err(|e| JsValue::from_str(&e))?;
+        let bytes = self
+            .modifier
+            .to_bytes()
+            .map_err(|e| JsValue::from_str(&e))?;
         Ok(js_sys::Uint8Array::from(&bytes[..]))
     }
 }
 
 fn parse_indices(json: &str) -> Result<Vec<usize>, JsValue> {
-    serde_json::from_str(json).map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))
+    serde_json::from_str(json)
+        .map_err(|e| JsValue::from_str(&format!("JSON deserialization error: {}", e)))
 }

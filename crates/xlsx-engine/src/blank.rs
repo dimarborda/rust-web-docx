@@ -44,7 +44,8 @@ pub(crate) fn zip_parts(parts: &[(&str, &str)]) -> Result<Vec<u8>, String> {
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     for (name, content) in parts {
         zip.start_file(*name, options).map_err(|e| e.to_string())?;
-        zip.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+        zip.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(buffer.into_inner())

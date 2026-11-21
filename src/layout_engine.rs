@@ -1,9 +1,9 @@
 use crate::docx_parser::{
-    is_dark_hex_str, BorderInfo, CellBorders, DocumentElement, HeaderFooterInfo, ImageRef, PageSetup, ParagraphInfo,
-    RunInfo, TableCellData, TableInfo, PAGE_BREAK,
+    is_dark_hex_str, BorderInfo, CellBorders, DocumentElement, HeaderFooterInfo, ImageRef,
+    PageSetup, ParagraphInfo, RunInfo, TableCellData, TableInfo, PAGE_BREAK,
 };
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub const PAGE_WIDTH: f64 = 800.0;
 pub const PAGE_HEIGHT: f64 = 1130.0; // A4 standard ratio
@@ -215,6 +215,12 @@ pub struct LayoutEngine {
     images: HashMap<String, String>,
 }
 
+impl Default for LayoutEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LayoutEngine {
     pub fn new() -> Self {
         Self {
@@ -276,7 +282,10 @@ impl LayoutEngine {
         let margin_bottom = page_setup.margin_bottom.max(24.0);
         let hf = header_footer;
         // Documents read before header content was laid out only carry the header's pictures
-        let laid_out_parts = !hf.header.is_empty() || !hf.footer.is_empty() || hf.first_header.is_some() || hf.first_footer.is_some();
+        let laid_out_parts = !hf.header.is_empty()
+            || !hf.footer.is_empty()
+            || hf.first_header.is_some()
+            || hf.first_footer.is_some();
         let header_inline_bottom = if laid_out_parts {
             0.0
         } else {
@@ -308,26 +317,45 @@ impl LayoutEngine {
         let first_header = hf.first_header.as_deref().unwrap_or(&hf.header);
         let first_footer = hf.first_footer.as_deref().unwrap_or(&hf.footer);
         let part_height = |els: &[DocumentElement], m: &mut dyn TextMeasurer| {
-            if els.is_empty() { 0.0 } else { render_part(els, &geo, 0.0, &hf.images, m).1 }
+            if els.is_empty() {
+                0.0
+            } else {
+                render_part(els, &geo, 0.0, &hf.images, m).1
+            }
         };
         let header_h = part_height(&hf.header, measurer);
-        let first_header_h = if hf.first_header.is_some() { part_height(first_header, measurer) } else { header_h };
+        let first_header_h = if hf.first_header.is_some() {
+            part_height(first_header, measurer)
+        } else {
+            header_h
+        };
         let footer_h = part_height(&hf.footer, measurer);
-        let first_footer_h = if hf.first_footer.is_some() { part_height(first_footer, measurer) } else { footer_h };
+        let first_footer_h = if hf.first_footer.is_some() {
+            part_height(first_footer, measurer)
+        } else {
+            footer_h
+        };
         if laid_out_parts {
             geo.top = margin_top.max(header_top + header_h);
             geo.top_first = margin_top.max(header_top + first_header_h);
             let footer_space = page_setup.footer_margin.max(0.0) + footer_h.max(first_footer_h);
-            geo.bottom = (page_h - margin_bottom).min(page_h - footer_space).max(geo.top + 48.0);
+            geo.bottom = (page_h - margin_bottom)
+                .min(page_h - footer_space)
+                .max(geo.top + 48.0);
         }
 
         // Pass 1: measure every block; pass 2: paginate with look-ahead for keep rules
         let blocks: Vec<Block> = elements
             .iter()
             .map(|el| match el {
-                DocumentElement::Paragraph(p) => {
-                    Block::Paragraph(Box::new(prepare_paragraph(p, geo.margin_left, geo.printable_w, None, measurer, &[])))
-                }
+                DocumentElement::Paragraph(p) => Block::Paragraph(Box::new(prepare_paragraph(
+                    p,
+                    geo.margin_left,
+                    geo.printable_w,
+                    None,
+                    measurer,
+                    &[],
+                ))),
                 DocumentElement::Table(t) => Block::Table(prepare_table(t, &geo, measurer)),
             })
             .collect();
@@ -336,7 +364,9 @@ impl LayoutEngine {
         let mut flow = FlowState::default();
         for (i, block) in blocks.iter().enumerate() {
             match block {
-                Block::Paragraph(b) => place_paragraph(&mut pag, &blocks, i, b, &mut flow, measurer),
+                Block::Paragraph(b) => {
+                    place_paragraph(&mut pag, &blocks, i, b, &mut flow, measurer)
+                }
                 Block::Table(t) => place_table(&mut pag, t, &mut flow),
             }
         }
@@ -351,19 +381,43 @@ impl LayoutEngine {
                 let first = i == 0;
                 let mut prefix = Vec::new();
                 for (is_header, els, height) in [
-                    (true, if first { first_header } else { &hf.header[..] }, if first { first_header_h } else { header_h }),
-                    (false, if first { first_footer } else { &hf.footer[..] }, if first { first_footer_h } else { footer_h }),
+                    (
+                        true,
+                        if first { first_header } else { &hf.header[..] },
+                        if first { first_header_h } else { header_h },
+                    ),
+                    (
+                        false,
+                        if first { first_footer } else { &hf.footer[..] },
+                        if first { first_footer_h } else { footer_h },
+                    ),
                 ] {
                     if els.is_empty() {
                         continue;
                     }
-                    let top = if is_header { header_top } else { page_h - page_setup.footer_margin.max(0.0) - height };
+                    let top = if is_header {
+                        header_top
+                    } else {
+                        page_h - page_setup.footer_margin.max(0.0) - height
+                    };
                     match with_page_numbers(els, i + 1, total_pages) {
-                        Some(numbered) => prefix.extend(render_part(&numbered, &geo, top, &hf.images, measurer).0),
+                        Some(numbered) => {
+                            prefix.extend(render_part(&numbered, &geo, top, &hf.images, measurer).0)
+                        }
                         None => {
                             let items = part_cache
-                                .entry((is_header, first && (if is_header { hf.first_header.is_some() } else { hf.first_footer.is_some() })))
-                                .or_insert_with(|| render_part(els, &geo, top, &hf.images, measurer).0);
+                                .entry((
+                                    is_header,
+                                    first
+                                        && (if is_header {
+                                            hf.first_header.is_some()
+                                        } else {
+                                            hf.first_footer.is_some()
+                                        }),
+                                ))
+                                .or_insert_with(|| {
+                                    render_part(els, &geo, top, &hf.images, measurer).0
+                                });
                             prefix.extend(items.iter().cloned());
                         }
                     }
@@ -374,7 +428,6 @@ impl LayoutEngine {
         }
 
         for page in pages.iter_mut() {
-
             // 1. Full page background chosen in the editor ("Fondo / Marca de agua")
             if let Some(bg_url) = bg_image_data_url {
                 page.items.insert(
@@ -403,7 +456,13 @@ impl LayoutEngine {
                 .iter()
                 .filter(|_| !laid_out_parts)
                 .map(|p| (p, header_top))
-                .chain(header_footer.footer_images.iter().filter(|_| !laid_out_parts).map(|p| (p, footer_top - p.image.height)))
+                .chain(
+                    header_footer
+                        .footer_images
+                        .iter()
+                        .filter(|_| !laid_out_parts)
+                        .map(|p| (p, footer_top - p.image.height)),
+                )
             {
                 let (x, y) = if placed.image.anchored {
                     anchored_position(&placed.image, &geo, column, para_top)
@@ -474,7 +533,6 @@ impl LayoutEngine {
     }
 }
 
-
 /// Lays out header or footer content from `top` on a page of `geo`: its render commands (text
 /// detached from the body, so the caret never goes there) and its height
 fn render_part(
@@ -484,13 +542,23 @@ fn render_part(
     images: &HashMap<String, String>,
     m: &mut dyn TextMeasurer,
 ) -> (Vec<RenderCommand>, f64) {
-    let part_geo = PageGeometry { top_first: top, top, bottom: f64::MAX / 4.0, ..geo.clone() };
+    let part_geo = PageGeometry {
+        top_first: top,
+        top,
+        bottom: f64::MAX / 4.0,
+        ..geo.clone()
+    };
     let blocks: Vec<Block> = elements
         .iter()
         .map(|el| match el {
-            DocumentElement::Paragraph(p) => {
-                Block::Paragraph(Box::new(prepare_paragraph(p, part_geo.margin_left, part_geo.printable_w, None, m, &[])))
-            }
+            DocumentElement::Paragraph(p) => Block::Paragraph(Box::new(prepare_paragraph(
+                p,
+                part_geo.margin_left,
+                part_geo.printable_w,
+                None,
+                m,
+                &[],
+            ))),
             DocumentElement::Table(t) => Block::Table(prepare_table(t, &part_geo, m)),
         })
         .collect();
@@ -508,7 +576,11 @@ fn render_part(
         match cmd {
             // Header and footer paragraphs keep their caret lines (edited in header mode);
             // anything else in them (text box text, repeated rows) is not a caret target
-            RenderCommand::Text { line, paragraph_index, .. } if *paragraph_index < crate::docx_parser::HEADER_FOOTER_BASE => *line = None,
+            RenderCommand::Text {
+                line,
+                paragraph_index,
+                ..
+            } if *paragraph_index < crate::docx_parser::HEADER_FOOTER_BASE => *line = None,
             // Images and shapes keep the paragraph_index/image_index/editable_text already
             // computed for them (same as in the body): the canvas editor needs those to select
             // and drag anchored pictures and text boxes anchored in a header or footer.
@@ -520,7 +592,11 @@ fn render_part(
 
 /// `elements` with their page-number fields showing `page` / `total`, or `None` when they
 /// have none
-fn with_page_numbers(elements: &[DocumentElement], page: usize, total: usize) -> Option<Vec<DocumentElement>> {
+fn with_page_numbers(
+    elements: &[DocumentElement],
+    page: usize,
+    total: usize,
+) -> Option<Vec<DocumentElement>> {
     let mut any = false;
     let mut copy = elements.to_vec();
     crate::docx_parser::for_each_paragraph_mut(&mut copy, &mut |p| {
@@ -536,9 +612,14 @@ fn with_page_numbers(elements: &[DocumentElement], page: usize, total: usize) ->
 /// Replaces the cached result of each page field of `p` with the real value
 fn substitute_fields(p: &mut ParagraphInfo, page: usize, total: usize) {
     let mut fields = p.fields.clone();
-    fields.sort_by(|a, b| b.start.cmp(&a.start));
+    fields.sort_by_key(|f| std::cmp::Reverse(f.start));
     // Every character tagged with the run it belongs to
-    let mut chars: Vec<(char, usize)> = p.runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
+    let mut chars: Vec<(char, usize)> = p
+        .runs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, r)| r.text.chars().map(move |c| (c, i)))
+        .collect();
     if p.runs.is_empty() {
         return;
     }
@@ -546,7 +627,10 @@ fn substitute_fields(p: &mut ParagraphInfo, page: usize, total: usize) {
         let value = if f.kind == "PAGE" { page } else { total }.to_string();
         let start = f.start.min(chars.len());
         let end = f.end.clamp(start, chars.len());
-        let run = chars.get(start).or_else(|| chars.get(start.wrapping_sub(1))).map_or(0, |c| c.1);
+        let run = chars
+            .get(start)
+            .or_else(|| chars.get(start.wrapping_sub(1)))
+            .map_or(0, |c| c.1);
         chars.splice(start..end, value.chars().map(|c| (c, run)));
     }
     for (i, r) in p.runs.iter_mut().enumerate() {
@@ -588,7 +672,10 @@ pub struct CachedMeasurer<M: TextMeasurer> {
 
 impl<M: TextMeasurer> CachedMeasurer<M> {
     pub fn new(inner: M) -> Self {
-        CachedMeasurer { inner, cache: HashMap::new() }
+        CachedMeasurer {
+            inner,
+            cache: HashMap::new(),
+        }
     }
 
     /// Reuses measurements from earlier layouts
@@ -608,7 +695,10 @@ impl<M: TextMeasurer> CachedMeasurer<M> {
 
 impl<M: TextMeasurer> TextMeasurer for CachedMeasurer<M> {
     fn measure(&mut self, text: &str, font: &FontSpec) -> f64 {
-        let key = format!("{}|{}|{}{}|{}", font.family, font.size, font.bold as u8, font.italic as u8, text);
+        let key = format!(
+            "{}|{}|{}{}|{}",
+            font.family, font.size, font.bold as u8, font.italic as u8, text
+        );
         if let Some(w) = self.cache.get(&key) {
             return *w;
         }
@@ -723,7 +813,10 @@ impl<'a> ParagraphBox<'a> {
     }
 
     fn text_box(&self, index: usize) -> Option<&TextBoxContent<'a>> {
-        self.text_boxes.iter().find(|(k, _)| *k == index).map(|(_, c)| c)
+        self.text_boxes
+            .iter()
+            .find(|(k, _)| *k == index)
+            .map(|(_, c)| c)
     }
 }
 
@@ -736,9 +829,15 @@ struct TextBoxContent<'a> {
 fn prepare_text_box<'a>(img: &'a ImageRef, m: &mut dyn TextMeasurer) -> Option<TextBoxContent<'a>> {
     let tb = img.text_box.as_ref()?;
     let inner = (img.width - tb.inset_left - tb.inset_right).max(8.0);
-    let paragraphs: Vec<ParagraphBox<'a>> =
-        tb.paragraphs.iter().map(|p| prepare_paragraph(p, tb.inset_left, inner, None, m, &[])).collect();
-    let height = paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum();
+    let paragraphs: Vec<ParagraphBox<'a>> = tb
+        .paragraphs
+        .iter()
+        .map(|p| prepare_paragraph(p, tb.inset_left, inner, None, m, &[]))
+        .collect();
+    let height = paragraphs
+        .iter()
+        .map(|b| b.space_before + b.lines_height() + b.space_after)
+        .sum();
     Some(TextBoxContent { paragraphs, height })
 }
 
@@ -779,19 +878,45 @@ struct TableBox<'a> {
 /// Visible borders of a cell: its own `w:tcBorders` side, else the table's outer border on
 /// the table edge or its inside border between cells
 /// `col`..`col + span` are the grid columns the cell occupies out of `cols`
-fn resolve_cell_borders(tbl: &TableInfo, cell: &TableCellData, row: usize, col: usize, span: usize, cols: usize) -> CellBorders {
+fn resolve_cell_borders(
+    tbl: &TableInfo,
+    cell: &TableCellData,
+    row: usize,
+    col: usize,
+    span: usize,
+    cols: usize,
+) -> CellBorders {
     let tb = &tbl.borders;
     let rows = tbl.rich_rows.len();
-    let pick = |own: &Option<BorderInfo>, outer: &Option<BorderInfo>, inner: &Option<BorderInfo>, at_edge: bool| {
+    let pick = |own: &Option<BorderInfo>,
+                outer: &Option<BorderInfo>,
+                inner: &Option<BorderInfo>,
+                at_edge: bool| {
         own.clone()
-            .or_else(|| if at_edge { outer.clone() } else { inner.clone() })
+            .or_else(|| {
+                if at_edge {
+                    outer.clone()
+                } else {
+                    inner.clone()
+                }
+            })
             .filter(BorderInfo::is_visible)
     };
     CellBorders {
         top: pick(&cell.borders.top, &tb.top, &tb.inside_h, row == 0),
-        bottom: pick(&cell.borders.bottom, &tb.bottom, &tb.inside_h, row + 1 == rows),
+        bottom: pick(
+            &cell.borders.bottom,
+            &tb.bottom,
+            &tb.inside_h,
+            row + 1 == rows,
+        ),
         left: pick(&cell.borders.left, &tb.left, &tb.inside_v, col == 0),
-        right: pick(&cell.borders.right, &tb.right, &tb.inside_v, col + span >= cols),
+        right: pick(
+            &cell.borders.right,
+            &tb.right,
+            &tb.inside_v,
+            col + span >= cols,
+        ),
     }
 }
 
@@ -839,8 +964,19 @@ fn prepare_paragraph<'a>(
                 .runs
                 .iter()
                 .filter(|r| r.text != "\t" && !r.text.trim().is_empty())
-                .map(|r| (r.font_size.unwrap_or(font_size), r.font_family.as_deref().unwrap_or(&font_family)))
-                .fold((font_size, font_family.as_str()), |best, cur| if cur.0 > best.0 { cur } else { best });
+                .map(|r| {
+                    (
+                        r.font_size.unwrap_or(font_size),
+                        r.font_family.as_deref().unwrap_or(&font_family),
+                    )
+                })
+                .fold((font_size, font_family.as_str()), |best, cur| {
+                    if cur.0 > best.0 {
+                        cur
+                    } else {
+                        best
+                    }
+                });
             let (ascent, descent) = font_vertical_metrics(family);
             let natural = size * (ascent + descent);
             let height = if let Some(pt) = p.line_exact {
@@ -860,7 +996,13 @@ fn prepare_paragraph<'a>(
                 baseline = tallest;
             }
             let gap_before = slots.get(idx).map_or(0.0, |s| s.gap);
-            LineBox { line, height, baseline, gap_before, advance: height }
+            LineBox {
+                line,
+                height,
+                baseline,
+                gap_before,
+                advance: height,
+            }
         })
         .collect();
     // A row split in two around a floating picture: both halves share its top and baseline
@@ -879,13 +1021,22 @@ fn prepare_paragraph<'a>(
     }
 
     let (space_before, space_after) = (p.space_before * PX_PER_PT, p.space_after * PX_PER_PT);
-    let top_border_h = p.borders.top.as_ref().map_or(0.0, |b| b.space.max(3.0) + b.sz_px);
+    let top_border_h = p
+        .borders
+        .top
+        .as_ref()
+        .map_or(0.0, |b| b.space.max(3.0) + b.sz_px);
 
     let label_shift = match (&label, slots.first()) {
         (Some(g), Some(slot)) => (slot.left - g.text_offset).max(0.0),
         _ => 0.0,
     };
-    let text_boxes = p.images.iter().enumerate().filter_map(|(k, img)| Some((k, prepare_text_box(img, m)?))).collect();
+    let text_boxes = p
+        .images
+        .iter()
+        .enumerate()
+        .filter_map(|(k, img)| Some((k, prepare_text_box(img, m)?)))
+        .collect();
 
     ParagraphBox {
         p,
@@ -907,7 +1058,11 @@ fn prepare_paragraph<'a>(
     }
 }
 
-fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMeasurer) -> TableBox<'a> {
+fn prepare_table<'a>(
+    tbl: &'a TableInfo,
+    geo: &PageGeometry,
+    m: &mut dyn TextMeasurer,
+) -> TableBox<'a> {
     // Column widths come from the grid (twips → px); tables wider than the text area shrink
     let columns = tbl
         .rich_rows
@@ -920,7 +1075,11 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
     let grid_px: Vec<f64> = tbl.grid_cols.iter().map(|w| w / 15.0).collect();
     let grid_total: f64 = grid_px.iter().sum();
     let col_widths: Vec<f64> = if grid_total > 0.0 {
-        let scale = if grid_total > geo.printable_w * 1.05 { geo.printable_w / grid_total } else { 1.0 };
+        let scale = if grid_total > geo.printable_w * 1.05 {
+            geo.printable_w / grid_total
+        } else {
+            1.0
+        };
         let mut widths: Vec<f64> = grid_px.iter().map(|w| w * scale).collect();
         while widths.len() < columns {
             widths.push(geo.printable_w / columns as f64);
@@ -954,41 +1113,88 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
                 .map(|cell| {
                     // A cell spans `grid_span` grid columns (cells past the grid get an extra
                     // column of their own)
-                    let span = cell.grid_span.max(1).min(total_cols.saturating_sub(grid).max(1));
-                    let x = col_x.get(grid).copied().unwrap_or_else(|| *col_x.last().unwrap());
+                    let span = cell
+                        .grid_span
+                        .max(1)
+                        .min(total_cols.saturating_sub(grid).max(1));
+                    let x = col_x
+                        .get(grid)
+                        .copied()
+                        .unwrap_or_else(|| *col_x.last().unwrap());
                     let width = if grid + span <= total_cols {
                         col_x[grid + span] - col_x[grid]
                     } else {
                         geo.printable_w / total_cols.max(1) as f64
                     };
                     let dark = cell.bg_color.as_deref().is_some_and(is_dark_hex_str);
-                    let pad_left = cell.margins.as_ref().and_then(|m| m.left).unwrap_or(def_mar_left);
-                    let pad_right = cell.margins.as_ref().and_then(|m| m.right).unwrap_or(def_mar_right);
-                    let pad_top = cell.margins.as_ref().and_then(|m| m.top).unwrap_or(def_mar_top);
-                    let pad_bottom = cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(def_mar_bottom);
+                    let pad_left = cell
+                        .margins
+                        .as_ref()
+                        .and_then(|m| m.left)
+                        .unwrap_or(def_mar_left);
+                    let pad_right = cell
+                        .margins
+                        .as_ref()
+                        .and_then(|m| m.right)
+                        .unwrap_or(def_mar_right);
+                    let pad_top = cell
+                        .margins
+                        .as_ref()
+                        .and_then(|m| m.top)
+                        .unwrap_or(def_mar_top);
+                    let pad_bottom = cell
+                        .margins
+                        .as_ref()
+                        .and_then(|m| m.bottom)
+                        .unwrap_or(def_mar_bottom);
 
                     let paragraphs: Vec<ParagraphBox> = cell
                         .paragraphs
                         .iter()
                         .map(|p| {
                             let inner = (width - pad_left - pad_right).max(10.0);
-                            prepare_paragraph(p, x + pad_left, inner, dark.then_some("#FFFFFF"), m, &[])
+                            prepare_paragraph(
+                                p,
+                                x + pad_left,
+                                inner,
+                                dark.then_some("#FFFFFF"),
+                                m,
+                                &[],
+                            )
                         })
                         .collect();
-                    let content_height = pad_top + pad_bottom
-                        + paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
-                    let borders = resolve_cell_borders(tbl, cell, row_index, grid, span, total_cols);
+                    let content_height = pad_top
+                        + pad_bottom
+                        + paragraphs
+                            .iter()
+                            .map(|b| b.space_before + b.lines_height() + b.space_after)
+                            .sum::<f64>();
+                    let borders =
+                        resolve_cell_borders(tbl, cell, row_index, grid, span, total_cols);
                     let merge = match cell.v_merge.as_deref() {
                         Some("restart") => CellMerge::Start(1),
                         Some(_) => CellMerge::Covered,
                         None => CellMerge::None,
                     };
-                    let cell_box = CellBox { x, width, cell, borders, paragraphs, content_height, grid_col: grid, merge };
+                    let cell_box = CellBox {
+                        x,
+                        width,
+                        cell,
+                        borders,
+                        paragraphs,
+                        content_height,
+                        grid_col: grid,
+                        merge,
+                    };
                     grid += span;
                     cell_box
                 })
                 .collect();
-            RowBox { height: 0.0, cells, is_header: row.is_header }
+            RowBox {
+                height: 0.0,
+                cells,
+                is_header: row.is_header,
+            }
         })
         .collect();
 
@@ -999,7 +1205,8 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
             if rows[r].cells[c].merge == CellMerge::Covered {
                 let covered = r > 0
                     && rows[r - 1].cells.iter().any(|above| {
-                        above.grid_col == rows[r].cells[c].grid_col && matches!(above.merge, CellMerge::Start(_) | CellMerge::Covered)
+                        above.grid_col == rows[r].cells[c].grid_col
+                            && matches!(above.merge, CellMerge::Start(_) | CellMerge::Covered)
                     });
                 if !covered {
                     rows[r].cells[c].merge = CellMerge::None;
@@ -1011,14 +1218,21 @@ fn prepare_table<'a>(tbl: &'a TableInfo, geo: &PageGeometry, m: &mut dyn TextMea
             let col = rows[r].cells[c].grid_col;
             let mut span = 1;
             let mut bottom = None;
-            while let Some(below) = rows.get(r + span).and_then(|row| row.cells.iter().find(|x| x.grid_col == col)) {
+            while let Some(below) = rows
+                .get(r + span)
+                .and_then(|row| row.cells.iter().find(|x| x.grid_col == col))
+            {
                 if below.merge != CellMerge::Covered {
                     break;
                 }
                 bottom = below.borders.bottom.clone();
                 span += 1;
             }
-            rows[r].cells[c].merge = if span > 1 { CellMerge::Start(span) } else { CellMerge::None };
+            rows[r].cells[c].merge = if span > 1 {
+                CellMerge::Start(span)
+            } else {
+                CellMerge::None
+            };
             if span > 1 {
                 // The merged cell's bottom edge is the last covered cell's
                 rows[r].cells[c].borders.bottom = bottom;
@@ -1133,7 +1347,9 @@ impl<'a> Paginator<'a> {
         let order = |list: &mut Vec<(i64, usize, Vec<RenderCommand>)>| {
             let mut list = std::mem::take(list);
             list.sort_by_key(|(z, seq, _)| (*z, *seq));
-            list.into_iter().flat_map(|(_, _, cmds)| cmds).collect::<Vec<_>>()
+            list.into_iter()
+                .flat_map(|(_, _, cmds)| cmds)
+                .collect::<Vec<_>>()
         };
         let mut items = order(&mut self.behind);
         items.append(&mut self.items);
@@ -1144,7 +1360,13 @@ impl<'a> Paginator<'a> {
     fn new_page(&mut self) {
         let mut items = self.take_items();
         if let Some(wm) = self.watermark {
-            add_watermark_command(&mut items, wm, self.watermark_opacity, self.geo.page_w, self.geo.page_h);
+            add_watermark_command(
+                &mut items,
+                wm,
+                self.watermark_opacity,
+                self.geo.page_w,
+                self.geo.page_h,
+            );
         }
         self.pages.push(PageLayout {
             page_number: self.pages.len() + 1,
@@ -1161,7 +1383,11 @@ impl<'a> Paginator<'a> {
     }
 
     fn finish(mut self) -> Vec<PageLayout> {
-        if !self.items.is_empty() || !self.front.is_empty() || !self.behind.is_empty() || self.pages.is_empty() {
+        if !self.items.is_empty()
+            || !self.front.is_empty()
+            || !self.behind.is_empty()
+            || self.pages.is_empty()
+        {
             self.new_page();
         }
         self.pages
@@ -1194,7 +1420,13 @@ fn keep_chain_height(blocks: &[Block], start: usize) -> f64 {
             }
             Block::Paragraph(b) => {
                 let first_lines = if b.p.widow_control { 2 } else { 1 };
-                h += b.space_before + b.top_border_h + b.lines.iter().take(first_lines).map(|l| l.height).sum::<f64>();
+                h += b.space_before
+                    + b.top_border_h
+                    + b.lines
+                        .iter()
+                        .take(first_lines)
+                        .map(|l| l.height)
+                        .sum::<f64>();
                 break;
             }
             Block::Table(t) => {
@@ -1222,9 +1454,18 @@ fn place_paragraph(
 
     // contextualSpacing drops the spacing between paragraphs of the same style
     let same_style = flow.prev_style.as_deref() == Some(p.style.as_str());
-    let after_prev = if same_style && flow.prev_contextual { 0.0 } else { flow.pending_after };
-    let before = if same_style && p.contextual_spacing { 0.0 } else { b.space_before };
-    let lead = |pag: &Paginator| if pag.at_top() { 0.0 } else { after_prev } + before + b.top_border_h;
+    let after_prev = if same_style && flow.prev_contextual {
+        0.0
+    } else {
+        flow.pending_after
+    };
+    let before = if same_style && p.contextual_spacing {
+        0.0
+    } else {
+        b.space_before
+    };
+    let lead =
+        |pag: &Paginator| if pag.at_top() { 0.0 } else { after_prev } + before + b.top_border_h;
 
     // keepLines / keepNext: move to a new page when the block fits on a page but not here
     let total = b.lines_height();
@@ -1236,7 +1477,10 @@ fn place_paragraph(
         None
     };
     if let Some(h) = keep_height {
-        if !pag.at_top() && h + lead(pag) > pag.remaining() && h + before + b.top_border_h <= pag.capacity() {
+        if !pag.at_top()
+            && h + lead(pag) > pag.remaining()
+            && h + before + b.top_border_h <= pag.capacity()
+        {
             pag.new_page();
         }
     }
@@ -1272,10 +1516,13 @@ fn place_paragraph(
     let mut k0 = 0;
     let mut seg_top = pag.cursor_y;
     while k0 < n {
-        let chunk_end = (k0..n).find(|&k| b.lines[k].line.page_break_after).map_or(n, |k| k + 1);
+        let chunk_end = (k0..n)
+            .find(|&k| b.lines[k].line.page_break_after)
+            .map_or(n, |k| k + 1);
         let mut fit = 0;
         let mut h = 0.0;
-        while k0 + fit < chunk_end && h + b.lines[k0 + fit].outer_height() <= pag.remaining() + 0.01 {
+        while k0 + fit < chunk_end && h + b.lines[k0 + fit].outer_height() <= pag.remaining() + 0.01
+        {
             h += b.lines[k0 + fit].outer_height();
             fit += 1;
         }
@@ -1311,7 +1558,11 @@ fn place_paragraph(
 
     if let Some(ref bottom) = p.borders.bottom {
         let empty = b.lines.len() == 1 && b.lines[0].line.text.is_empty();
-        let y = if empty { pag.cursor_y } else { pag.cursor_y + 3.0 };
+        let y = if empty {
+            pag.cursor_y
+        } else {
+            pag.cursor_y + 3.0
+        };
         pag.items.push(RenderCommand::Line {
             x1: pag.geo.margin_left,
             y1: y,
@@ -1352,7 +1603,12 @@ fn place_floating_images(pag: &mut Paginator, b: &ParagraphBox, para_top: f64, r
     if register {
         register_floats(pag, b, para_top);
     }
-    for (k, img) in b.p.images.iter().enumerate().filter(|(_, img)| img.anchored) {
+    for (k, img) in
+        b.p.images
+            .iter()
+            .enumerate()
+            .filter(|(_, img)| img.anchored)
+    {
         let (x, y) = anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top);
         let cmds = drawing_commands(pag.images, b, k, x, y);
         pag.float(img.z_order, img.behind_text, cmds);
@@ -1360,12 +1616,22 @@ fn place_floating_images(pag: &mut Paginator, b: &ParagraphBox, para_top: f64, r
 }
 
 /// What draws picture or shape `k` of a paragraph with its top-left corner at (x, y)
-fn drawing_commands(images: &HashMap<String, String>, b: &ParagraphBox, k: usize, x: f64, y: f64) -> Vec<RenderCommand> {
+fn drawing_commands(
+    images: &HashMap<String, String>,
+    b: &ParagraphBox,
+    k: usize,
+    x: f64,
+    y: f64,
+) -> Vec<RenderCommand> {
     let img = &b.p.images[k];
     // Shapes read from legacy VML are drawn but cannot be selected or edited
     let body = (!img.vml).then_some((b.p.index, k));
     if img.shape.is_none() {
-        return images.get(&img.rel_id).map(|url| image_command(img, url, x, y, body)).into_iter().collect();
+        return images
+            .get(&img.rel_id)
+            .map(|url| image_command(img, url, x, y, body))
+            .into_iter()
+            .collect();
     }
     shape_commands(images, img, b.text_box(k), x, y, body)
 }
@@ -1395,19 +1661,28 @@ fn shape_commands(
         anchored: img.anchored,
         editable_text: false,
     }];
-    let (Some(tb), Some(content)) = (img.text_box.as_ref(), content) else { return out };
+    let (Some(tb), Some(content)) = (img.text_box.as_ref(), content) else {
+        return out;
+    };
     // Paragraphs numbered for editing (see `TEXT_BOX_BASE`) keep their caret lines
-    let editable = body.filter(|_| tb.paragraphs.first().is_some_and(|p| p.index >= crate::docx_parser::TEXT_BOX_BASE));
-    if let (Some(RenderCommand::Shape { editable_text, .. }), Some(_)) = (out.first_mut(), editable) {
+    let editable = body.filter(|_| {
+        tb.paragraphs
+            .first()
+            .is_some_and(|p| p.index >= crate::docx_parser::TEXT_BOX_BASE)
+    });
+    if let (Some(RenderCommand::Shape { editable_text, .. }), Some(_)) = (out.first_mut(), editable)
+    {
         *editable_text = true;
     }
     let inner_h = img.height - tb.inset_top - tb.inset_bottom;
     let free = (inner_h - content.height).max(0.0);
-    let mut top = y + tb.inset_top + match tb.v_anchor.as_str() {
-        "ctr" => free / 2.0,
-        "b" => free,
-        _ => 0.0,
-    };
+    let mut top = y
+        + tb.inset_top
+        + match tb.v_anchor.as_str() {
+            "ctr" => free / 2.0,
+            "b" => free,
+            _ => 0.0,
+        };
     for pb in &content.paragraphs {
         top += pb.space_before;
         for idx in 0..pb.lines.len() {
@@ -1418,10 +1693,18 @@ fn shape_commands(
             for li in &lb.line.images {
                 let inner = &pb.p.images[li.index];
                 if let Some(url) = images.get(&inner.rel_id) {
-                    out.push(image_command(inner, url, li.x, top + lb.baseline - li.height, None));
+                    out.push(image_command(
+                        inner,
+                        url,
+                        li.x,
+                        top + lb.baseline - li.height,
+                        None,
+                    ));
                 }
             }
-            out[start..].iter_mut().for_each(|cmd| shift_into_box(cmd, x, editable));
+            out[start..]
+                .iter_mut()
+                .for_each(|cmd| shift_into_box(cmd, x, editable));
             top += lb.advance;
         }
         top += pb.space_after;
@@ -1494,7 +1777,9 @@ impl Exclusion {
         if self.top >= y1 || self.bottom <= y0 {
             return None;
         }
-        let Some(poly) = &self.polygon else { return Some((self.left, self.right)) };
+        let Some(poly) = &self.polygon else {
+            return Some((self.left, self.right));
+        };
         let mut xs: Vec<f64> = Vec::new();
         for (i, &(px, py)) in poly.iter().enumerate() {
             let (qx, qy) = poly[(i + 1) % poly.len()];
@@ -1509,7 +1794,8 @@ impl Exclusion {
         }
         let min = xs.iter().copied().fold(f64::INFINITY, f64::min);
         let max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        (min.is_finite() && max.is_finite()).then_some((min - self.dist_left, max + self.dist_right))
+        (min.is_finite() && max.is_finite())
+            .then_some((min - self.dist_left, max + self.dist_right))
     }
 }
 
@@ -1527,12 +1813,22 @@ struct LineSlot {
 
 /// Records the text-wrapping pictures anchored in `b` as exclusions of the current page
 fn register_floats(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
-    for (k, img) in b.p.images.iter().enumerate().filter(|(_, img)| img.wraps_text()) {
-        if pag.exclusions.iter().any(|e| e.paragraph == b.p.index && e.image == k) {
+    for (k, img) in
+        b.p.images
+            .iter()
+            .enumerate()
+            .filter(|(_, img)| img.wraps_text())
+    {
+        if pag
+            .exclusions
+            .iter()
+            .any(|e| e.paragraph == b.p.index && e.image == k)
+        {
             continue;
         }
         let (x, y) = anchored_position(img, pag.geo, (b.left, b.left + b.width), para_top);
-        let contour = matches!(img.wrap.as_str(), "tight" | "through") && img.wrap_polygon.len() >= 3;
+        let contour =
+            matches!(img.wrap.as_str(), "tight" | "through") && img.wrap_polygon.len() >= 3;
         pag.exclusions.push(Exclusion {
             left: x - img.dist_left,
             right: x + img.width + img.dist_right,
@@ -1542,7 +1838,12 @@ fn register_floats(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
             side: img.wrap_side.clone(),
             paragraph: b.p.index,
             image: k,
-            polygon: contour.then(|| img.wrap_polygon.iter().map(|[fx, fy]| (x + fx * img.width, y + fy * img.height)).collect()),
+            polygon: contour.then(|| {
+                img.wrap_polygon
+                    .iter()
+                    .map(|[fx, fy]| (x + fx * img.width, y + fy * img.height))
+                    .collect()
+            }),
             dist_left: img.dist_left,
             dist_right: img.dist_right,
         });
@@ -1552,14 +1853,25 @@ fn register_floats(pag: &mut Paginator, b: &ParagraphBox, para_top: f64) {
 /// Where each line starting at `start_y` may go, given the exclusions of the page.
 /// `heights` are the expected line heights (the last one repeats). A row with room on both
 /// sides of a picture (`bothSides`) gets two slots, the second marked `same_row`.
-fn line_slots(exclusions: &[Exclusion], column: (f64, f64), start_y: f64, page_bottom: f64, heights: &[f64]) -> Vec<LineSlot> {
+fn line_slots(
+    exclusions: &[Exclusion],
+    column: (f64, f64),
+    start_y: f64,
+    page_bottom: f64,
+    heights: &[f64],
+) -> Vec<LineSlot> {
     let (col_left, col_right) = column;
     let mut slots = Vec::new();
     let mut top = start_y;
     let max_lines = heights.len() * 4 + 16;
     let mut n = 0;
     while n < max_lines && top < page_bottom {
-        let h = heights.get(n).or(heights.last()).copied().unwrap_or(16.0).max(1.0);
+        let h = heights
+            .get(n)
+            .or(heights.last())
+            .copied()
+            .unwrap_or(16.0)
+            .max(1.0);
         let mut y = top;
         let mut intervals: Vec<(f64, f64)> = Vec::new();
         for _ in 0..16 {
@@ -1609,7 +1921,10 @@ fn line_slots(exclusions: &[Exclusion], column: (f64, f64), start_y: f64, page_b
             }
             // No room beside the pictures: continue below the first one that ends
             intervals.clear();
-            let below = overlapping.iter().map(|(e, _, _)| e.bottom).fold(f64::INFINITY, f64::min);
+            let below = overlapping
+                .iter()
+                .map(|(e, _, _)| e.bottom)
+                .fold(f64::INFINITY, f64::min);
             if !below.is_finite() || below <= y {
                 break;
             }
@@ -1624,11 +1939,19 @@ fn line_slots(exclusions: &[Exclusion], column: (f64, f64), start_y: f64, page_b
             intervals.retain(|i| widest.contains(i));
         }
         if intervals.is_empty() {
-            slots.push(LineSlot { gap, ..LineSlot::default() });
+            slots.push(LineSlot {
+                gap,
+                ..LineSlot::default()
+            });
             n += 1;
         } else {
             for (j, &(a, b)) in intervals.iter().enumerate() {
-                slots.push(LineSlot { left: a - col_left, right: col_right - b, gap: if j == 0 { gap } else { 0.0 }, same_row: j > 0 });
+                slots.push(LineSlot {
+                    left: a - col_left,
+                    right: col_right - b,
+                    gap: if j == 0 { gap } else { 0.0 },
+                    same_row: j > 0,
+                });
             }
             n += intervals.len();
         }
@@ -1642,7 +1965,12 @@ fn line_slots(exclusions: &[Exclusion], column: (f64, f64), start_y: f64, page_b
 
 /// The paragraph laid out again around the floating pictures of the page, or `None` when
 /// none of them reaches its lines
-fn wrap_around_floats<'a>(pag: &Paginator, b: &ParagraphBox<'a>, top: f64, m: &mut dyn TextMeasurer) -> Option<ParagraphBox<'a>> {
+fn wrap_around_floats<'a>(
+    pag: &Paginator,
+    b: &ParagraphBox<'a>,
+    top: f64,
+    m: &mut dyn TextMeasurer,
+) -> Option<ParagraphBox<'a>> {
     if pag.exclusions.is_empty() {
         return None;
     }
@@ -1656,13 +1984,22 @@ fn wrap_around_floats<'a>(pag: &Paginator, b: &ParagraphBox<'a>, top: f64, m: &m
     // Narrower lines may change line heights (pictures, mixed sizes): settle once more
     let heights: Vec<f64> = first.lines.iter().map(|l| l.height).collect();
     let again = line_slots(&pag.exclusions, column, top, pag.geo.bottom, &heights);
-    let mut wrapped = if again == slots { first } else { prepare_paragraph(b.p, b.left, b.width, None, m, &again) };
+    let mut wrapped = if again == slots {
+        first
+    } else {
+        prepare_paragraph(b.p, b.left, b.width, None, m, &again)
+    };
     wrapped.wrap_page = Some(pag.pages.len());
     Some(wrapped)
 }
 
 /// Top-left corner of a floating picture, from what its position is relative to
-fn anchored_position(img: &ImageRef, geo: &PageGeometry, column: (f64, f64), para_top: f64) -> (f64, f64) {
+fn anchored_position(
+    img: &ImageRef,
+    geo: &PageGeometry,
+    column: (f64, f64),
+    para_top: f64,
+) -> (f64, f64) {
     let (left, right) = match img.h_relative.as_str() {
         "page" => (0.0, geo.page_w),
         "leftMargin" | "insideMargin" => (0.0, geo.margin_left),
@@ -1693,7 +2030,13 @@ fn anchored_position(img: &ImageRef, geo: &PageGeometry, column: (f64, f64), par
 }
 
 /// `body`: the picture's paragraph and index among its pictures
-fn image_command(img: &ImageRef, data_url: &str, x: f64, y: f64, body: Option<(usize, usize)>) -> RenderCommand {
+fn image_command(
+    img: &ImageRef,
+    data_url: &str,
+    x: f64,
+    y: f64,
+    body: Option<(usize, usize)>,
+) -> RenderCommand {
     RenderCommand::Image {
         data_url: data_url.to_string(),
         x,
@@ -1783,7 +2126,9 @@ fn push_line_items(items: &mut Vec<RenderCommand>, b: &ParagraphBox, idx: usize,
 
 /// Vertical accent bar for the part of the paragraph on the current page
 fn draw_left_border(pag: &mut Paginator, b: &ParagraphBox, seg_top: f64) {
-    let Some(ref left) = b.p.borders.left else { return };
+    let Some(ref left) = b.p.borders.left else {
+        return;
+    };
     if pag.cursor_y <= seg_top {
         return;
     }
@@ -1818,7 +2163,8 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
     // unless they would fill most of it
     let header_rows = t.rows.iter().take_while(|r| r.is_header).count();
     let header_height: f64 = t.rows[..header_rows].iter().map(|r| r.height).sum();
-    let repeat_header = header_rows > 0 && header_rows < t.rows.len() && header_height <= pag.capacity() / 2.0;
+    let repeat_header =
+        header_rows > 0 && header_rows < t.rows.len() && header_height <= pag.capacity() / 2.0;
 
     for (row_idx, row) in t.rows.iter().enumerate() {
         // Rows are not split across pages, and a merged block stays on one page when it fits
@@ -1826,14 +2172,33 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
             .cells
             .iter()
             .filter_map(|c| match c.merge {
-                CellMerge::Start(span) => Some(t.rows[row_idx..(row_idx + span).min(t.rows.len())].iter().map(|r| r.height).sum::<f64>()),
+                CellMerge::Start(span) => Some(
+                    t.rows[row_idx..(row_idx + span).min(t.rows.len())]
+                        .iter()
+                        .map(|r| r.height)
+                        .sum::<f64>(),
+                ),
                 _ => None,
             })
             .fold(row.height, f64::max);
-        let need = if block_height <= pag.capacity() { block_height } else { row.height };
+        let need = if block_height <= pag.capacity() {
+            block_height
+        } else {
+            row.height
+        };
         if need > pag.remaining() && !pag.at_top() {
             for m in open.iter_mut() {
-                draw_cell(pag, t.tbl, m.cell, m.row, m.col, m.top, pag.cursor_y - m.top, m.is_header, !m.content_drawn);
+                draw_cell(
+                    pag,
+                    t.tbl,
+                    m.cell,
+                    m.row,
+                    m.col,
+                    m.top,
+                    pag.cursor_y - m.top,
+                    m.is_header,
+                    !m.content_drawn,
+                );
                 m.content_drawn = true;
             }
             pag.new_page();
@@ -1852,7 +2217,10 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
                 let below = pag
                     .exclusions
                     .iter()
-                    .filter(|e| e.x_range(y, y + row.height).is_some_and(|(l, r)| l < right && r > left))
+                    .filter(|e| {
+                        e.x_range(y, y + row.height)
+                            .is_some_and(|(l, r)| l < right && r > left)
+                    })
                     .map(|e| e.bottom)
                     .fold(f64::NEG_INFINITY, f64::max);
                 if !below.is_finite() || below <= y {
@@ -1862,7 +2230,17 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
             }
             if row.height > pag.remaining() && !pag.at_top() {
                 for m in open.iter_mut() {
-                    draw_cell(pag, t.tbl, m.cell, m.row, m.col, m.top, pag.cursor_y - m.top, m.is_header, !m.content_drawn);
+                    draw_cell(
+                        pag,
+                        t.tbl,
+                        m.cell,
+                        m.row,
+                        m.col,
+                        m.top,
+                        pag.cursor_y - m.top,
+                        m.is_header,
+                        !m.content_drawn,
+                    );
                     m.content_drawn = true;
                 }
                 pag.new_page();
@@ -1877,7 +2255,17 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
         let top = pag.cursor_y;
         for (col_idx, cell) in row.cells.iter().enumerate() {
             match cell.merge {
-                CellMerge::None => draw_cell(pag, t.tbl, cell, row_idx, col_idx, top, row.height, row.is_header, true),
+                CellMerge::None => draw_cell(
+                    pag,
+                    t.tbl,
+                    cell,
+                    row_idx,
+                    col_idx,
+                    top,
+                    row.height,
+                    row.is_header,
+                    true,
+                ),
                 CellMerge::Start(span) => open.push(OpenMerge {
                     cell,
                     row: row_idx,
@@ -1894,12 +2282,32 @@ fn place_table(pag: &mut Paginator, t: &TableBox, flow: &mut FlowState) {
         let (done, rest): (Vec<_>, Vec<_>) = open.into_iter().partition(|m| m.last_row <= row_idx);
         open = rest;
         for m in done {
-            draw_cell(pag, t.tbl, m.cell, m.row, m.col, m.top, pag.cursor_y - m.top, m.is_header, !m.content_drawn);
+            draw_cell(
+                pag,
+                t.tbl,
+                m.cell,
+                m.row,
+                m.col,
+                m.top,
+                pag.cursor_y - m.top,
+                m.is_header,
+                !m.content_drawn,
+            );
         }
     }
     // A merge running past the last row (malformed table) still gets drawn
     for m in open {
-        draw_cell(pag, t.tbl, m.cell, m.row, m.col, m.top, pag.cursor_y - m.top, m.is_header, !m.content_drawn);
+        draw_cell(
+            pag,
+            t.tbl,
+            m.cell,
+            m.row,
+            m.col,
+            m.top,
+            pag.cursor_y - m.top,
+            m.is_header,
+            !m.content_drawn,
+        );
     }
 
     flow.pending_after = 0.0;
@@ -1916,7 +2324,10 @@ fn repeat_header_rows(pag: &mut Paginator, t: &TableBox, count: usize) {
         for (col_idx, cell) in row.cells.iter().enumerate() {
             let height = match cell.merge {
                 CellMerge::Covered => continue,
-                CellMerge::Start(span) => t.rows[row_idx..(row_idx + span).min(count)].iter().map(|r| r.height).sum(),
+                CellMerge::Start(span) => t.rows[row_idx..(row_idx + span).min(count)]
+                    .iter()
+                    .map(|r| r.height)
+                    .sum(),
                 CellMerge::None => row.height,
             };
             draw_cell(pag, t.tbl, cell, row_idx, col_idx, top, height, true, true);
@@ -1967,9 +2378,23 @@ fn draw_cell(
         return;
     }
 
-    let pad_top = cell.cell.margins.as_ref().and_then(|m| m.top).unwrap_or(tbl.cell_margins.top.unwrap_or(CELL_PAD_Y));
-    let pad_bottom = cell.cell.margins.as_ref().and_then(|m| m.bottom).unwrap_or(tbl.cell_margins.bottom.unwrap_or(CELL_PAD_Y));
-    let text_content_h = cell.paragraphs.iter().map(|b| b.space_before + b.lines_height() + b.space_after).sum::<f64>();
+    let pad_top = cell
+        .cell
+        .margins
+        .as_ref()
+        .and_then(|m| m.top)
+        .unwrap_or(tbl.cell_margins.top.unwrap_or(CELL_PAD_Y));
+    let pad_bottom = cell
+        .cell
+        .margins
+        .as_ref()
+        .and_then(|m| m.bottom)
+        .unwrap_or(tbl.cell_margins.bottom.unwrap_or(CELL_PAD_Y));
+    let text_content_h = cell
+        .paragraphs
+        .iter()
+        .map(|b| b.space_before + b.lines_height() + b.space_after)
+        .sum::<f64>();
     let extra_v = (height - text_content_h - pad_top - pad_bottom).max(0.0);
     let v_offset = match cell.cell.valign.as_deref() {
         Some("center") => extra_v / 2.0,
@@ -2100,10 +2525,16 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
             let is_newline = ch == '\n' || ch == '\r' || ch == '\u{000b}';
             let is_break = is_newline || ch == PAGE_BREAK || ch == '\t';
             if (is_break || ch.is_whitespace()) && !text.is_empty() {
-                segments.push(seg(SegmentKind::Text(std::mem::take(&mut text)), text_start));
+                segments.push(seg(
+                    SegmentKind::Text(std::mem::take(&mut text)),
+                    text_start,
+                ));
             }
             if (is_break || !ch.is_whitespace()) && !spaces.is_empty() {
-                segments.push(seg(SegmentKind::Space(std::mem::take(&mut spaces)), spaces_start));
+                segments.push(seg(
+                    SegmentKind::Space(std::mem::take(&mut spaces)),
+                    spaces_start,
+                ));
             }
             if is_newline {
                 segments.push(seg(SegmentKind::Newline, pos));
@@ -2115,7 +2546,11 @@ fn extract_segments(runs: &[RunInfo], default_color: &str, default_fs: f64) -> V
                         if spaces.is_empty() {
                             spaces_start = pos;
                         }
-                        spaces.push(if c == '\u{2028}' || c == '\u{2029}' || c == '\u{00a0}' { ' ' } else { c });
+                        spaces.push(if c == '\u{2028}' || c == '\u{2029}' || c == '\u{00a0}' {
+                            ' '
+                        } else {
+                            c
+                        });
                     }
                     c => {
                         if text.is_empty() {
@@ -2183,7 +2618,13 @@ fn group_into_units(segments: Vec<LayoutSegment>) -> Vec<AtomicUnit> {
 
 /// Appends text to the line, growing the last run when it has the same format (runs before
 /// `barrier` stay as they are: an inline picture follows them)
-fn append_segment_to_runs(runs: &mut Vec<TextRun>, text: &str, seg: &LayoutSegment, width: f64, barrier: usize) {
+fn append_segment_to_runs(
+    runs: &mut Vec<TextRun>,
+    text: &str,
+    seg: &LayoutSegment,
+    width: f64,
+    barrier: usize,
+) {
     let can_grow = runs.len() > barrier;
     if let Some(last) = runs.last_mut().filter(|_| can_grow) {
         if last.bold == seg.bold
@@ -2250,12 +2691,20 @@ fn layout_paragraph_lines(
         .unwrap_or_else(|| (p.indent_left + p.indent_first_line).max(0.0));
     let slot = |idx: usize| slots.get(idx).copied().unwrap_or_default();
     // A floating picture beside the line moves its edge unless the indent already clears it
-    let line_indent = |idx: usize| (if idx == 0 { first_line_indent } else { p.indent_left.max(0.0) }).max(slot(idx).left);
+    let line_indent = |idx: usize| {
+        (if idx == 0 {
+            first_line_indent
+        } else {
+            p.indent_left.max(0.0)
+        })
+        .max(slot(idx).left)
+    };
     let right_indent = |idx: usize| p.indent_right.max(0.0).max(slot(idx).right);
     // Indents never squeeze a line below 60 px, but a narrower column (a thin text box or
     // table cell) keeps its own width so centered and right-aligned text stays inside it
     let min_width = 60.0_f64.min(printable_width).max(1.0);
-    let max_width = |idx: usize| (printable_width - line_indent(idx) - right_indent(idx)).max(min_width);
+    let max_width =
+        |idx: usize| (printable_width - line_indent(idx) - right_indent(idx)).max(min_width);
     let flush = |mut runs: Vec<TextRun>,
                  images: Vec<(usize, f64, usize)>,
                  line_w: f64,
@@ -2271,20 +2720,31 @@ fn layout_paragraph_lines(
             _ => margin_left + indent,
         };
         // Justified lines (except the last one) stretch their spaces to fill the line
-        let spaces = |r: &TextRun| if r.text == "\t" { 0 } else { r.text.matches(' ').count() };
+        let spaces = |r: &TextRun| {
+            if r.text == "\t" {
+                0
+            } else {
+                r.text.matches(' ').count()
+            }
+        };
         let space_count: usize = runs.iter().map(spaces).sum();
         let gap = max_w - line_w;
-        let space_extra = if p.align == "both" && !ends_paragraph_line && space_count > 0 && gap > 0.0 {
-            gap / space_count as f64
-        } else {
-            0.0
-        };
+        let space_extra =
+            if p.align == "both" && !ends_paragraph_line && space_count > 0 && gap > 0.0 {
+                gap / space_count as f64
+            } else {
+                0.0
+            };
         // Spaces stretched before each run, for the pictures between runs
         let mut stretched = Vec::with_capacity(runs.len() + 1);
         let mut acc = 0.0;
         let mut cur = x;
         for (i, r) in runs.iter_mut().enumerate() {
-            cur += images.iter().filter(|&&(_, _, before)| before == i).map(|&(k, _, _)| p.images[k].width).sum::<f64>();
+            cur += images
+                .iter()
+                .filter(|&&(_, _, before)| before == i)
+                .map(|&(k, _, _)| p.images[k].width)
+                .sum::<f64>();
             stretched.push(acc);
             r.x = cur + acc;
             acc += space_extra * spaces(r) as f64;
@@ -2295,7 +2755,11 @@ fn layout_paragraph_lines(
             .into_iter()
             .map(|(index, rel_x, runs_before)| {
                 let img = &p.images[index];
-                LineImage { index, x: x + rel_x + stretched[runs_before], height: img.height }
+                LineImage {
+                    index,
+                    x: x + rel_x + stretched[runs_before],
+                    height: img.height,
+                }
             })
             .collect();
         LayoutLine {
@@ -2327,14 +2791,25 @@ fn layout_paragraph_lines(
 
     let total_chars = p.text.chars().count();
     if p.text.trim().is_empty() && p.runs.is_empty() && inline.is_empty() {
-        return vec![flush(Vec::new(), Vec::new(), 0.0, 0, true, false, (0, total_chars))];
+        return vec![flush(
+            Vec::new(),
+            Vec::new(),
+            0.0,
+            0,
+            true,
+            false,
+            (0, total_chars),
+        )];
     }
 
     // Raw runs with font sizes scaled to px
     let source_runs: Vec<RunInfo> = if !p.runs.is_empty() {
         p.runs
             .iter()
-            .map(|r| RunInfo { font_size: r.font_size.map(|pt| pt * PX_PER_PT), ..r.clone() })
+            .map(|r| RunInfo {
+                font_size: r.font_size.map(|pt| pt * PX_PER_PT),
+                ..r.clone()
+            })
             .collect()
     } else {
         vec![RunInfo {
@@ -2342,15 +2817,25 @@ fn layout_paragraph_lines(
             bold: p.bold,
             italic: p.italic,
             underline: false,
-            color: if !p.color.is_empty() { p.color.clone() } else { default_color.to_string() },
+            color: if !p.color.is_empty() {
+                p.color.clone()
+            } else {
+                default_color.to_string()
+            },
             font_size: p.font_size.map(|pt| pt * PX_PER_PT),
             font_family: p.font_family.clone(),
             ..Default::default()
         }]
     };
-    let total_chars = source_runs.iter().map(|r| r.text.chars().count()).sum::<usize>();
+    let total_chars = source_runs
+        .iter()
+        .map(|r| r.text.chars().count())
+        .sum::<usize>();
 
-    let units = with_inline_images(group_into_units(extract_segments(&source_runs, default_color, font_size)), &inline);
+    let units = with_inline_images(
+        group_into_units(extract_segments(&source_runs, default_color, font_size)),
+        &inline,
+    );
 
     let mut lines = Vec::new();
     let mut runs: Vec<TextRun> = Vec::new();
@@ -2368,7 +2853,15 @@ fn layout_paragraph_lines(
 
     macro_rules! new_line {
         ($ends:expr, $page_break:expr, $end:expr) => {{
-            lines.push(flush(std::mem::take(&mut runs), std::mem::take(&mut line_images), line_w, idx, $ends, $page_break, (line_start, $end)));
+            lines.push(flush(
+                std::mem::take(&mut runs),
+                std::mem::take(&mut line_images),
+                line_w,
+                idx,
+                $ends,
+                $page_break,
+                (line_start, $end),
+            ));
             line_w = 0.0;
             barrier = 0;
             idx += 1;
@@ -2522,11 +3015,16 @@ fn layout_paragraph_lines(
                             let offset = seg.start + i;
                             let text = ch.to_string();
                             let w = seg_width(m, seg, &text, family_css);
-                            if line_w + w > max_width(idx) && (!runs.is_empty() || !line_images.is_empty()) {
+                            if line_w + w > max_width(idx)
+                                && (!runs.is_empty() || !line_images.is_empty())
+                            {
                                 new_line!(false, false, offset);
                                 line_start = offset;
                             }
-                            let piece = LayoutSegment { start: offset, ..seg.clone() };
+                            let piece = LayoutSegment {
+                                start: offset,
+                                ..seg.clone()
+                            };
                             append_segment_to_runs(&mut runs, &text, &piece, w, barrier);
                             line_w += w;
                         }
@@ -2555,7 +3053,15 @@ fn layout_paragraph_lines(
     }
     if !runs.is_empty() || !line_images.is_empty() || ended_with_break || lines.is_empty() {
         // A paragraph ending in a manual break still shows an (empty) last line
-        lines.push(flush(runs, line_images, line_w, idx, true, false, (line_start, total_chars)));
+        lines.push(flush(
+            runs,
+            line_images,
+            line_w,
+            idx,
+            true,
+            false,
+            (line_start, total_chars),
+        ));
     }
     lines
 }
@@ -2592,7 +3098,13 @@ fn with_inline_images(units: Vec<AtomicUnit>, images: &[(usize, usize)]) -> Vec<
     out
 }
 
-fn add_watermark_command(items: &mut Vec<RenderCommand>, text: &str, opacity: f64, page_w: f64, page_h: f64) {
+fn add_watermark_command(
+    items: &mut Vec<RenderCommand>,
+    text: &str,
+    opacity: f64,
+    page_w: f64,
+    page_h: f64,
+) {
     items.insert(
         0,
         RenderCommand::Watermark {
@@ -2622,8 +3134,17 @@ fn css_font_stack(family: &str) -> String {
         "Arimo, Arial, Helvetica, sans-serif".to_string()
     } else if f.contains("aptos") {
         "Aptos, Calibri, Carlito, 'Segoe UI', sans-serif".to_string()
-    } else if f.contains("sans") || f.contains("gothic") || f.contains("tahoma") || f.contains("verdana") || f.contains("segoe") || f.contains("roboto") {
-        format!("'{}', Carlito, Arimo, 'Segoe UI', Inter, sans-serif", family)
+    } else if f.contains("sans")
+        || f.contains("gothic")
+        || f.contains("tahoma")
+        || f.contains("verdana")
+        || f.contains("segoe")
+        || f.contains("roboto")
+    {
+        format!(
+            "'{}', Carlito, Arimo, 'Segoe UI', Inter, sans-serif",
+            family
+        )
     } else {
         format!("'{}', Tinos, 'Times New Roman', serif", family)
     }
@@ -2639,7 +3160,13 @@ fn get_paragraph_typography(p: &ParagraphInfo) -> (f64, f64, &'static str, Strin
         .unwrap_or("Times New Roman");
     let font_size_px = p.font_size.unwrap_or(10.0) * PX_PER_PT;
     let weight = if p.bold { "700" } else { "400" };
-    (font_size_px, font_size_px, weight, css_font_stack(family), css_color(&p.color, "#000000"))
+    (
+        font_size_px,
+        font_size_px,
+        weight,
+        css_font_stack(family),
+        css_color(&p.color, "#000000"),
+    )
 }
 
 /// Where a paragraph's list label goes, relative to the left margin (px)
@@ -2660,7 +3187,10 @@ fn list_label_geometry(
     m: &mut dyn TextMeasurer,
 ) -> Option<ListLabelGeometry> {
     let label = p.list_label.as_ref()?;
-    let font_size = label.font_size.map(|pt| pt * PX_PER_PT).unwrap_or(paragraph_font_size);
+    let font_size = label
+        .font_size
+        .map(|pt| pt * PX_PER_PT)
+        .unwrap_or(paragraph_font_size);
     let label_offset = (p.indent_left + p.indent_first_line).max(0.0);
     let font = FontSpec {
         family: label.font_family.as_deref().unwrap_or(family_css),
@@ -2678,7 +3208,12 @@ fn list_label_geometry(
         const DEFAULT_TAB: f64 = 48.0;
         (label_end / DEFAULT_TAB).ceil() * DEFAULT_TAB
     };
-    Some(ListLabelGeometry { label_offset, label_width, text_offset, font_size })
+    Some(ListLabelGeometry {
+        label_offset,
+        label_width,
+        text_offset,
+        font_size,
+    })
 }
 
 /// Estimates text width with proportional font metrics
@@ -2722,12 +3257,18 @@ mod tests {
     }
 
     fn lines(index: usize, n: usize) -> ParagraphInfo {
-        let text = (0..n).map(|i| format!("l{}", i)).collect::<Vec<_>>().join("\n");
+        let text = (0..n)
+            .map(|i| format!("l{}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         para(index, &text)
     }
 
     fn layout(paragraphs: Vec<ParagraphInfo>) -> DocumentLayout {
-        let elements: Vec<DocumentElement> = paragraphs.into_iter().map(DocumentElement::Paragraph).collect();
+        let elements: Vec<DocumentElement> = paragraphs
+            .into_iter()
+            .map(DocumentElement::Paragraph)
+            .collect();
         LayoutEngine::new().compute_layout(
             &elements,
             "FFFFFF",
@@ -2747,11 +3288,13 @@ mod tests {
             .flat_map(|page| {
                 page.items.iter().filter_map(move |item| match item {
                     // Body lines only: not list labels or page decorations ("Página 1 de 2")
-                    RenderCommand::Text { paragraph_index, y, height, line: Some(_), .. }
-                        if *paragraph_index == paragraph =>
-                    {
-                        Some((page.page_number, *y, *height))
-                    }
+                    RenderCommand::Text {
+                        paragraph_index,
+                        y,
+                        height,
+                        line: Some(_),
+                        ..
+                    } if *paragraph_index == paragraph => Some((page.page_number, *y, *height)),
                     _ => None,
                 })
             })
@@ -2759,12 +3302,18 @@ mod tests {
     }
 
     fn pages_of(layout: &DocumentLayout, paragraph: usize) -> Vec<usize> {
-        placed(layout, paragraph).into_iter().map(|(p, _, _)| p).collect()
+        placed(layout, paragraph)
+            .into_iter()
+            .map(|(p, _, _)| p)
+            .collect()
     }
 
     #[test]
     fn test_manual_page_break_moves_following_text() {
-        let l = layout(vec![para(0, &format!("uno{}dos", crate::docx_parser::PAGE_BREAK))]);
+        let l = layout(vec![para(
+            0,
+            &format!("uno{}dos", crate::docx_parser::PAGE_BREAK),
+        )]);
         assert_eq!(pages_of(&l, 0), vec![1, 2]);
     }
 
@@ -2835,9 +3384,21 @@ mod tests {
         double.line_spacing = Some(2.0);
         let l = layout(vec![exact, at_least, double]);
         let h = |i| placed(&l, i)[0].2;
-        assert!((h(0) - 32.0).abs() < 0.01, "24pt exact = 32px, got {}", h(0));
-        assert!((h(1) - 18.4).abs() < 0.01, "atLeast below natural keeps natural, got {}", h(1));
-        assert!((h(2) - 36.8).abs() < 0.01, "double = 2 × natural, got {}", h(2));
+        assert!(
+            (h(0) - 32.0).abs() < 0.01,
+            "24pt exact = 32px, got {}",
+            h(0)
+        );
+        assert!(
+            (h(1) - 18.4).abs() < 0.01,
+            "atLeast below natural keeps natural, got {}",
+            h(1)
+        );
+        assert!(
+            (h(2) - 36.8).abs() < 0.01,
+            "double = 2 × natural, got {}",
+            h(2)
+        );
     }
 
     #[test]
@@ -2857,7 +3418,11 @@ mod tests {
         assert!((gap(&l) - (18.4 + 16.0)).abs() < 0.01, "got {}", gap(&l));
 
         let l = layout(vec![spaced(0, true), spaced(1, true)]);
-        assert!((gap(&l) - 18.4).abs() < 0.01, "same-style contextual spacing collapses, got {}", gap(&l));
+        assert!(
+            (gap(&l) - 18.4).abs() < 0.01,
+            "same-style contextual spacing collapses, got {}",
+            gap(&l)
+        );
     }
 
     #[test]
@@ -2907,7 +3472,12 @@ mod tests {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, item)| match item {
-                        RenderCommand::Image { x, y, is_background, .. } => Some((*x, *y, *is_background, i)),
+                        RenderCommand::Image {
+                            x,
+                            y,
+                            is_background,
+                            ..
+                        } => Some((*x, *y, *is_background, i)),
                         _ => None,
                     })
                     .collect()
@@ -2924,12 +3494,23 @@ mod tests {
             .into_iter()
             .map(DocumentElement::Paragraph)
             .collect();
-        let images = HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
+        let images =
+            HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
         let l = LayoutEngine::new().with_images(images).compute_layout(
-            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
         );
         let per_page = images_per_page(&l);
-        assert_eq!(per_page.iter().map(|p| p.len()).collect::<Vec<_>>(), vec![0, 1, 0], "one page only");
+        assert_eq!(
+            per_page.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![0, 1, 0],
+            "one page only"
+        );
 
         // Positioned from the page edge and the paragraph's top, and drawn before the text
         let (x, y, behind, index) = per_page[1][0];
@@ -2937,12 +3518,19 @@ mod tests {
             .items
             .iter()
             .find_map(|item| match item {
-                RenderCommand::Text { paragraph_index: 1, line: Some(range), .. } => Some(range.top),
+                RenderCommand::Text {
+                    paragraph_index: 1,
+                    line: Some(range),
+                    ..
+                } => Some(range.top),
                 _ => None,
             })
             .unwrap();
         assert_eq!(x, 10.0, "10px from the page edge");
-        assert!((y - (para_top - 20.0)).abs() < 1e-9, "20px above its paragraph");
+        assert!(
+            (y - (para_top - 20.0)).abs() < 1e-9,
+            "20px above its paragraph"
+        );
         assert!(behind);
         assert_eq!(index, 0, "behind the text: first thing drawn on the page");
     }
@@ -2952,11 +3540,25 @@ mod tests {
         use crate::docx_parser::PlacedImage;
         let header = HeaderFooterInfo {
             has_header: true,
-            header_images: vec![PlacedImage { image: picture(false), data_url: "data:image/png;base64,AAAA".into() }],
+            header_images: vec![PlacedImage {
+                image: picture(false),
+                data_url: "data:image/png;base64,AAAA".into(),
+            }],
             ..Default::default()
         };
-        let elements: Vec<DocumentElement> = vec![lines(0, 120)].into_iter().map(DocumentElement::Paragraph).collect();
-        let l = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &header, None, None, 0.0);
+        let elements: Vec<DocumentElement> = vec![lines(0, 120)]
+            .into_iter()
+            .map(DocumentElement::Paragraph)
+            .collect();
+        let l = LayoutEngine::new().compute_layout(
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &header,
+            None,
+            None,
+            0.0,
+        );
         let per_page = images_per_page(&l);
         assert!(per_page.len() >= 3);
         let setup = PageSetup::default();
@@ -2970,27 +3572,27 @@ mod tests {
     #[test]
     fn test_table_row_height_and_valign_and_margins() {
         use crate::docx_parser::{CellMargins, TableCellData, TableInfo, TableRowData};
-        let cell = |i: usize, text: &str, valign: Option<&str>, margins: Option<CellMargins>| TableCellData {
-            paragraphs: vec![para(i, text)],
-            valign: valign.map(str::to_string),
-            margins,
-            ..Default::default()
+        let cell = |i: usize, text: &str, valign: Option<&str>, margins: Option<CellMargins>| {
+            TableCellData {
+                paragraphs: vec![para(i, text)],
+                valign: valign.map(str::to_string),
+                margins,
+                ..Default::default()
+            }
         };
         let table = TableInfo {
             index: 0,
             rows: vec![],
-            rich_rows: vec![
-                TableRowData {
-                    cells: vec![
-                        cell(1, "Texto fila alta centrado", Some("center"), None),
-                        cell(2, "Col 2", None, None),
-                    ],
-                    is_header: false,
-                    height_px: Some(60.0),
-                    height_rule: Some("atLeast".to_string()),
-                    ..Default::default()
-                },
-            ],
+            rich_rows: vec![TableRowData {
+                cells: vec![
+                    cell(1, "Texto fila alta centrado", Some("center"), None),
+                    cell(2, "Col 2", None, None),
+                ],
+                is_header: false,
+                height_px: Some(60.0),
+                height_rule: Some("atLeast".to_string()),
+                ..Default::default()
+            }],
             grid_cols: vec![3000.0, 3000.0],
             cell_margins: CellMargins {
                 top: Some(2.0),
@@ -3001,20 +3603,49 @@ mod tests {
             ..Default::default()
         };
         let elements = vec![DocumentElement::Table(table)];
-        let l = LayoutEngine::new().compute_layout(&elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0);
+        let l = LayoutEngine::new().compute_layout(
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
+        );
         let items = &l.pages[0].items;
-        
+
         // Find TableCell command and verify height is 60.0
-        let cell_cmd = items.iter().find(|it| matches!(it, RenderCommand::TableCell { .. })).unwrap();
+        let cell_cmd = items
+            .iter()
+            .find(|it| matches!(it, RenderCommand::TableCell { .. }))
+            .unwrap();
         if let RenderCommand::TableCell { height, .. } = cell_cmd {
-            assert_eq!(*height, 60.0, "trHeight must enforce minimum height of 60px");
+            assert_eq!(
+                *height, 60.0,
+                "trHeight must enforce minimum height of 60px"
+            );
         }
 
         // Find Text command in cell 1 and verify it is vertically centered
-        let text_cmd = items.iter().find(|it| matches!(it, RenderCommand::Text { paragraph_index: 1, .. })).unwrap();
+        let text_cmd = items
+            .iter()
+            .find(|it| {
+                matches!(
+                    it,
+                    RenderCommand::Text {
+                        paragraph_index: 1,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
         if let RenderCommand::Text { y, .. } = text_cmd {
             // Baseline should be shifted down to center inside 60px height
-            assert!(*y > 70.0 + 20.0, "Vertically centered text baseline must be pushed down, got y={}", y);
+            assert!(
+                *y > 70.0 + 20.0,
+                "Vertically centered text baseline must be pushed down, got y={}",
+                y
+            );
         }
     }
 
@@ -3024,19 +3655,33 @@ mod tests {
             .items
             .iter()
             .filter_map(|item| match item {
-                RenderCommand::Text { paragraph_index, x, text, line: Some(r), .. } if *paragraph_index == paragraph => {
-                    Some((*x, r.top, r.right, text.clone()))
-                }
+                RenderCommand::Text {
+                    paragraph_index,
+                    x,
+                    text,
+                    line: Some(r),
+                    ..
+                } if *paragraph_index == paragraph => Some((*x, r.top, r.right, text.clone())),
                 _ => None,
             })
             .collect()
     }
 
     fn layout_with_images(paragraphs: Vec<ParagraphInfo>) -> DocumentLayout {
-        let elements: Vec<DocumentElement> = paragraphs.into_iter().map(DocumentElement::Paragraph).collect();
-        let images = HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
+        let elements: Vec<DocumentElement> = paragraphs
+            .into_iter()
+            .map(DocumentElement::Paragraph)
+            .collect();
+        let images =
+            HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
         LayoutEngine::new().with_images(images).compute_layout(
-            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
         )
     }
 
@@ -3045,7 +3690,13 @@ mod tests {
             .items
             .iter()
             .filter_map(|item| match item {
-                RenderCommand::Image { x, y, paragraph_index, image_index, .. } => Some((*x, *y, *paragraph_index, *image_index)),
+                RenderCommand::Image {
+                    x,
+                    y,
+                    paragraph_index,
+                    image_index,
+                    ..
+                } => Some((*x, *y, *paragraph_index, *image_index)),
                 _ => None,
             })
             .collect()
@@ -3071,7 +3722,14 @@ mod tests {
     #[test]
     fn test_inline_picture_flows_with_the_text() {
         let mut p = para(0, "antes despues");
-        p.images = vec![ImageRef { rel_id: "rId7".into(), width: 40.0, height: 60.0, wrap: "inline".into(), offset: 6, ..Default::default() }];
+        p.images = vec![ImageRef {
+            rel_id: "rId7".into(),
+            width: 40.0,
+            height: 60.0,
+            wrap: "inline".into(),
+            offset: 6,
+            ..Default::default()
+        }];
         let l = layout_with_images(vec![p]);
         let lines = line_boxes(&l, 0);
         assert_eq!(lines.len(), 1);
@@ -3080,14 +3738,34 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         let (x, y, para, index) = imgs[0];
         assert_eq!((para, index), (Some(0), Some(0)));
-        assert!(x > line_x + 20.0, "after the first word, not at the line start: {} vs {}", x, line_x);
+        assert!(
+            x > line_x + 20.0,
+            "after the first word, not at the line start: {} vs {}",
+            x,
+            line_x
+        );
         // The run after the picture starts after it
-        let runs = match l.pages[0].items.iter().find(|i| matches!(i, RenderCommand::Text { paragraph_index: 0, line: Some(_), .. })) {
+        let runs = match l.pages[0].items.iter().find(|i| {
+            matches!(
+                i,
+                RenderCommand::Text {
+                    paragraph_index: 0,
+                    line: Some(_),
+                    ..
+                }
+            )
+        }) {
             Some(RenderCommand::Text { runs, .. }) => runs.clone(),
             _ => unreachable!(),
         };
-        let after = runs.iter().find(|r| r.start >= 6).expect("run after the picture");
-        assert!(after.x >= x + 40.0 - 0.01, "text after the picture is pushed right");
+        let after = runs
+            .iter()
+            .find(|r| r.start >= 6)
+            .expect("run after the picture");
+        assert!(
+            after.x >= x + 40.0 - 0.01,
+            "text after the picture is pushed right"
+        );
         // The line grew so the picture stands on the baseline inside it
         assert!(y >= top - 0.01);
     }
@@ -3097,7 +3775,13 @@ mod tests {
         let mut p = para(0, "");
         p.runs.clear();
         p.images = (0..3)
-            .map(|_| ImageRef { rel_id: "rId7".into(), width: 300.0, height: 50.0, wrap: "inline".into(), ..Default::default() })
+            .map(|_| ImageRef {
+                rel_id: "rId7".into(),
+                width: 300.0,
+                height: 50.0,
+                wrap: "inline".into(),
+                ..Default::default()
+            })
             .collect();
         let l = layout_with_images(vec![p]);
         let imgs = body_images(&l);
@@ -3118,9 +3802,20 @@ mod tests {
         let lines = line_boxes(&l, 0);
         let (first_x, first_top, _, _) = lines[0];
         let margin = PageSetup::default().margin_left;
-        assert!((first_x - (margin + 210.0)).abs() < 0.5, "starts after picture + distance: {}", first_x);
-        let below = lines.iter().find(|(_, top, _, _)| *top >= first_top + 100.0).expect("a line below the picture");
-        assert!((below.0 - margin).abs() < 0.5, "below the picture the full width comes back: {}", below.0);
+        assert!(
+            (first_x - (margin + 210.0)).abs() < 0.5,
+            "starts after picture + distance: {}",
+            first_x
+        );
+        let below = lines
+            .iter()
+            .find(|(_, top, _, _)| *top >= first_top + 100.0)
+            .expect("a line below the picture");
+        assert!(
+            (below.0 - margin).abs() < 0.5,
+            "below the picture the full width comes back: {}",
+            below.0
+        );
     }
 
     #[test]
@@ -3133,14 +3828,23 @@ mod tests {
         let l = layout_with_images(vec![anchor]);
         let lines = line_boxes(&l, 0);
         let img_y = body_images(&l)[0].1;
-        assert!(lines[0].1 >= img_y + 100.0 - 0.01, "first line pushed below: {} vs {}", lines[0].1, img_y);
+        assert!(
+            lines[0].1 >= img_y + 100.0 - 0.01,
+            "first line pushed below: {} vs {}",
+            lines[0].1,
+            img_y
+        );
 
         let mut right = para(0, &long);
         right.images = vec![floating("square", "left", 400.0, 200.0, 100.0)];
         let l = layout_with_images(vec![right]);
         let lines = line_boxes(&l, 0);
         let margin = PageSetup::default().margin_left;
-        assert!((lines[0].2 - (margin + 390.0)).abs() < 0.5, "line box ends before the picture: {}", lines[0].2);
+        assert!(
+            (lines[0].2 - (margin + 390.0)).abs() < 0.5,
+            "line box ends before the picture: {}",
+            lines[0].2
+        );
     }
 
     #[test]
@@ -3151,7 +3855,12 @@ mod tests {
         let l = layout_with_images(vec![anchor, next]);
         let img_y = body_images(&l)[0].1;
         let first = line_boxes(&l, 0)[0].1;
-        assert!(first >= img_y + 120.0 - 0.01, "the anchor's own line goes below the picture: {} vs {}", first, img_y);
+        assert!(
+            first >= img_y + 120.0 - 0.01,
+            "the anchor's own line goes below the picture: {} vs {}",
+            first,
+            img_y
+        );
         let second = line_boxes(&l, 1)[0].1;
         assert!(second > first);
     }
@@ -3165,7 +3874,6 @@ mod tests {
         assert!((line_boxes(&l, 0)[0].0 - margin).abs() < 0.5);
     }
 
-
     #[test]
     fn test_centered_text_stays_inside_a_narrow_column() {
         // A 26 px wide column (a thin text box): centering uses its real width, not 60 px
@@ -3173,12 +3881,28 @@ mod tests {
         p.align = "center".into();
         p.font_size = Some(1.0);
         p.runs[0].font_size = Some(1.0);
-        let lines = layout_paragraph_lines(&p, 1.0 * PX_PER_PT, "#000", "Arial", 100.0, 26.0, &[], &mut EstimateMeasurer);
+        let lines = layout_paragraph_lines(
+            &p,
+            1.0 * PX_PER_PT,
+            "#000",
+            "Arial",
+            100.0,
+            26.0,
+            &[],
+            &mut EstimateMeasurer,
+        );
         let line = &lines[0];
-        assert!(line.x >= 100.0 && line.x + line.width <= 126.0 + 0.01, "inside the column: {} + {}", line.x, line.width);
-        assert!(((line.x - 100.0) - (126.0 - line.x - line.width)).abs() < 0.01, "centered");
+        assert!(
+            line.x >= 100.0 && line.x + line.width <= 126.0 + 0.01,
+            "inside the column: {} + {}",
+            line.x,
+            line.width
+        );
+        assert!(
+            ((line.x - 100.0) - (126.0 - line.x - line.width)).abs() < 0.01,
+            "centered"
+        );
     }
-
 
     #[test]
     fn test_both_sides_wrap_splits_rows_around_a_centered_picture() {
@@ -3193,8 +3917,17 @@ mod tests {
         // Two halves on the first row: one ends before the picture, the other starts after it
         let (a, b) = (&lines[0], &lines[1]);
         assert!((a.1 - b.1).abs() < 0.01, "same row: {} vs {}", a.1, b.1);
-        assert!(a.2 <= img_x - 9.9, "left half ends before the picture: {} vs {}", a.2, img_x);
-        assert!(b.0 >= img_x + 160.0 + 9.9, "right half starts after it: {}", b.0);
+        assert!(
+            a.2 <= img_x - 9.9,
+            "left half ends before the picture: {} vs {}",
+            a.2,
+            img_x
+        );
+        assert!(
+            b.0 >= img_x + 160.0 + 9.9,
+            "right half starts after it: {}",
+            b.0
+        );
         // Text keeps its order: the right half continues the left one
         assert!(!a.3.is_empty() && !b.3.is_empty());
         // Below the picture, full-width lines again
@@ -3215,7 +3948,12 @@ mod tests {
         let lines = line_boxes(&l, 0);
         let near_top = lines.iter().find(|l| l.1 < lines[0].1 + 1.0).unwrap().0;
         let lower = lines.iter().rfind(|l| l.1 < lines[0].1 + 140.0).unwrap().0;
-        assert!(lower < near_top - 100.0, "lines start further left as the triangle narrows: {} → {}", near_top, lower);
+        assert!(
+            lower < near_top - 100.0,
+            "lines start further left as the triangle narrows: {} → {}",
+            near_top,
+            lower
+        );
     }
 
     #[test]
@@ -3225,23 +3963,49 @@ mod tests {
         let mut img = floating("square", "bothSides", 0.0, 200.0, 150.0);
         img.wrap = "topAndBottom".into();
         anchor.images = vec![img];
-        let cell = |text: &str, index: usize| TableCellData { paragraphs: vec![para(index, text)], grid_span: 1, ..Default::default() };
-        let table = TableInfo {
-            grid_cols: vec![4000.0, 4000.0],
-            rich_rows: vec![TableRowData { cells: vec![cell("a", 1), cell("b", 2)], ..Default::default() }],
+        let cell = |text: &str, index: usize| TableCellData {
+            paragraphs: vec![para(index, text)],
+            grid_span: 1,
             ..Default::default()
         };
-        let elements = vec![DocumentElement::Paragraph(anchor), DocumentElement::Table(table)];
-        let images = HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
+        let table = TableInfo {
+            grid_cols: vec![4000.0, 4000.0],
+            rich_rows: vec![TableRowData {
+                cells: vec![cell("a", 1), cell("b", 2)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let elements = vec![
+            DocumentElement::Paragraph(anchor),
+            DocumentElement::Table(table),
+        ];
+        let images =
+            HashMap::from([("rId7".to_string(), "data:image/png;base64,AAAA".to_string())]);
         let l = LayoutEngine::new().with_images(images).compute_layout(
-            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
         );
         let img_bottom = body_images(&l)[0].1 + 150.0;
-        let cell_top = l.pages[0].items.iter().find_map(|it| match it {
-            RenderCommand::TableCell { y, .. } => Some(*y),
-            _ => None,
-        }).unwrap();
-        assert!(cell_top >= img_bottom - 0.01, "table starts below the picture: {} vs {}", cell_top, img_bottom);
+        let cell_top = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                RenderCommand::TableCell { y, .. } => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            cell_top >= img_bottom - 0.01,
+            "table starts below the picture: {} vs {}",
+            cell_top,
+            img_bottom
+        );
     }
 
     #[test]
@@ -3249,24 +4013,55 @@ mod tests {
         use crate::docx_parser::{TableCellData, TableInfo, TableRowData};
         let mut index = 0;
         let mut row = |text: &str, header: bool| {
-            let cells = vec![TableCellData { paragraphs: vec![para(index, text)], grid_span: 1, ..Default::default() }];
+            let cells = vec![TableCellData {
+                paragraphs: vec![para(index, text)],
+                grid_span: 1,
+                ..Default::default()
+            }];
             index += 1;
-            TableRowData { cells, is_header: header, ..Default::default() }
+            TableRowData {
+                cells,
+                is_header: header,
+                ..Default::default()
+            }
         };
         let mut rows = vec![row("Encabezado", true)];
         rows.extend((0..120).map(|i| row(&format!("fila {}", i), false)));
-        let table = TableInfo { grid_cols: vec![9000.0], rich_rows: rows, ..Default::default() };
+        let table = TableInfo {
+            grid_cols: vec![9000.0],
+            rich_rows: rows,
+            ..Default::default()
+        };
         let l = LayoutEngine::new().compute_layout(
-            &[DocumentElement::Table(table)], "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+            &[DocumentElement::Table(table)],
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
         );
         assert!(l.total_pages >= 2);
         for (n, page) in l.pages.iter().enumerate() {
-            let first_text = page.items.iter().find_map(|it| match it {
-                RenderCommand::Text { text, line, .. } => Some((text.clone(), line.is_some())),
-                _ => None,
-            }).unwrap();
-            assert_eq!(first_text.0, "Encabezado", "page {} starts with the header row", n + 1);
-            assert_eq!(first_text.1, n == 0, "only the original header row is a caret target");
+            let first_text = page
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    RenderCommand::Text { text, line, .. } => Some((text.clone(), line.is_some())),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                first_text.0,
+                "Encabezado",
+                "page {} starts with the header row",
+                n + 1
+            );
+            assert_eq!(
+                first_text.1,
+                n == 0,
+                "only the original header row is a caret target"
+            );
         }
     }
 
@@ -3284,17 +4079,32 @@ mod tests {
         let elements = vec![DocumentElement::Paragraph(anchor)];
         let images = HashMap::from([
             ("low".to_string(), "data:image/png;base64,TE9X".to_string()),
-            ("high".to_string(), "data:image/png;base64,SElHSA".to_string()),
+            (
+                "high".to_string(),
+                "data:image/png;base64,SElHSA".to_string(),
+            ),
         ]);
         let l = LayoutEngine::new().with_images(images).compute_layout(
-            &elements, "FFFFFF", &PageSetup::default(), &HeaderFooterInfo::default(), None, None, 0.0,
+            &elements,
+            "FFFFFF",
+            &PageSetup::default(),
+            &HeaderFooterInfo::default(),
+            None,
+            None,
+            0.0,
         );
-        let order: Vec<String> = l.pages[0].items.iter().filter_map(|it| match it {
-            RenderCommand::Image { data_url, .. } => Some(data_url.clone()),
-            _ => None,
-        }).collect();
-        assert_eq!(order, vec!["data:image/png;base64,TE9X", "data:image/png;base64,SElHSA"], "the higher relativeHeight is drawn last");
+        let order: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                RenderCommand::Image { data_url, .. } => Some(data_url.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec!["data:image/png;base64,TE9X", "data:image/png;base64,SElHSA"],
+            "the higher relativeHeight is drawn last"
+        );
     }
-
 }
-

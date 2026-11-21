@@ -12,7 +12,10 @@ fn docx(body: &str) -> DocxModifier {
     {
         let mut zip = ZipWriter::new(&mut buf);
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
         ] {
             zip.start_file(name, SimpleFileOptions::default()).unwrap();
@@ -28,7 +31,11 @@ fn para(text: &str) -> String {
 }
 
 fn texts(m: &DocxModifier) -> Vec<String> {
-    m.extract_paragraphs().unwrap().into_iter().map(|p| p.text).collect()
+    m.extract_paragraphs()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.text)
+        .collect()
 }
 
 fn xml(m: &DocxModifier) -> String {
@@ -39,10 +46,24 @@ const SOURCES: &str = r#"<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w
 
 #[test]
 fn test_move_keeps_the_paragraph_xml_and_goes_to_the_end() {
-    let mut m = docx(&format!("{}{}{}{}", para("Título"), SOURCES, para("Conclusiones"), para("Recomendación")));
+    let mut m = docx(&format!(
+        "{}{}{}{}",
+        para("Título"),
+        SOURCES,
+        para("Conclusiones"),
+        para("Recomendación")
+    ));
     let first = m.move_paragraphs(1, 1, 4).unwrap();
     assert_eq!(first, 3);
-    assert_eq!(texts(&m), ["Título", "Conclusiones", "Recomendación", "Fuentes: tienda-a.com"]);
+    assert_eq!(
+        texts(&m),
+        [
+            "Título",
+            "Conclusiones",
+            "Recomendación",
+            "Fuentes: tienda-a.com"
+        ]
+    );
     // Tal cual: enlace, negrita y alineación
     assert!(xml(&m).contains(SOURCES));
 }
@@ -66,8 +87,14 @@ fn test_move_forward_and_backward() {
 fn test_move_refuses_a_destination_inside_the_range_or_a_table() {
     let table = format!("<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", para("celda"));
     let mut m = docx(&format!("{}{}{}{}", para("A"), para("B"), table, para("C")));
-    assert!(m.move_paragraphs(0, 1, 1).unwrap_err().contains("dentro del rango"));
-    assert!(m.move_paragraphs(0, 0, 2).unwrap_err().contains("dentro de una tabla"));
+    assert!(m
+        .move_paragraphs(0, 1, 1)
+        .unwrap_err()
+        .contains("dentro del rango"));
+    assert!(m
+        .move_paragraphs(0, 0, 2)
+        .unwrap_err()
+        .contains("dentro de una tabla"));
     assert!(m.move_paragraphs(0, 0, 9).is_err());
     // (extract_paragraphs no lista las celdas)
     assert_eq!(texts(&m), ["A", "B", "C"]);
@@ -101,12 +128,26 @@ fn test_delete_keeps_one_paragraph_and_refuses_bad_ranges() {
     m.delete_paragraphs(0, 1).unwrap();
     assert_eq!(texts(&m), [""]);
 
-    let table = format!("<w:tbl><w:tr><w:tc>{}{}</w:tc></w:tr></w:tbl>", para("c1"), para("c2"));
+    let table = format!(
+        "<w:tbl><w:tr><w:tc>{}{}</w:tc></w:tr></w:tbl>",
+        para("c1"),
+        para("c2")
+    );
     let mut m = docx(&format!("{}{}{}", para("A"), table, para("B")));
-    assert!(m.delete_paragraphs(0, 1).unwrap_err().contains("corta una tabla"));
+    assert!(m
+        .delete_paragraphs(0, 1)
+        .unwrap_err()
+        .contains("corta una tabla"));
     assert!(m.delete_paragraphs(3, 9).is_err());
-    let with_break = format!("{}<w:p><w:pPr><w:sectPr/></w:pPr></w:p>{}", para("A"), para("B"));
+    let with_break = format!(
+        "{}<w:p><w:pPr><w:sectPr/></w:pPr></w:p>{}",
+        para("A"),
+        para("B")
+    );
     let mut m = docx(&with_break);
-    assert!(m.delete_paragraphs(0, 1).unwrap_err().contains("salto de sección"));
+    assert!(m
+        .delete_paragraphs(0, 1)
+        .unwrap_err()
+        .contains("salto de sección"));
     assert_eq!(texts(&m).len(), 3);
 }

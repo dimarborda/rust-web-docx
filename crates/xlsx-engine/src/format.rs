@@ -11,7 +11,10 @@ use std::collections::HashMap;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use ooxml_core::xml::{element_ranges, escape_xml, get_attr_value, prefix_of, remove_attr, root_element, set_attr, utf8};
+use ooxml_core::xml::{
+    element_ranges, escape_xml, get_attr_value, prefix_of, remove_attr, root_element, set_attr,
+    utf8,
+};
 
 use crate::cell_ref::{CellRange, CellRef};
 use crate::sheet::SheetXml;
@@ -48,7 +51,12 @@ impl Edges {
             "left" => Edges::Left,
             "right" => Edges::Right,
             "inside" => Edges::Inside,
-            other => return Err(format!("Bordes '{}' no válidos: usa all, outline, top, bottom, left, right o inside.", other)),
+            other => {
+                return Err(format!(
+                    "Bordes '{}' no válidos: usa all, outline, top, bottom, left, right o inside.",
+                    other
+                ))
+            }
         })
     }
 }
@@ -63,8 +71,19 @@ pub struct BorderSpec {
 }
 
 const BORDER_STYLES: &[&str] = &[
-    "thin", "medium", "thick", "dashed", "dotted", "double", "hair", "mediumDashed", "dashDot", "mediumDashDot", "dashDotDot",
-    "mediumDashDotDot", "slantDashDot",
+    "thin",
+    "medium",
+    "thick",
+    "dashed",
+    "dotted",
+    "double",
+    "hair",
+    "mediumDashed",
+    "dashDot",
+    "mediumDashDot",
+    "dashDotDot",
+    "mediumDashDotDot",
+    "slantDashDot",
 ];
 
 /// What to change in the look of cells; `None` leaves that part as it is
@@ -120,7 +139,18 @@ impl Format {
             }
         }
         if let Some(h) = &self.horizontal {
-            if !["general", "left", "center", "right", "fill", "justify", "centerContinuous", "distributed"].contains(&h.as_str()) {
+            if ![
+                "general",
+                "left",
+                "center",
+                "right",
+                "fill",
+                "justify",
+                "centerContinuous",
+                "distributed",
+            ]
+            .contains(&h.as_str())
+            {
                 return Err(format!("Alineación horizontal '{}' no válida.", h));
             }
         }
@@ -129,7 +159,12 @@ impl Format {
                 return Err(format!("Alineación vertical '{}' no válida.", v));
             }
         }
-        if let Some(BorderSpec { style: Some(s), color, .. }) = &self.border {
+        if let Some(BorderSpec {
+            style: Some(s),
+            color,
+            ..
+        }) = &self.border
+        {
             if !BORDER_STYLES.contains(&s.as_str()) {
                 return Err(format!("Estilo de borde '{}' no válido: usa thin, medium, thick, dashed, dotted o double.", s));
             }
@@ -137,7 +172,11 @@ impl Format {
                 argb(c)?;
             }
         }
-        if self.number_format.as_deref().is_some_and(|f| f.trim().is_empty()) {
+        if self
+            .number_format
+            .as_deref()
+            .is_some_and(|f| f.trim().is_empty())
+        {
             return Err("El formato de número está vacío.".to_string());
         }
         Ok(())
@@ -178,7 +217,9 @@ impl Element {
         let mut child_start = 0;
         loop {
             let before = reader.buffer_position() as usize;
-            let event = reader.read_event().map_err(|e| format!("Estilo no válido: {}", e))?;
+            let event = reader
+                .read_event()
+                .map_err(|e| format!("Estilo no válido: {}", e))?;
             let after = reader.buffer_position() as usize;
             match event {
                 Event::Start(e) | Event::Empty(e) if depth == 0 => {
@@ -196,12 +237,18 @@ impl Element {
                     depth = 2;
                 }
                 Event::Empty(e) if depth == 1 => {
-                    children.push((local(utf8(e.name().as_ref())), xml[before..after].to_string()));
+                    children.push((
+                        local(utf8(e.name().as_ref())),
+                        xml[before..after].to_string(),
+                    ));
                 }
                 Event::Start(_) => depth += 1,
                 Event::End(_) if depth == 2 => {
                     let open = &xml[child_start..];
-                    let child_name = open[1..].split(|c: char| c.is_whitespace() || c == '>' || c == '/').next().unwrap_or("");
+                    let child_name = open[1..]
+                        .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                        .next()
+                        .unwrap_or("");
                     children.push((local(child_name), xml[child_start..after].to_string()));
                     depth = 1;
                 }
@@ -212,11 +259,18 @@ impl Element {
             }
         }
         let start = start.ok_or("Elemento de estilo vacío.")?;
-        Ok(Element { start, name, children })
+        Ok(Element {
+            start,
+            name,
+            children,
+        })
     }
 
     fn get(&self, local_name: &str) -> Option<&str> {
-        self.children.iter().find(|(n, _)| n == local_name).map(|(_, t)| t.as_str())
+        self.children
+            .iter()
+            .find(|(n, _)| n == local_name)
+            .map(|(_, t)| t.as_str())
     }
 
     fn set(&mut self, local_name: &str, value: Option<String>) {
@@ -232,11 +286,20 @@ impl Element {
         for name in order {
             kids.extend(self.children.iter().filter(|(n, _)| n == name));
         }
-        kids.extend(self.children.iter().filter(|(n, _)| !order.contains(&n.as_str())));
+        kids.extend(
+            self.children
+                .iter()
+                .filter(|(n, _)| !order.contains(&n.as_str())),
+        );
         if kids.is_empty() {
             format!("{}/>", self.start)
         } else {
-            format!("{}>{}</{}>", self.start, kids.iter().map(|(_, t)| t.as_str()).collect::<String>(), self.name)
+            format!(
+                "{}>{}</{}>",
+                self.start,
+                kids.iter().map(|(_, t)| t.as_str()).collect::<String>(),
+                self.name
+            )
         }
     }
 }
@@ -245,8 +308,34 @@ fn local(name: &str) -> String {
     name.rsplit(':').next().unwrap_or(name).to_string()
 }
 
-const FONT_ORDER: &[&str] = &["b", "i", "strike", "condense", "extend", "outline", "shadow", "u", "vertAlign", "sz", "color", "name", "family", "charset", "scheme"];
-const BORDER_ORDER: &[&str] = &["start", "left", "end", "right", "top", "bottom", "diagonal", "vertical", "horizontal"];
+const FONT_ORDER: &[&str] = &[
+    "b",
+    "i",
+    "strike",
+    "condense",
+    "extend",
+    "outline",
+    "shadow",
+    "u",
+    "vertAlign",
+    "sz",
+    "color",
+    "name",
+    "family",
+    "charset",
+    "scheme",
+];
+const BORDER_ORDER: &[&str] = &[
+    "start",
+    "left",
+    "end",
+    "right",
+    "top",
+    "bottom",
+    "diagonal",
+    "vertical",
+    "horizontal",
+];
 const XF_ORDER: &[&str] = &["alignment", "protection", "extLst"];
 
 /// Built-in number formats by code
@@ -295,7 +384,10 @@ impl Section {
     }
 
     fn get(&self, i: usize) -> Option<&str> {
-        self.items.get(i).or_else(|| self.added.get(i - self.items.len().min(i))).map(String::as_str)
+        self.items
+            .get(i)
+            .or_else(|| self.added.get(i - self.items.len().min(i)))
+            .map(String::as_str)
     }
 }
 
@@ -309,7 +401,12 @@ struct StyleBook {
     cache: HashMap<(u32, u8), u32>,
 }
 
-const SECTIONS: [(&str, &str); 4] = [("fonts", "font"), ("fills", "fill"), ("borders", "border"), ("cellXfs", "xf")];
+const SECTIONS: [(&str, &str); 4] = [
+    ("fonts", "font"),
+    ("fills", "fill"),
+    ("borders", "border"),
+    ("cellXfs", "xf"),
+];
 
 impl StyleBook {
     fn parse(xml: &str) -> Result<StyleBook, String> {
@@ -322,15 +419,29 @@ impl StyleBook {
                 .next()
                 .ok_or_else(|| format!("La hoja de estilos no tiene <{}>.", section))?;
             let inner = &xml[range];
-            let items = element_ranges(inner, item, |_| true)?.into_iter().map(|r| inner[r].to_string()).collect();
-            sections.insert(section, Section { items, added: Vec::new() });
+            let items = element_ranges(inner, item, |_| true)?
+                .into_iter()
+                .map(|r| inner[r].to_string())
+                .collect();
+            sections.insert(
+                section,
+                Section {
+                    items,
+                    added: Vec::new(),
+                },
+            );
         }
         let mut num_fmts = HashMap::new();
         let mut reader = Reader::from_str(xml);
         loop {
             match reader.read_event() {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) if utf8(e.name().as_ref()).ends_with("numFmt") => {
-                    if let (Some(id), Some(code)) = (get_attr_value(&e, "numFmtId").and_then(|v| v.parse().ok()), get_attr_value(&e, "formatCode")) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if utf8(e.name().as_ref()).ends_with("numFmt") =>
+                {
+                    if let (Some(id), Some(code)) = (
+                        get_attr_value(&e, "numFmtId").and_then(|v| v.parse().ok()),
+                        get_attr_value(&e, "formatCode"),
+                    ) {
                         num_fmts.insert(id, code);
                     }
                 }
@@ -338,7 +449,14 @@ impl StyleBook {
                 _ => {}
             }
         }
-        Ok(StyleBook { xml: xml.to_string(), prefix, num_fmts, new_formats: Vec::new(), sections, cache: HashMap::new() })
+        Ok(StyleBook {
+            xml: xml.to_string(),
+            prefix,
+            num_fmts,
+            new_formats: Vec::new(),
+            sections,
+            cache: HashMap::new(),
+        })
     }
 
     fn section(&mut self, name: &'static str) -> &mut Section {
@@ -366,18 +484,28 @@ impl StyleBook {
         }
         let p = self.prefix.clone();
         let xfs = &self.sections["cellXfs"];
-        let xf_text = xfs.get(base as usize).or_else(|| xfs.get(0)).map(str::to_string).ok_or("La hoja de estilos no tiene formatos de celda.")?;
+        let xf_text = xfs
+            .get(base as usize)
+            .or_else(|| xfs.get(0))
+            .map(str::to_string)
+            .ok_or("La hoja de estilos no tiene formatos de celda.")?;
         let mut xf = Element::parse(&xf_text)?;
         let attr = |el: &str, name: &str| -> usize {
             let mut reader = Reader::from_str(el);
             match reader.read_event() {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, name).and_then(|v| v.trim().parse().ok()).unwrap_or(0),
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, name)
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0),
                 _ => 0,
             }
         };
 
         if format.touches_font() {
-            let font_text = self.section("fonts").get(attr(&xf_text, "fontId")).unwrap_or("<font/>").to_string();
+            let font_text = self
+                .section("fonts")
+                .get(attr(&xf_text, "fontId"))
+                .unwrap_or("<font/>")
+                .to_string();
             let mut font = Element::parse(&font_text)?;
             let flag = |on: bool, name: &str| on.then(|| format!("<{}{}/>", p, name));
             if let Some(b) = format.bold {
@@ -396,15 +524,24 @@ impl StyleBook {
                 font.set("sz", Some(format!(r#"<{}sz val="{}"/>"#, p, size)));
             }
             if let Some(color) = &format.font_color {
-                font.set("color", Some(format!(r#"<{}color rgb="{}"/>"#, p, argb(color)?)));
+                font.set(
+                    "color",
+                    Some(format!(r#"<{}color rgb="{}"/>"#, p, argb(color)?)),
+                );
             }
             if let Some(name) = &format.font_name {
-                font.set("name", Some(format!(r#"<{}name val="{}"/>"#, p, escape_xml(name))));
+                font.set(
+                    "name",
+                    Some(format!(r#"<{}name val="{}"/>"#, p, escape_xml(name))),
+                );
                 // A theme font scheme would override the name
                 font.set("scheme", None);
             }
             let id = self.section("fonts").id_of(font.write(FONT_ORDER));
-            xf.start = with_attrs(&xf.start, &[("fontId", id.to_string()), ("applyFont", "1".to_string())]);
+            xf.start = with_attrs(
+                &xf.start,
+                &[("fontId", id.to_string()), ("applyFont", "1".to_string())],
+            );
         }
         if let Some(fill) = &format.fill {
             let text = match fill {
@@ -413,13 +550,23 @@ impl StyleBook {
                     argb(color)?,
                     p = p
                 ),
-                None => format!(r#"<{p}fill><{p}patternFill patternType="none"/></{p}fill>"#, p = p),
+                None => format!(
+                    r#"<{p}fill><{p}patternFill patternType="none"/></{p}fill>"#,
+                    p = p
+                ),
             };
             let id = self.section("fills").id_of(text);
-            xf.start = with_attrs(&xf.start, &[("fillId", id.to_string()), ("applyFill", "1".to_string())]);
+            xf.start = with_attrs(
+                &xf.start,
+                &[("fillId", id.to_string()), ("applyFill", "1".to_string())],
+            );
         }
         if let (Some(border), true) = (&format.border, sides != 0) {
-            let border_text = self.section("borders").get(attr(&xf_text, "borderId")).unwrap_or("<border/>").to_string();
+            let border_text = self
+                .section("borders")
+                .get(attr(&xf_text, "borderId"))
+                .unwrap_or("<border/>")
+                .to_string();
             let mut el = Element::parse(&border_text)?;
             for (bit, side) in [(1, "left"), (2, "right"), (4, "top"), (8, "bottom")] {
                 if sides & bit == 0 {
@@ -431,7 +578,13 @@ impl StyleBook {
                             Some(c) => format!(r#"<{}color rgb="{}"/>"#, p, argb(c)?),
                             None => format!(r#"<{}color indexed="64"/>"#, p),
                         };
-                        format!(r#"<{p}{side} style="{}">{}</{p}{side}>"#, style, color, p = p, side = side)
+                        format!(
+                            r#"<{p}{side} style="{}">{}</{p}{side}>"#,
+                            style,
+                            color,
+                            p = p,
+                            side = side
+                        )
                     }
                     None => format!("<{}{}/>", p, side),
                 };
@@ -443,11 +596,23 @@ impl StyleBook {
                 }
             }
             let id = self.section("borders").id_of(el.write(BORDER_ORDER));
-            xf.start = with_attrs(&xf.start, &[("borderId", id.to_string()), ("applyBorder", "1".to_string())]);
+            xf.start = with_attrs(
+                &xf.start,
+                &[
+                    ("borderId", id.to_string()),
+                    ("applyBorder", "1".to_string()),
+                ],
+            );
         }
         if let Some(code) = &format.number_format {
             let id = self.format_id(code);
-            xf.start = with_attrs(&xf.start, &[("numFmtId", id.to_string()), ("applyNumberFormat", "1".to_string())]);
+            xf.start = with_attrs(
+                &xf.start,
+                &[
+                    ("numFmtId", id.to_string()),
+                    ("applyNumberFormat", "1".to_string()),
+                ],
+            );
         }
         if format.touches_alignment() {
             let mut alignment = xf.get("alignment").unwrap_or("").to_string();
@@ -484,7 +649,10 @@ impl StyleBook {
             if s.added.is_empty() {
                 continue;
             }
-            let range = element_ranges(&xml, section, |_| true)?.into_iter().next().ok_or("Sección de estilos perdida.")?;
+            let range = element_ranges(&xml, section, |_| true)?
+                .into_iter()
+                .next()
+                .ok_or("Sección de estilos perdida.")?;
             let text = &xml[range.clone()];
             let close = text.rfind("</").map(|i| range.start + i);
             let total = s.items.len() + s.added.len();
@@ -493,17 +661,27 @@ impl StyleBook {
                 None => {
                     // Self-closing section (`<fonts count="0"/>`): later sections come after it,
                     // so the offsets kept above stay valid
-                    let name = text[1..].split(|c: char| c.is_whitespace() || c == '/' || c == '>').next().unwrap_or(section).to_string();
+                    let name = text[1..]
+                        .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                        .next()
+                        .unwrap_or(section)
+                        .to_string();
                     let open = set_attr(text, "count", &total.to_string());
                     let open = open.trim_end_matches("/>").to_string();
-                    xml.replace_range(range.clone(), &format!("{}>{}</{}>", open, s.added.concat(), name));
+                    xml.replace_range(
+                        range.clone(),
+                        &format!("{}>{}</{}>", open, s.added.concat(), name),
+                    );
                 }
             }
         }
         inserts.sort_by_key(|(at, _, _, _)| std::cmp::Reverse(*at));
         for (at, text, range, total) in inserts {
             xml.insert_str(at, &text);
-            let start_tag_end = xml[range.start..].find('>').map(|i| range.start + i + 1).unwrap_or(range.start);
+            let start_tag_end = xml[range.start..]
+                .find('>')
+                .map(|i| range.start + i + 1)
+                .unwrap_or(range.start);
             let tag = xml[range.start..start_tag_end].to_string();
             let new_tag = set_attr(&tag, "count", &total.to_string());
             xml.replace_range(range.start..start_tag_end, &new_tag);
@@ -513,15 +691,27 @@ impl StyleBook {
             let entries: String = self
                 .new_formats
                 .iter()
-                .map(|(id, code)| format!(r#"<{}numFmt numFmtId="{}" formatCode="{}"/>"#, p, id, escape_xml(code)))
+                .map(|(id, code)| {
+                    format!(
+                        r#"<{}numFmt numFmtId="{}" formatCode="{}"/>"#,
+                        p,
+                        id,
+                        escape_xml(code)
+                    )
+                })
                 .collect();
-            match element_ranges(&xml, "numFmts", |_| true)?.into_iter().next() {
+            match element_ranges(&xml, "numFmts", |_| true)?
+                .into_iter()
+                .next()
+            {
                 Some(range) => {
                     let text = xml[range.clone()].to_string();
                     let count = self.num_fmts.len();
                     let updated = match text.rfind("</") {
                         Some(i) => format!("{}{}{}", &text[..i], entries, &text[i..]),
-                        None => format!("{}>{}</{}numFmts>", text.trim_end_matches("/>"), entries, p),
+                        None => {
+                            format!("{}>{}</{}numFmts>", text.trim_end_matches("/>"), entries, p)
+                        }
                     };
                     let tag_end = updated.find('>').map(|i| i + 1).unwrap_or(0);
                     let tag = set_attr(&updated[..tag_end], "count", &count.to_string());
@@ -529,8 +719,19 @@ impl StyleBook {
                 }
                 None => {
                     let (root_at, _) = root_element(&xml).ok_or("Hoja de estilos vacía.")?;
-                    let after_root = xml[root_at..].find('>').map(|i| root_at + i + 1).ok_or("Hoja de estilos no válida.")?;
-                    xml.insert_str(after_root, &format!(r#"<{p}numFmts count="{}">{}</{p}numFmts>"#, self.new_formats.len(), entries, p = p));
+                    let after_root = xml[root_at..]
+                        .find('>')
+                        .map(|i| root_at + i + 1)
+                        .ok_or("Hoja de estilos no válida.")?;
+                    xml.insert_str(
+                        after_root,
+                        &format!(
+                            r#"<{p}numFmts count="{}">{}</{p}numFmts>"#,
+                            self.new_formats.len(),
+                            entries,
+                            p = p
+                        ),
+                    );
                 }
             }
         }
@@ -582,7 +783,9 @@ impl Workbook {
                 self.package.put(part, xml.into_bytes());
                 Ok(())
             }
-            None => self.add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml).map(|_| ()),
+            None => self
+                .add_workbook_part("styles", "styles.xml", STYLES_TYPE, xml)
+                .map(|_| ()),
         }
     }
 
@@ -591,7 +794,10 @@ impl Workbook {
         format.check()?;
         let range = CellRange::parse(range)?;
         if range.cell_count() > MAX_FORMAT_CELLS {
-            return Err(format!("El rango {} tiene demasiadas celdas para darle formato de una vez.", range));
+            return Err(format!(
+                "El rango {} tiene demasiadas celdas para darle formato de una vez.",
+                range
+            ));
         }
         let part = self.worksheet_part(sheet)?;
         let xml = self.package.get_string(&part)?;
@@ -605,7 +811,11 @@ impl Workbook {
                 let at = CellRef { row, col };
                 let existing = parsed.cell(at);
                 let base = existing.map(|c| c.style).unwrap_or(0);
-                let sides = format.border.as_ref().map(|b| sides_for(b.edges, &range, at)).unwrap_or(0);
+                let sides = format
+                    .border
+                    .as_ref()
+                    .map(|b| sides_for(b.edges, &range, at))
+                    .unwrap_or(0);
                 let id = book.derive(base, format, sides)?;
                 if existing.is_some_and(|c| c.style == id) {
                     continue;
@@ -637,13 +847,27 @@ impl Workbook {
         let parsed = SheetXml::parse(&xml)?;
         let mut edits = std::collections::BTreeMap::new();
         for cell in parsed.rows.iter().flat_map(|r| &r.cells) {
-            let inside = cell.at.row >= range.first.row && cell.at.row <= range.last.row && cell.at.col >= range.first.col && cell.at.col <= range.last.col;
+            let inside = cell.at.row >= range.first.row
+                && cell.at.row <= range.last.row
+                && cell.at.col >= range.first.col
+                && cell.at.col <= range.last.col;
             if !inside || cell.style_attr.is_none() {
                 continue;
             }
             let element = remove_attr(&xml[cell.range.clone()], "s");
-            let empty = !element.contains("<v") && !element.contains(":v") && !element.contains("<f") && !element.contains("<is") && !element.contains(":is");
-            edits.insert(cell.at, if empty && element.ends_with("/>") { None } else { Some(element) });
+            let empty = !element.contains("<v")
+                && !element.contains(":v")
+                && !element.contains("<f")
+                && !element.contains("<is")
+                && !element.contains(":is");
+            edits.insert(
+                cell.at,
+                if empty && element.ends_with("/>") {
+                    None
+                } else {
+                    Some(element)
+                },
+            );
         }
         if edits.is_empty() {
             return Ok(());
@@ -654,37 +878,67 @@ impl Workbook {
     }
 
     /// Sets the width of columns `first..=last` (1 = A) in characters, as Excel measures it
-    pub fn set_column_width(&mut self, sheet: usize, first: u32, last: u32, width: f64) -> Result<(), String> {
+    pub fn set_column_width(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        width: f64,
+    ) -> Result<(), String> {
         if !(0.0..=255.0).contains(&width) {
             return Err("El ancho de columna debe estar entre 0 y 255 caracteres.".to_string());
         }
         let width_text = format!("{}", (width * 256.0).round() / 256.0);
-        let change = |el: &str| Some(set_attr(&set_attr(el, "width", &width_text), "customWidth", "1"));
+        let change = |el: &str| {
+            Some(set_attr(
+                &set_attr(el, "width", &width_text),
+                "customWidth",
+                "1",
+            ))
+        };
         let missing = format!(r#"width="{}" customWidth="1""#, width_text);
         self.edit_columns(sheet, first, last, &change, Some(&missing))
     }
 
     /// Hides or shows the columns `first..=last`; their width comes back when shown. Columns made
     /// hidden by a width of 0 go back to the default width.
-    pub fn set_columns_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), String> {
+    pub fn set_columns_hidden(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        hidden: bool,
+    ) -> Result<(), String> {
         if hidden {
-            return self.edit_columns(sheet, first, last, &|el: &str| Some(set_attr(el, "hidden", "1")), Some(r#"width="0" hidden="1" customWidth="1""#));
+            return self.edit_columns(
+                sheet,
+                first,
+                last,
+                &|el: &str| Some(set_attr(el, "hidden", "1")),
+                Some(r#"width="0" hidden="1" customWidth="1""#),
+            );
         }
         let show = |el: &str| -> Option<String> {
             let shown = remove_attr(el, "hidden");
             let (zero, styled) = {
                 let mut reader = Reader::from_str(el);
                 match reader.read_event() {
-                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                        (get_attr_value(&e, "width").and_then(|w| w.parse::<f64>().ok()) == Some(0.0), get_attr_value(&e, "style").is_some())
-                    }
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => (
+                        get_attr_value(&e, "width").and_then(|w| w.parse::<f64>().ok())
+                            == Some(0.0),
+                        get_attr_value(&e, "style").is_some(),
+                    ),
                     _ => (false, false),
                 }
             };
             match (zero, styled) {
                 (false, _) => Some(shown),
                 (true, false) => None,
-                (true, true) => Some(set_attr(&remove_attr(&shown, "customWidth"), "width", "9.140625")),
+                (true, true) => Some(set_attr(
+                    &remove_attr(&shown, "customWidth"),
+                    "width",
+                    "9.140625",
+                )),
             }
         };
         self.edit_columns(sheet, first, last, &show, None)
@@ -693,7 +947,14 @@ impl Workbook {
     /// Changes the `<col>` elements of the columns `first..=last`, splitting those that reach
     /// beyond them: `change` gets each piece (`None` removes it), and columns no element describes
     /// get one with the attributes `missing`, when given.
-    fn edit_columns(&mut self, sheet: usize, first: u32, last: u32, change: &dyn Fn(&str) -> Option<String>, missing: Option<&str>) -> Result<(), String> {
+    fn edit_columns(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        change: &dyn Fn(&str) -> Option<String>,
+        missing: Option<&str>,
+    ) -> Result<(), String> {
         let (first, last) = (first.min(last), first.max(last));
         if first == 0 || last > crate::cell_ref::MAX_COL {
             return Err("Columna fuera de la hoja.".to_string());
@@ -705,7 +966,10 @@ impl Workbook {
         let existing: Vec<String> = match &cols_range {
             Some(r) => {
                 let inner = &xml[r.clone()];
-                element_ranges(inner, "col", |_| true)?.into_iter().map(|c| inner[c].to_string()).collect()
+                element_ranges(inner, "col", |_| true)?
+                    .into_iter()
+                    .map(|c| inner[c].to_string())
+                    .collect()
             }
             None => Vec::new(),
         };
@@ -713,14 +977,22 @@ impl Workbook {
             let mut reader = Reader::from_str(el);
             match reader.read_event() {
                 Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                    let n = |a: &str| get_attr_value(&e, a).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+                    let n = |a: &str| {
+                        get_attr_value(&e, a)
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0)
+                    };
                     (n("min"), n("max"))
                 }
                 _ => (0, 0),
             }
         };
         let sized = |el: &str, a: u32, b: u32| -> Option<String> {
-            change(&set_attr(&set_attr(el, "min", &a.to_string()), "max", &b.to_string()))
+            change(&set_attr(
+                &set_attr(el, "min", &a.to_string()),
+                "max",
+                &b.to_string(),
+            ))
         };
         let mut cols: Vec<(u32, String)> = Vec::new();
         let mut covered: Vec<(u32, u32)> = Vec::new();
@@ -731,7 +1003,14 @@ impl Workbook {
                 continue;
             }
             if a < first {
-                cols.push((a, set_attr(&set_attr(el, "min", &a.to_string()), "max", &(first - 1).to_string())));
+                cols.push((
+                    a,
+                    set_attr(
+                        &set_attr(el, "min", &a.to_string()),
+                        "max",
+                        &(first - 1).to_string(),
+                    ),
+                ));
             }
             let (from, to) = (a.max(first), b.min(last));
             if let Some(piece) = sized(el, from, to) {
@@ -739,15 +1018,35 @@ impl Workbook {
             }
             covered.push((from, to));
             if b > last {
-                cols.push((last + 1, set_attr(&set_attr(el, "min", &(last + 1).to_string()), "max", &b.to_string())));
+                cols.push((
+                    last + 1,
+                    set_attr(
+                        &set_attr(el, "min", &(last + 1).to_string()),
+                        "max",
+                        &b.to_string(),
+                    ),
+                ));
             }
         }
         // Columns no <col> described yet
         covered.sort();
         let mut next = first;
-        for (from, to) in covered.iter().copied().chain(std::iter::once((last + 1, last + 1))) {
+        for (from, to) in covered
+            .iter()
+            .copied()
+            .chain(std::iter::once((last + 1, last + 1)))
+        {
             if let (true, Some(attrs)) = (from > next, missing) {
-                cols.push((next, format!(r#"<{}col min="{}" max="{}" {}/>"#, prefix, next, from - 1, attrs)));
+                cols.push((
+                    next,
+                    format!(
+                        r#"<{}col min="{}" max="{}" {}/>"#,
+                        prefix,
+                        next,
+                        from - 1,
+                        attrs
+                    ),
+                ));
             }
             next = next.max(to + 1);
         }
@@ -761,11 +1060,25 @@ impl Workbook {
                 let text = &xml[r.clone()];
                 let tag_end = text.find('>').map(|i| i + 1).unwrap_or(text.len());
                 let open = text[..tag_end].trim_end_matches("/>").trim_end_matches('>');
-                format!("{}{}>{}</{}cols>{}", &xml[..r.start], open, body, prefix, &xml[r.end..])
+                format!(
+                    "{}{}>{}</{}cols>{}",
+                    &xml[..r.start],
+                    open,
+                    body,
+                    prefix,
+                    &xml[r.end..]
+                )
             }
             None => {
-                let at = first_child_named(&xml, &["sheetData"])?.ok_or("La hoja no tiene <sheetData>.")?;
-                format!("{}<{p}cols>{}</{p}cols>{}", &xml[..at], body, &xml[at..], p = prefix)
+                let at = first_child_named(&xml, &["sheetData"])?
+                    .ok_or("La hoja no tiene <sheetData>.")?;
+                format!(
+                    "{}<{p}cols>{}</{p}cols>{}",
+                    &xml[..at],
+                    body,
+                    &xml[at..],
+                    p = prefix
+                )
             }
         };
         self.package.put(part, new_xml.into_bytes());
@@ -773,7 +1086,13 @@ impl Workbook {
     }
 
     /// Height in points of the rows `first..=last`; `None` goes back to the automatic height
-    pub fn set_row_height(&mut self, sheet: usize, first: u32, last: u32, height: Option<f64>) -> Result<(), String> {
+    pub fn set_row_height(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        height: Option<f64>,
+    ) -> Result<(), String> {
         if height.is_some_and(|h| !(0.0..=409.5).contains(&h)) {
             return Err("El alto de fila debe estar entre 0 y 409,5 puntos.".to_string());
         }
@@ -789,21 +1108,37 @@ impl Workbook {
                 tag
             }
         };
-        let missing = text.as_ref().map(|t| format!(r#"ht="{}" customHeight="1""#, t));
+        let missing = text
+            .as_ref()
+            .map(|t| format!(r#"ht="{}" customHeight="1""#, t));
         self.edit_rows(sheet, first, last, &change, missing.as_deref())
     }
 
     /// Hides or shows the rows `first..=last`; their height comes back when shown. Rows made hidden
     /// by a height of 0 go back to the automatic height.
-    pub fn set_rows_hidden(&mut self, sheet: usize, first: u32, last: u32, hidden: bool) -> Result<(), String> {
+    pub fn set_rows_hidden(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        hidden: bool,
+    ) -> Result<(), String> {
         if hidden {
-            return self.edit_rows(sheet, first, last, &|tag: &str| set_attr(tag, "hidden", "1"), Some(r#"hidden="1""#));
+            return self.edit_rows(
+                sheet,
+                first,
+                last,
+                &|tag: &str| set_attr(tag, "hidden", "1"),
+                Some(r#"hidden="1""#),
+            );
         }
         let show = |tag: &str| -> String {
             let zero = {
                 let mut reader = Reader::from_str(tag);
                 match reader.read_event() {
-                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, "ht").and_then(|h| h.parse::<f64>().ok()) == Some(0.0),
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                        get_attr_value(&e, "ht").and_then(|h| h.parse::<f64>().ok()) == Some(0.0)
+                    }
                     _ => false,
                 }
             };
@@ -819,7 +1154,14 @@ impl Workbook {
 
     /// Changes the start tag of the rows `first..=last`: `change` gets each one, and rows the sheet
     /// does not have get an empty element with the attributes `missing`, when given.
-    fn edit_rows(&mut self, sheet: usize, first: u32, last: u32, change: &dyn Fn(&str) -> String, missing: Option<&str>) -> Result<(), String> {
+    fn edit_rows(
+        &mut self,
+        sheet: usize,
+        first: u32,
+        last: u32,
+        change: &dyn Fn(&str) -> String,
+        missing: Option<&str>,
+    ) -> Result<(), String> {
         let (first, last) = (first.min(last), first.max(last));
         if first == 0 || last > crate::cell_ref::MAX_ROW {
             return Err("Fila fuera de la hoja.".to_string());
@@ -870,7 +1212,11 @@ impl Workbook {
             body.push_str(&tag);
             cursor = row.start_tag.end;
         }
-        let tail_at = parsed.rows.last().map(|r| r.range.end.max(cursor)).unwrap_or(inner.start);
+        let tail_at = parsed
+            .rows
+            .last()
+            .map(|r| r.range.end.max(cursor))
+            .unwrap_or(inner.start);
         body.push_str(&xml[cursor..tail_at]);
         if next <= last {
             new_rows(next, last, &mut body);
@@ -882,9 +1228,20 @@ impl Workbook {
             // <sheetData/> opens up to hold the rows
             let end = parsed.data_end();
             let start = xml[..end].rfind('<').unwrap_or(end);
-            format!("{}<{p}sheetData>{}</{p}sheetData>{}", &xml[..start], body, &xml[end..], p = prefix)
+            format!(
+                "{}<{p}sheetData>{}</{p}sheetData>{}",
+                &xml[..start],
+                body,
+                &xml[end..],
+                p = prefix
+            )
         } else {
-            format!("{}{}{}", &xml[..inner.start], body, &xml[tail_at.max(inner.start)..])
+            format!(
+                "{}{}{}",
+                &xml[..inner.start],
+                body,
+                &xml[tail_at.max(inner.start)..]
+            )
         };
         drop(parsed);
         self.package.put(part, written.into_bytes());
@@ -903,8 +1260,15 @@ impl Workbook {
         if layout.merges.contains(&range) {
             return Ok(());
         }
-        if let Some(other) = layout.merges.iter().find(|m| crate::areas::overlaps_range(m, &range)) {
-            return Err(format!("El rango {} se cruza con las celdas ya combinadas {}.", range, other));
+        if let Some(other) = layout
+            .merges
+            .iter()
+            .find(|m| crate::areas::overlaps_range(m, &range))
+        {
+            return Err(format!(
+                "El rango {} se cruza con las celdas ya combinadas {}.",
+                range, other
+            ));
         }
         let parsed = SheetXml::parse(&xml)?;
         let prefix = parsed.prefix().to_string();
@@ -913,37 +1277,85 @@ impl Workbook {
             .iter()
             .flat_map(|r| &r.cells)
             .filter(|c| c.at != range.first && crate::areas::range_contains(&range, c.at))
-            .filter(|c| c.value.as_deref().is_some_and(|v| !v.is_empty()) || c.inline.is_some() || c.formula.is_some())
+            .filter(|c| {
+                c.value.as_deref().is_some_and(|v| !v.is_empty())
+                    || c.inline.is_some()
+                    || c.formula.is_some()
+            })
             .map(|c| c.at.to_string())
             .collect();
         if !filled.is_empty() {
-            return Err(format!("Solo la primera celda de {} puede tener valor; vacía antes {}.", range, filled.join(", ")));
+            return Err(format!(
+                "Solo la primera celda de {} puede tener valor; vacía antes {}.",
+                range,
+                filled.join(", ")
+            ));
         }
         let entry = format!(r#"<{}mergeCell ref="{}"/>"#, prefix, range);
-        let new_xml = match element_ranges(&xml, "mergeCells", |_| true)?.into_iter().next() {
+        let new_xml = match element_ranges(&xml, "mergeCells", |_| true)?
+            .into_iter()
+            .next()
+        {
             Some(r) => {
                 let text = &xml[r.clone()];
                 let count = layout.merges.len() + 1;
                 let updated = match text.rfind("</") {
                     Some(i) => format!("{}{}{}", &text[..i], entry, &text[i..]),
-                    None => format!("{}>{}</{}mergeCells>", text.trim_end_matches("/>"), entry, prefix),
+                    None => format!(
+                        "{}>{}</{}mergeCells>",
+                        text.trim_end_matches("/>"),
+                        entry,
+                        prefix
+                    ),
                 };
                 let tag_end = updated.find('>').map(|i| i + 1).unwrap_or(0);
                 let tag = set_attr(&updated[..tag_end], "count", &count.to_string());
-                format!("{}{}{}{}", &xml[..r.start], tag, &updated[tag_end..], &xml[r.end..])
+                format!(
+                    "{}{}{}{}",
+                    &xml[..r.start],
+                    tag,
+                    &updated[tag_end..],
+                    &xml[r.end..]
+                )
             }
             None => {
                 // Schema order: mergeCells goes before these
                 const AFTER: &[&str] = &[
-                    "phoneticPr", "conditionalFormatting", "dataValidations", "hyperlinks", "printOptions", "pageMargins", "pageSetup",
-                    "headerFooter", "rowBreaks", "colBreaks", "customProperties", "cellWatches", "ignoredErrors", "smartTags", "drawing",
-                    "legacyDrawing", "legacyDrawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst",
+                    "phoneticPr",
+                    "conditionalFormatting",
+                    "dataValidations",
+                    "hyperlinks",
+                    "printOptions",
+                    "pageMargins",
+                    "pageSetup",
+                    "headerFooter",
+                    "rowBreaks",
+                    "colBreaks",
+                    "customProperties",
+                    "cellWatches",
+                    "ignoredErrors",
+                    "smartTags",
+                    "drawing",
+                    "legacyDrawing",
+                    "legacyDrawingHF",
+                    "picture",
+                    "oleObjects",
+                    "controls",
+                    "webPublishItems",
+                    "tableParts",
+                    "extLst",
                 ];
                 let at = match first_child_named(&xml, AFTER)? {
                     Some(at) => at,
                     None => xml.rfind("</").ok_or("La hoja no es XML válido.")?,
                 };
-                format!(r#"{}<{p}mergeCells count="1">{}</{p}mergeCells>{}"#, &xml[..at], entry, &xml[at..], p = prefix)
+                format!(
+                    r#"{}<{p}mergeCells count="1">{}</{p}mergeCells>{}"#,
+                    &xml[..at],
+                    entry,
+                    &xml[at..],
+                    p = prefix
+                )
             }
         };
         self.package.put(part, new_xml.into_bytes());
@@ -955,7 +1367,12 @@ impl Workbook {
         let range = CellRange::parse(range)?;
         let part = self.worksheet_part(sheet)?;
         let xml = self.package.get_string(&part)?;
-        let Some(section) = element_ranges(&xml, "mergeCells", |_| true)?.into_iter().next() else { return Ok(0) };
+        let Some(section) = element_ranges(&xml, "mergeCells", |_| true)?
+            .into_iter()
+            .next()
+        else {
+            return Ok(0);
+        };
         let text = xml[section.clone()].to_string();
         let mut removed = 0;
         let mut kept = 0;
@@ -965,7 +1382,9 @@ impl Workbook {
             let el = &text[r.clone()];
             let mut reader = Reader::from_str(el);
             let merge = match reader.read_event() {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => get_attr_value(&e, "ref").and_then(|v| CellRange::parse(&v).ok()),
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    get_attr_value(&e, "ref").and_then(|v| CellRange::parse(&v).ok())
+                }
                 _ => None,
             };
             if merge.is_some_and(|m| crate::areas::overlaps_range(&m, &range)) {
@@ -984,9 +1403,18 @@ impl Workbook {
             String::new()
         } else {
             let tag_end = out.find('>').map(|i| i + 1).unwrap_or(0);
-            format!("{}{}", set_attr(&out[..tag_end], "count", &kept.to_string()), &out[tag_end..])
+            format!(
+                "{}{}",
+                set_attr(&out[..tag_end], "count", &kept.to_string()),
+                &out[tag_end..]
+            )
         };
-        let new_xml = format!("{}{}{}", &xml[..section.start], replacement, &xml[section.end..]);
+        let new_xml = format!(
+            "{}{}{}",
+            &xml[..section.start],
+            replacement,
+            &xml[section.end..]
+        );
         self.package.put(part, new_xml.into_bytes());
         Ok(removed)
     }
@@ -1012,20 +1440,45 @@ mod tests {
 
     fn style_of(wb: &Workbook, r: &str) -> u32 {
         let xml = sheet_xml(wb);
-        SheetXml::parse(&xml).unwrap().cell(CellRef::parse(r).unwrap()).map(|c| c.style).unwrap_or(0)
+        SheetXml::parse(&xml)
+            .unwrap()
+            .cell(CellRef::parse(r).unwrap())
+            .map(|c| c.style)
+            .unwrap_or(0)
     }
 
     #[test]
     fn formats_fonts_fills_numbers_and_alignment_keeping_the_rest() {
         let mut wb = blank();
-        wb.set_values(0, "A1", vec![vec![Some(CellInput::Text("Total".into())), Some(CellInput::Number(1234.5))]]).unwrap();
-        let bold = Format { bold: Some(true), fill: Some(Some("#FFFF00".into())), horizontal: Some("center".into()), ..Default::default() };
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![
+                Some(CellInput::Text("Total".into())),
+                Some(CellInput::Number(1234.5)),
+            ]],
+        )
+        .unwrap();
+        let bold = Format {
+            bold: Some(true),
+            fill: Some(Some("#FFFF00".into())),
+            horizontal: Some("center".into()),
+            ..Default::default()
+        };
         wb.set_format(0, "A1:C1", &bold).unwrap();
-        let money = Format { number_format: Some("#,##0.00 \"€\"".into()), font_color: Some("c00000".into()), ..Default::default() };
+        let money = Format {
+            number_format: Some("#,##0.00 \"€\"".into()),
+            font_color: Some("c00000".into()),
+            ..Default::default()
+        };
         wb.set_format(0, "B1", &money).unwrap();
 
         let styles = view(&wb);
-        let (a1, b1, c1) = (style_of(&wb, "A1"), style_of(&wb, "B1"), style_of(&wb, "C1"));
+        let (a1, b1, c1) = (
+            style_of(&wb, "A1"),
+            style_of(&wb, "B1"),
+            style_of(&wb, "C1"),
+        );
         assert_eq!(a1, c1, "same format reused");
         let xf_a = &styles.xfs[a1 as usize];
         assert!(styles.fonts[xf_a.font].bold);
@@ -1036,21 +1489,43 @@ mod tests {
         assert!(styles.fonts[xf_b.font].bold);
         assert_eq!(styles.fonts[xf_b.font].color.as_deref(), Some("#C00000"));
         assert_eq!(styles.fills[xf_b.fill].as_deref(), Some("#FFFF00"));
-        assert_eq!(styles.custom_formats.get(&xf_b.num_fmt).map(String::as_str), Some("#,##0.00 \"€\""));
+        assert_eq!(
+            styles.custom_formats.get(&xf_b.num_fmt).map(String::as_str),
+            Some("#,##0.00 \"€\"")
+        );
         // The cell C1 did not exist: it was created with only the format
         assert!(sheet_xml(&wb).contains(&format!(r#"<c r="C1" s="{}"/>"#, c1)));
-        assert_eq!(wb.cell(0, "B1").unwrap().value, crate::workbook::CellValue::Number(1234.5));
+        assert_eq!(
+            wb.cell(0, "B1").unwrap().value,
+            crate::workbook::CellValue::Number(1234.5)
+        );
 
         wb.clear_format(0, "A1:C1").unwrap();
         assert_eq!((style_of(&wb, "A1"), style_of(&wb, "B1")), (0, 0));
         assert!(!sheet_xml(&wb).contains(r#"r="C1""#));
-        assert!(wb.set_format(0, "A1", &Format { font_color: Some("rojo".into()), ..Default::default() }).is_err());
+        assert!(wb
+            .set_format(
+                0,
+                "A1",
+                &Format {
+                    font_color: Some("rojo".into()),
+                    ..Default::default()
+                }
+            )
+            .is_err());
     }
 
     #[test]
     fn draws_outline_and_inside_borders() {
         let mut wb = blank();
-        let outline = Format { border: Some(BorderSpec { style: Some("medium".into()), color: None, edges: Edges::Outline }), ..Default::default() };
+        let outline = Format {
+            border: Some(BorderSpec {
+                style: Some("medium".into()),
+                color: None,
+                edges: Edges::Outline,
+            }),
+            ..Default::default()
+        };
         wb.set_format(0, "B2:C3", &outline).unwrap();
         let styles = view(&wb);
         let sides = |r: &str| -> Vec<bool> {
@@ -1060,34 +1535,76 @@ mod tests {
         // left, right, top, bottom
         assert_eq!(sides("B2"), [true, false, true, false]);
         assert_eq!(sides("C3"), [false, true, false, true]);
-        let all = Format { border: Some(BorderSpec { style: Some("thin".into()), color: Some("#000000".into()), edges: Edges::All }), ..Default::default() };
+        let all = Format {
+            border: Some(BorderSpec {
+                style: Some("thin".into()),
+                color: Some("#000000".into()),
+                edges: Edges::All,
+            }),
+            ..Default::default()
+        };
         wb.set_format(0, "E5", &all).unwrap();
         let styles = view(&wb);
-        assert!(styles.borders[styles.xfs[style_of(&wb, "E5") as usize].border].sides.iter().all(|s| s.as_ref().is_some_and(|(st, _)| st == "thin")));
+        assert!(
+            styles.borders[styles.xfs[style_of(&wb, "E5") as usize].border]
+                .sides
+                .iter()
+                .all(|s| s.as_ref().is_some_and(|(st, _)| st == "thin"))
+        );
     }
 
     #[test]
     fn sets_column_widths_splitting_existing_spans() {
         let mut wb = blank();
         wb.set_column_width(0, 2, 4, 20.0).unwrap();
-        assert!(sheet_xml(&wb).contains(r#"<cols><col min="2" max="4" width="20" customWidth="1"/></cols><sheetData"#), "{}", sheet_xml(&wb));
+        assert!(
+            sheet_xml(&wb).contains(
+                r#"<cols><col min="2" max="4" width="20" customWidth="1"/></cols><sheetData"#
+            ),
+            "{}",
+            sheet_xml(&wb)
+        );
         wb.set_column_width(0, 3, 6, 8.5).unwrap();
         let layout = SheetLayout::parse(&sheet_xml(&wb)).unwrap();
-        assert_eq!(layout.cols, vec![(2, 2, Some(20.0), false), (3, 4, Some(8.5), false), (5, 6, Some(8.5), false)]);
+        assert_eq!(
+            layout.cols,
+            vec![
+                (2, 2, Some(20.0), false),
+                (3, 4, Some(8.5), false),
+                (5, 6, Some(8.5), false)
+            ]
+        );
     }
 
     #[test]
     fn sets_row_heights_on_existing_and_new_rows() {
         let mut wb = blank();
         wb.set_row_height(0, 2, 3, Some(30.0)).unwrap();
-        assert!(sheet_xml(&wb).contains(r#"<row r="2" ht="30" customHeight="1"/><row r="3" ht="30" customHeight="1"/>"#), "{}", sheet_xml(&wb));
-        wb.set_value(0, "A5", crate::workbook::CellInput::Number(1.0)).unwrap();
-        wb.set_value(0, "A1", crate::workbook::CellInput::Number(2.0)).unwrap();
+        assert!(
+            sheet_xml(&wb).contains(
+                r#"<row r="2" ht="30" customHeight="1"/><row r="3" ht="30" customHeight="1"/>"#
+            ),
+            "{}",
+            sheet_xml(&wb)
+        );
+        wb.set_value(0, "A5", crate::workbook::CellInput::Number(1.0))
+            .unwrap();
+        wb.set_value(0, "A1", crate::workbook::CellInput::Number(2.0))
+            .unwrap();
         wb.set_row_height(0, 1, 6, Some(18.5)).unwrap();
         let rows = wb.sheet_layout(0).unwrap().rows;
-        assert_eq!(rows.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(), (1..=6).map(|r| (r, Some(18.5))).collect::<Vec<_>>());
-        assert_eq!(wb.cell(0, "A5").unwrap().value, crate::workbook::CellValue::Number(1.0));
-        assert_eq!(wb.cell(0, "A1").unwrap().value, crate::workbook::CellValue::Number(2.0));
+        assert_eq!(
+            rows.iter().map(|r| (r.0, r.1)).collect::<Vec<_>>(),
+            (1..=6).map(|r| (r, Some(18.5))).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            wb.cell(0, "A5").unwrap().value,
+            crate::workbook::CellValue::Number(1.0)
+        );
+        assert_eq!(
+            wb.cell(0, "A1").unwrap().value,
+            crate::workbook::CellValue::Number(2.0)
+        );
 
         wb.set_row_height(0, 2, 5, None).unwrap();
         let rows = wb.sheet_layout(0).unwrap().rows;
@@ -1099,17 +1616,30 @@ mod tests {
     #[test]
     fn hides_and_shows_rows_keeping_their_height() {
         let mut wb = blank();
-        wb.set_value(0, "A2", crate::workbook::CellInput::Number(1.0)).unwrap();
+        wb.set_value(0, "A2", crate::workbook::CellInput::Number(1.0))
+            .unwrap();
         wb.set_row_height(0, 2, 2, Some(30.0)).unwrap();
         wb.set_rows_hidden(0, 2, 3, true).unwrap();
-        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), true), (3, None, true)]);
-        assert_eq!(wb.cell(0, "A2").unwrap().value, crate::workbook::CellValue::Number(1.0));
+        assert_eq!(
+            wb.sheet_layout(0).unwrap().rows,
+            vec![(2, Some(30.0), true), (3, None, true)]
+        );
+        assert_eq!(
+            wb.cell(0, "A2").unwrap().value,
+            crate::workbook::CellValue::Number(1.0)
+        );
         wb.set_rows_hidden(0, 1, 5, false).unwrap();
-        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), false)]);
+        assert_eq!(
+            wb.sheet_layout(0).unwrap().rows,
+            vec![(2, Some(30.0), false)]
+        );
 
         wb.set_row_height(0, 4, 4, Some(0.0)).unwrap();
         wb.set_rows_hidden(0, 4, 4, false).unwrap();
-        assert_eq!(wb.sheet_layout(0).unwrap().rows, vec![(2, Some(30.0), false)]);
+        assert_eq!(
+            wb.sheet_layout(0).unwrap().rows,
+            vec![(2, Some(30.0), false)]
+        );
     }
 
     #[test]
@@ -1118,10 +1648,25 @@ mod tests {
         wb.set_column_width(0, 2, 16_384, 20.0).unwrap();
         wb.set_columns_hidden(0, 1, 3, true).unwrap();
         let cols = wb.sheet_layout(0).unwrap().cols;
-        assert_eq!(cols, vec![(1, 1, Some(0.0), true), (2, 3, Some(20.0), true), (4, 16_384, Some(20.0), false)]);
+        assert_eq!(
+            cols,
+            vec![
+                (1, 1, Some(0.0), true),
+                (2, 3, Some(20.0), true),
+                (4, 16_384, Some(20.0), false)
+            ]
+        );
         wb.set_columns_hidden(0, 3, 3, false).unwrap();
         let cols = wb.sheet_layout(0).unwrap().cols;
-        assert_eq!(cols, vec![(1, 1, Some(0.0), true), (2, 2, Some(20.0), true), (3, 3, Some(20.0), false), (4, 16_384, Some(20.0), false)]);
+        assert_eq!(
+            cols,
+            vec![
+                (1, 1, Some(0.0), true),
+                (2, 2, Some(20.0), true),
+                (3, 3, Some(20.0), false),
+                (4, 16_384, Some(20.0), false)
+            ]
+        );
         // Hidden where nothing described it: back to the default, without a list left empty
         let mut wb = blank();
         wb.set_columns_hidden(0, 2, 2, true).unwrap();
@@ -1133,9 +1678,16 @@ mod tests {
     #[test]
     fn merges_and_unmerges_cells() {
         let mut wb = blank();
-        wb.set_value(0, "A1", CellInput::Text("Título".into())).unwrap();
+        wb.set_value(0, "A1", CellInput::Text("Título".into()))
+            .unwrap();
         wb.merge_cells(0, "A1:D1").unwrap();
-        assert!(sheet_xml(&wb).contains(r#"</sheetData><mergeCells count="1"><mergeCell ref="A1:D1"/></mergeCells>"#), "{}", sheet_xml(&wb));
+        assert!(
+            sheet_xml(&wb).contains(
+                r#"</sheetData><mergeCells count="1"><mergeCell ref="A1:D1"/></mergeCells>"#
+            ),
+            "{}",
+            sheet_xml(&wb)
+        );
         assert!(wb.merge_cells(0, "C1:C2").unwrap_err().contains("A1:D1"));
         wb.set_value(0, "B3", CellInput::Number(1.0)).unwrap();
         assert!(wb.merge_cells(0, "A3:B3").unwrap_err().contains("B3"));

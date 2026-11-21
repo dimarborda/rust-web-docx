@@ -103,7 +103,7 @@ Si un documento tuyo se ve distinto que en Word, abre un *issue* con una captura
 
 ## Desarrollo local
 
-Requisitos: Rust con el target `wasm32-unknown-unknown`, [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) y Node.js 20 o superior.
+Requisitos: [`rustup`](https://rustup.rs), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) y Node.js 20 o superior. La versión de Rust está fijada en [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` la instala sola, con Clippy, rustfmt y el target `wasm32-unknown-unknown`, la primera vez que ejecutes `cargo` en el repositorio. Para subir de versión, cámbiala ahí, corrige lo que reporte `cargo clippy` y confirma ambos cambios juntos.
 
 ```bash
 git clone https://github.com/dimarborda/rust-web-docx.git
@@ -115,14 +115,15 @@ npm run dev
 
 Abre `http://localhost:5173`. Si cambias código en `src/`, vuelve a ejecutar `npm run build:wasm`.
 
-- **Pruebas:** `cargo test`
+- **Pruebas:** `cargo test --workspace`
+- **Formato y lints:** `cargo fmt --all` y `cargo clippy --workspace --all-targets -- -D warnings` (la CI los exige en cada pull request)
 - **Compilación de producción:** `npm run build` (sale en `apps/demo/dist/`)
 - **Ejemplo de integración:** `http://localhost:5173/embed.html`
 - **Documentos propios:** copia tus `.docx` en [`examples/`](examples) y aparecerán en la pantalla de inicio. Esa carpeta está ignorada por git, para que tus documentos nunca terminen en el repositorio.
 
 ## Despliegue
 
-El sitio es estático y se publica en Cloudflare Workers. Cada push a `master` ejecuta las pruebas, compila y despliega con [GitHub Actions](.github/workflows/deploy.yml). Para desplegar a mano:
+El sitio es estático y se publica en Cloudflare Workers. Cada pull request pasa por [CI](.github/workflows/ci.yml) (formato, Clippy, pruebas, auditoría y compilación) sin desplegar nada. Cada push a `master` repite esas comprobaciones, compila y despliega con [GitHub Actions](.github/workflows/deploy.yml). Para desplegar a mano:
 
 ```bash
 npm run deploy

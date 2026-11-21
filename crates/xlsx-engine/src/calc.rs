@@ -131,14 +131,21 @@ impl<'c> Grid<'c> {
     fn get(&self, row: usize, col: usize) -> Val {
         match &self.kind {
             GridKind::Range(r, max_row, max_col) => {
-                let at = CellRef { row: r.first.row + row as u32, col: r.first.col + col as u32 };
+                let at = CellRef {
+                    row: r.first.row + row as u32,
+                    col: r.first.col + col as u32,
+                };
                 if at.row > *max_row || at.col > *max_col || row >= r.rows() || col >= r.cols() {
                     Val::Empty
                 } else {
                     self.ctx.value(r.sheet, at)
                 }
             }
-            GridKind::Array(a) => a.get(row).and_then(|r| r.get(col)).cloned().unwrap_or(Val::Empty),
+            GridKind::Array(a) => a
+                .get(row)
+                .and_then(|r| r.get(col))
+                .cloned()
+                .unwrap_or(Val::Empty),
         }
     }
 
@@ -175,7 +182,12 @@ pub struct Eval<'c> {
 
 /// Evaluates the formula of a cell. `Err` means it uses something not supported here.
 pub fn evaluate(ctx: &dyn Context, sheet: usize, at: CellRef, expr: &Expr) -> Result<Val, String> {
-    let mut eval = Eval { ctx, sheet, at, depth: 0 };
+    let mut eval = Eval {
+        ctx,
+        sheet,
+        at,
+        depth: 0,
+    };
     let result = eval.eval(expr).and_then(|res| match res {
         Res::Array(rows) if rows.len() > 1 || rows.first().is_some_and(|r| r.len() > 1) => {
             unsupported("una matriz que ocupa varias celdas")
@@ -199,7 +211,12 @@ fn parse_number(text: &str) -> Option<f64> {
         return None;
     }
     if let Some(p) = t.strip_suffix('%') {
-        return p.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map(|n| n / 100.0);
+        return p
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .map(|n| n / 100.0);
     }
     t.parse::<f64>().ok().filter(|n| n.is_finite())
 }
@@ -225,7 +242,12 @@ pub fn number_text(n: f64) -> String {
         let (mantissa, exp) = s.split_once('E').unwrap();
         let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
         let exp: i32 = exp.parse().unwrap_or(0);
-        return format!("{}E{}{:02}", mantissa, if exp < 0 { '-' } else { '+' }, exp.abs());
+        return format!(
+            "{}E{}{:02}",
+            mantissa,
+            if exp < 0 { '-' } else { '+' },
+            exp.abs()
+        );
     }
     let rounded = round_sig(n, 15);
     let s = format!("{}", rounded);
@@ -355,10 +377,17 @@ impl Criterion {
             Val::Empty => Criterion::Number(Op::Eq, 0.0),
             Val::Error(e) => Criterion::Error(Op::Eq, e.clone()),
             Val::Text(t) => {
-                let (op, rest) = [(">=", Op::Ge), ("<=", Op::Le), ("<>", Op::Ne), (">", Op::Gt), ("<", Op::Lt), ("=", Op::Eq)]
-                    .iter()
-                    .find_map(|(p, op)| t.strip_prefix(p).map(|rest| (*op, rest)))
-                    .unwrap_or((Op::Eq, t.as_str()));
+                let (op, rest) = [
+                    (">=", Op::Ge),
+                    ("<=", Op::Le),
+                    ("<>", Op::Ne),
+                    (">", Op::Gt),
+                    ("<", Op::Lt),
+                    ("=", Op::Eq),
+                ]
+                .iter()
+                .find_map(|(p, op)| t.strip_prefix(p).map(|rest| (*op, rest)))
+                .unwrap_or((Op::Eq, t.as_str()));
                 if rest.is_empty() {
                     return Criterion::Blank(op != Op::Ne);
                 }
@@ -389,11 +418,17 @@ impl Criterion {
 
     fn matches(&self, v: &Val) -> bool {
         match self {
-            Criterion::Blank(true) => matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty()),
-            Criterion::Blank(false) => !(matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty())),
+            Criterion::Blank(true) => {
+                matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty())
+            }
+            Criterion::Blank(false) => {
+                !(matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty()))
+            }
             Criterion::Number(op, n) => match v {
                 Val::Number(x) => Self::holds(*op, x.partial_cmp(n).unwrap_or(Ordering::Equal)),
-                Val::Text(t) if *op == Op::Eq => parse_number(t) == Some(*n) && !t.trim().is_empty(),
+                Val::Text(t) if *op == Op::Eq => {
+                    parse_number(t) == Some(*n) && !t.trim().is_empty()
+                }
                 _ => *op == Op::Ne,
             },
             Criterion::Bool(op, b) => match v {
@@ -409,7 +444,9 @@ impl Criterion {
                 (Op::Eq, _) => false,
                 (Op::Ne, Val::Text(t)) => !wildcard_match(pattern, t),
                 (Op::Ne, _) => true,
-                (op, Val::Text(t)) => Self::holds(*op, t.to_lowercase().cmp(&pattern.to_lowercase())),
+                (op, Val::Text(t)) => {
+                    Self::holds(*op, t.to_lowercase().cmp(&pattern.to_lowercase()))
+                }
                 _ => false,
             },
         }
@@ -486,7 +523,12 @@ fn lookup_equal(lookup: &Val, v: &Val, wildcards: bool) -> bool {
 }
 
 fn same_kind(a: &Val, b: &Val) -> bool {
-    matches!((a, b), (Val::Number(_), Val::Number(_)) | (Val::Text(_), Val::Text(_)) | (Val::Bool(_), Val::Bool(_)))
+    matches!(
+        (a, b),
+        (Val::Number(_), Val::Number(_))
+            | (Val::Text(_), Val::Text(_))
+            | (Val::Bool(_), Val::Bool(_))
+    )
 }
 
 // ---------- Dates ----------
@@ -525,7 +567,8 @@ impl<'c> Eval<'c> {
         if !self.ctx.date1904() && serial.floor() == 60.0 {
             return Ok((1900, 2, 29));
         }
-        let days = (serial_to_unix_ms(serial.floor(), self.ctx.date1904()) / MS_PER_DAY).floor() as i64;
+        let days =
+            (serial_to_unix_ms(serial.floor(), self.ctx.date1904()) / MS_PER_DAY).floor() as i64;
         Ok(civil_from_days(days))
     }
 
@@ -564,14 +607,30 @@ impl<'c> Eval<'c> {
     fn scalar(&self, res: Res) -> R<Val> {
         let v = match res {
             Res::Val(v) => v,
-            Res::Array(a) => a.first().and_then(|r| r.first()).cloned().unwrap_or(Val::Empty),
+            Res::Array(a) => a
+                .first()
+                .and_then(|r| r.first())
+                .cloned()
+                .unwrap_or(Val::Empty),
             Res::Range(r) => {
                 let at = if r.rows() == 1 && r.cols() == 1 {
                     r.first
-                } else if r.cols() == 1 && r.sheet == self.sheet && (r.first.row..=r.last.row).contains(&self.at.row) {
-                    CellRef { row: self.at.row, col: r.first.col }
-                } else if r.rows() == 1 && r.sheet == self.sheet && (r.first.col..=r.last.col).contains(&self.at.col) {
-                    CellRef { row: r.first.row, col: self.at.col }
+                } else if r.cols() == 1
+                    && r.sheet == self.sheet
+                    && (r.first.row..=r.last.row).contains(&self.at.row)
+                {
+                    CellRef {
+                        row: self.at.row,
+                        col: r.first.col,
+                    }
+                } else if r.rows() == 1
+                    && r.sheet == self.sheet
+                    && (r.first.col..=r.last.col).contains(&self.at.col)
+                {
+                    CellRef {
+                        row: r.first.row,
+                        col: self.at.col,
+                    }
                 } else {
                     return fail(VALUE);
                 };
@@ -586,11 +645,21 @@ impl<'c> Eval<'c> {
 
     fn area(&self, area: &Area) -> R<RangeRef> {
         let sheet = match &area.sheet {
-            Some(name) => self.ctx.sheet_index(name).map(Ok).unwrap_or_else(|| fail(REF))?,
+            Some(name) => self
+                .ctx
+                .sheet_index(name)
+                .map(Ok)
+                .unwrap_or_else(|| fail(REF))?,
             None => self.sheet,
         };
-        let first = CellRef { row: area.first.row.min(area.last.row), col: area.first.col.min(area.last.col) };
-        let last = CellRef { row: area.first.row.max(area.last.row), col: area.first.col.max(area.last.col) };
+        let first = CellRef {
+            row: area.first.row.min(area.last.row),
+            col: area.first.col.min(area.last.col),
+        };
+        let last = CellRef {
+            row: area.first.row.max(area.last.row),
+            col: area.first.col.max(area.last.col),
+        };
         Ok(RangeRef { sheet, first, last })
     }
 
@@ -606,8 +675,15 @@ impl<'c> Eval<'c> {
                 if self.depth > 16 {
                     return unsupported("nombres definidos anidados");
                 }
-                let Some((definition, sheet)) = self.ctx.name(name, self.sheet) else { return fail(NAME) };
-                let mut inner = Eval { ctx: self.ctx, sheet, at: self.at, depth: self.depth + 1 };
+                let Some((definition, sheet)) = self.ctx.name(name, self.sheet) else {
+                    return fail(NAME);
+                };
+                let mut inner = Eval {
+                    ctx: self.ctx,
+                    sheet,
+                    at: self.at,
+                    depth: self.depth + 1,
+                };
                 inner.eval(definition)?
             }
             Expr::Paren(e) | Expr::Plus(e) => self.eval(e)?,
@@ -629,7 +705,9 @@ impl<'c> Eval<'c> {
                     let mut values = Vec::with_capacity(row.len());
                     for item in row {
                         values.push(match self.eval(item) {
-                            Ok(res) => self.scalar(res).unwrap_or_else(|_| Val::Error(VALUE.into())),
+                            Ok(res) => self
+                                .scalar(res)
+                                .unwrap_or_else(|_| Val::Error(VALUE.into())),
                             Err(Flow::Error(e)) => Val::Error(e),
                             Err(other) => return Err(other),
                         });
@@ -647,7 +725,9 @@ impl<'c> Eval<'c> {
         if grid.rows() as u64 * grid.cols() as u64 > MAX_ARRAY_CELLS {
             return unsupported("operaciones con rangos demasiado grandes");
         }
-        Ok((0..grid.rows()).map(|r| (0..grid.cols()).map(|c| grid.get(r, c)).collect()).collect())
+        Ok((0..grid.rows())
+            .map(|r| (0..grid.cols()).map(|c| grid.get(r, c)).collect())
+            .collect())
     }
 
     fn map(&self, res: Res, f: impl Fn(&Val) -> Val) -> R<Res> {
@@ -658,7 +738,9 @@ impl<'c> Eval<'c> {
             },
             other => {
                 let m = self.matrix(other)?;
-                Ok(Res::Array(m.iter().map(|r| r.iter().map(&f).collect()).collect()))
+                Ok(Res::Array(
+                    m.iter().map(|r| r.iter().map(&f).collect()).collect(),
+                ))
             }
         }
     }
@@ -672,7 +754,10 @@ impl<'c> Eval<'c> {
             };
         }
         let single = |r: &Res| matches!(r, Res::Range(rr) if rr.rows() == 1 && rr.cols() == 1);
-        if single(&a) && single(&b) || single(&a) && matches!(b, Res::Val(_)) || matches!(a, Res::Val(_)) && single(&b) {
+        if single(&a) && single(&b)
+            || single(&a) && matches!(b, Res::Val(_))
+            || matches!(a, Res::Val(_)) && single(&b)
+        {
             let (x, y) = (self.scalar(a)?, self.scalar(b)?);
             return match binary(op, &x, &y) {
                 Val::Error(e) => fail(&e),
@@ -681,14 +766,31 @@ impl<'c> Eval<'c> {
         }
         let (ma, mb) = (self.matrix(a)?, self.matrix(b)?);
         let rows = ma.len().max(mb.len());
-        let cols = ma.first().map(Vec::len).unwrap_or(0).max(mb.first().map(Vec::len).unwrap_or(0));
+        let cols = ma
+            .first()
+            .map(Vec::len)
+            .unwrap_or(0)
+            .max(mb.first().map(Vec::len).unwrap_or(0));
         let pick = |m: &Vec<Vec<Val>>, r: usize, c: usize| -> Val {
             let r = if m.len() == 1 { 0 } else { r };
-            let c = if m.first().map(Vec::len) == Some(1) { 0 } else { c };
-            m.get(r).and_then(|row| row.get(c)).cloned().unwrap_or(Val::Error(NA.into()))
+            let c = if m.first().map(Vec::len) == Some(1) {
+                0
+            } else {
+                c
+            };
+            m.get(r)
+                .and_then(|row| row.get(c))
+                .cloned()
+                .unwrap_or(Val::Error(NA.into()))
         };
         Ok(Res::Array(
-            (0..rows).map(|r| (0..cols).map(|c| binary(op, &pick(&ma, r, c), &pick(&mb, r, c))).collect()).collect(),
+            (0..rows)
+                .map(|r| {
+                    (0..cols)
+                        .map(|c| binary(op, &pick(&ma, r, c), &pick(&mb, r, c)))
+                        .collect()
+                })
+                .collect(),
         ))
     }
 
@@ -794,7 +896,11 @@ impl<'c> Eval<'c> {
                 }
                 nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
                 let mid = nums.len() / 2;
-                n(if nums.len() % 2 == 0 { (nums[mid - 1] + nums[mid]) / 2.0 } else { nums[mid] })
+                n(if nums.len() % 2 == 0 {
+                    (nums[mid - 1] + nums[mid]) / 2.0
+                } else {
+                    nums[mid]
+                })
             }
             "COUNT" => {
                 let values = self.all_values(args)?;
@@ -807,14 +913,23 @@ impl<'c> Eval<'c> {
                 v(Val::Number(count.count() as f64))
             }
             "COUNTA" => {
-                let count = self.all_values(args)?.iter().filter(|(v, from_range)| !(matches!(v, Val::Empty) && *from_range)).count();
+                let count = self
+                    .all_values(args)?
+                    .iter()
+                    .filter(|(v, from_range)| !(matches!(v, Val::Empty) && *from_range))
+                    .count();
                 v(Val::Number(count as f64))
             }
             "COUNTBLANK" => {
                 Self::arity(name, args, 1, 1)?;
                 let grid = self.arg_grid(&args[0])?;
                 let total = grid.rows() as f64 * grid.cols() as f64;
-                let filled = grid.values().filter(|v| !(matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty()))).count();
+                let filled = grid
+                    .values()
+                    .filter(|v| {
+                        !(matches!(v, Val::Empty) || matches!(v, Val::Text(t) if t.is_empty()))
+                    })
+                    .count();
                 v(Val::Number(total - filled as f64))
             }
             "ROUND" | "ROUNDUP" | "ROUNDDOWN" => {
@@ -838,7 +953,13 @@ impl<'c> Eval<'c> {
             "ABS" => n(self.num(args.first().unwrap_or(&Expr::Missing))?.abs()),
             "SIGN" => {
                 let x = self.num(args.first().unwrap_or(&Expr::Missing))?;
-                n(if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 })
+                n(if x > 0.0 {
+                    1.0
+                } else if x < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                })
             }
             "SQRT" => {
                 let x = self.num(args.first().unwrap_or(&Expr::Missing))?;
@@ -874,7 +995,11 @@ impl<'c> Eval<'c> {
                     return fail(NUM);
                 }
                 let q = round_sig(x / sig, 15);
-                n(if name == "CEILING" { q.ceil() } else { q.floor() } * sig)
+                n(if name == "CEILING" {
+                    q.ceil()
+                } else {
+                    q.floor()
+                } * sig)
             }
             "CEILING.MATH" | "FLOOR.MATH" => {
                 let x = self.num(args.first().unwrap_or(&Expr::Missing))?;
@@ -885,7 +1010,17 @@ impl<'c> Eval<'c> {
                 }
                 let q = round_sig(x / sig, 15);
                 let up = name == "CEILING.MATH";
-                let r = if away { if up { q.floor() } else { q.ceil() } } else if up { q.ceil() } else { q.floor() };
+                let r = if away {
+                    if up {
+                        q.floor()
+                    } else {
+                        q.ceil()
+                    }
+                } else if up {
+                    q.ceil()
+                } else {
+                    q.floor()
+                };
                 n(r * sig)
             }
             "SUMPRODUCT" => {
@@ -894,9 +1029,14 @@ impl<'c> Eval<'c> {
                     let res = self.eval(arg)?;
                     matrices.push(self.matrix(res)?);
                 }
-                let Some(first) = matrices.first() else { return fail(VALUE) };
+                let Some(first) = matrices.first() else {
+                    return fail(VALUE);
+                };
                 let (rows, cols) = (first.len(), first.first().map(Vec::len).unwrap_or(0));
-                if matrices.iter().any(|m| m.len() != rows || m.first().map(Vec::len).unwrap_or(0) != cols) {
+                if matrices
+                    .iter()
+                    .any(|m| m.len() != rows || m.first().map(Vec::len).unwrap_or(0) != cols)
+                {
                     return fail(VALUE);
                 }
                 let mut total = 0.0;
@@ -931,7 +1071,9 @@ impl<'c> Eval<'c> {
             }
             "IFS" => {
                 for pair in args.chunks(2) {
-                    let [cond, value] = pair else { return unsupported("IFS sin valor") };
+                    let [cond, value] = pair else {
+                        return unsupported("IFS sin valor");
+                    };
                     if self.boolean(cond)? {
                         return self.eval(value);
                     }
@@ -961,7 +1103,9 @@ impl<'c> Eval<'c> {
                 Self::arity(name, args, 2, 2)?;
                 let first = self.eval(&args[0]).and_then(|res| match res {
                     Res::Val(Val::Error(e)) => Err(Flow::Error(e)),
-                    Res::Range(r) if r.rows() == 1 && r.cols() == 1 => self.scalar(Res::Range(r)).map(Res::Val),
+                    Res::Range(r) if r.rows() == 1 && r.cols() == 1 => {
+                        self.scalar(Res::Range(r)).map(Res::Val)
+                    }
                     other => Ok(other),
                 });
                 match first {
@@ -996,7 +1140,8 @@ impl<'c> Eval<'c> {
             }
 
             // Information
-            "ISBLANK" | "ISNUMBER" | "ISTEXT" | "ISLOGICAL" | "ISNONTEXT" | "ISERROR" | "ISERR" | "ISNA" => {
+            "ISBLANK" | "ISNUMBER" | "ISTEXT" | "ISLOGICAL" | "ISNONTEXT" | "ISERROR" | "ISERR"
+            | "ISNA" => {
                 Self::arity(name, args, 1, 1)?;
                 let value = match self.val(&args[0]) {
                     Ok(v) => v,
@@ -1034,7 +1179,11 @@ impl<'c> Eval<'c> {
                 self.conditional(name, &[(range, criterion)], target.as_ref())
             }
             "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" | "COUNTIFS" => {
-                let (target, pairs) = if name == "COUNTIFS" { (None, args) } else { (args.first(), args.get(1..).unwrap_or(&[])) };
+                let (target, pairs) = if name == "COUNTIFS" {
+                    (None, args)
+                } else {
+                    (args.first(), args.get(1..).unwrap_or(&[]))
+                };
                 if pairs.is_empty() || pairs.len() % 2 != 0 {
                     return unsupported(format!("{} con {} argumentos", name, args.len()));
                 }
@@ -1062,15 +1211,29 @@ impl<'c> Eval<'c> {
                     Some(e) => self.boolean(e)?,
                 };
                 let vertical = name == "VLOOKUP";
-                let (count, width) = if vertical { (table.rows(), table.cols()) } else { (table.cols(), table.rows()) };
+                let (count, width) = if vertical {
+                    (table.rows(), table.cols())
+                } else {
+                    (table.cols(), table.rows())
+                };
                 if index < 1 {
                     return fail(VALUE);
                 }
                 if index as usize > width {
                     return fail(REF);
                 }
-                let key = |i: usize| if vertical { table.get(i, 0) } else { table.get(0, i) };
-                let searched = if vertical { table.used().0 } else { table.used().1 };
+                let key = |i: usize| {
+                    if vertical {
+                        table.get(i, 0)
+                    } else {
+                        table.get(0, i)
+                    }
+                };
+                let searched = if vertical {
+                    table.used().0
+                } else {
+                    table.used().1
+                };
                 let found = if approximate {
                     approximate_position(&lookup, (0..searched.min(count)).map(key), 1)
                 } else {
@@ -1078,22 +1241,38 @@ impl<'c> Eval<'c> {
                 };
                 let Some(i) = found else { return fail(NA) };
                 let col = index as usize - 1;
-                v(if vertical { table.get(i, col) } else { table.get(col, i) })
+                v(if vertical {
+                    table.get(i, col)
+                } else {
+                    table.get(col, i)
+                })
             }
             "MATCH" => {
                 Self::arity(name, args, 2, 3)?;
                 let lookup = self.val(&args[0])?;
                 let grid = self.arg_grid(&args[1])?;
                 let mode = self.opt_num(args, 2, 1.0)?;
-                let Some(len) = grid.vector_len() else { return fail(NA) };
-                let used = if grid.rows() == 1 { grid.used().1 } else { grid.used().0 };
+                let Some(len) = grid.vector_len() else {
+                    return fail(NA);
+                };
+                let used = if grid.rows() == 1 {
+                    grid.used().1
+                } else {
+                    grid.used().0
+                };
                 let values = (0..used.min(len)).map(|i| grid.vector_get(i));
                 let found = if mode == 0.0 {
-                    values.enumerate().find(|(_, v)| lookup_equal(&lookup, v, true)).map(|(i, _)| i)
+                    values
+                        .enumerate()
+                        .find(|(_, v)| lookup_equal(&lookup, v, true))
+                        .map(|(i, _)| i)
                 } else {
                     approximate_position(&lookup, values, if mode > 0.0 { 1 } else { -1 })
                 };
-                found.map(|i| Res::Val(Val::Number(i as f64 + 1.0))).map(Ok).unwrap_or_else(|| fail(NA))
+                found
+                    .map(|i| Res::Val(Val::Number(i as f64 + 1.0)))
+                    .map(Ok)
+                    .unwrap_or_else(|| fail(NA))
             }
             "XLOOKUP" => {
                 Self::arity(name, args, 3, 6)?;
@@ -1102,15 +1281,24 @@ impl<'c> Eval<'c> {
                 let results = self.eval(&args[2])?;
                 let mode = self.opt_num(args, 4, 0.0)?;
                 let search = self.opt_num(args, 5, 1.0)?;
-                let Some(len) = keys.vector_len() else { return fail(VALUE) };
-                let used = if keys.rows() == 1 { keys.used().1 } else { keys.used().0 };
+                let Some(len) = keys.vector_len() else {
+                    return fail(VALUE);
+                };
+                let used = if keys.rows() == 1 {
+                    keys.used().1
+                } else {
+                    keys.used().0
+                };
                 let mut order: Vec<usize> = (0..used.min(len)).collect();
                 if search < 0.0 {
                     order.reverse();
                 } else if search.abs() == 2.0 {
                     return unsupported("XLOOKUP con búsqueda binaria");
                 }
-                let mut found = order.iter().copied().find(|i| lookup_equal(&lookup, &keys.vector_get(*i), mode == 2.0));
+                let mut found = order
+                    .iter()
+                    .copied()
+                    .find(|i| lookup_equal(&lookup, &keys.vector_get(*i), mode == 2.0));
                 if found.is_none() && (mode == -1.0 || mode == 1.0) {
                     let mut best: Option<(usize, Val)> = None;
                     for i in order {
@@ -1119,10 +1307,18 @@ impl<'c> Eval<'c> {
                             continue;
                         }
                         let ord = compare(&candidate, &lookup);
-                        let fits = if mode < 0.0 { ord == Ordering::Less } else { ord == Ordering::Greater };
+                        let fits = if mode < 0.0 {
+                            ord == Ordering::Less
+                        } else {
+                            ord == Ordering::Greater
+                        };
                         let better = best.as_ref().is_none_or(|(_, b)| {
                             let o = compare(&candidate, b);
-                            if mode < 0.0 { o == Ordering::Greater } else { o == Ordering::Less }
+                            if mode < 0.0 {
+                                o == Ordering::Greater
+                            } else {
+                                o == Ordering::Less
+                            }
                         });
                         if fits && better {
                             best = Some((i, candidate));
@@ -1140,18 +1336,44 @@ impl<'c> Eval<'c> {
                 match results {
                     Res::Range(r) => {
                         let picked = if horizontal {
-                            RangeRef { first: CellRef { row: r.first.row, col: r.first.col + i as u32 }, last: CellRef { row: r.last.row, col: r.first.col + i as u32 }, ..r }
+                            RangeRef {
+                                first: CellRef {
+                                    row: r.first.row,
+                                    col: r.first.col + i as u32,
+                                },
+                                last: CellRef {
+                                    row: r.last.row,
+                                    col: r.first.col + i as u32,
+                                },
+                                ..r
+                            }
                         } else {
-                            RangeRef { first: CellRef { row: r.first.row + i as u32, col: r.first.col }, last: CellRef { row: r.first.row + i as u32, col: r.last.col }, ..r }
+                            RangeRef {
+                                first: CellRef {
+                                    row: r.first.row + i as u32,
+                                    col: r.first.col,
+                                },
+                                last: CellRef {
+                                    row: r.first.row + i as u32,
+                                    col: r.last.col,
+                                },
+                                ..r
+                            }
                         };
-                        if picked.last.row > r.last.row && !horizontal || picked.last.col > r.last.col && horizontal {
+                        if picked.last.row > r.last.row && !horizontal
+                            || picked.last.col > r.last.col && horizontal
+                        {
                             return fail(VALUE);
                         }
                         Ok(Res::Range(picked))
                     }
                     other => {
                         let grid = self.grid(other)?;
-                        v(if horizontal { grid.get(0, i) } else { grid.get(i, 0) })
+                        v(if horizontal {
+                            grid.get(0, i)
+                        } else {
+                            grid.get(i, 0)
+                        })
                     }
                 }
             }
@@ -1167,17 +1389,41 @@ impl<'c> Eval<'c> {
                     Res::Range(r) => {
                         let (rows, cols) = (r.rows() as i64, r.cols() as i64);
                         // A vector takes a single index along its length
-                        let (row, col) = if args.len() == 2 && rows == 1 { (1, row) } else if args.len() == 2 && cols == 1 { (row, 1) } else { (row, col) };
+                        let (row, col) = if args.len() == 2 && rows == 1 {
+                            (1, row)
+                        } else if args.len() == 2 && cols == 1 {
+                            (row, 1)
+                        } else {
+                            (row, col)
+                        };
                         if row > rows || col > cols {
                             return fail(REF);
                         }
-                        let (r1, r2) = if row == 0 { (r.first.row, r.last.row) } else { (r.first.row + row as u32 - 1, r.first.row + row as u32 - 1) };
-                        let (c1, c2) = if col == 0 { (r.first.col, r.last.col) } else { (r.first.col + col as u32 - 1, r.first.col + col as u32 - 1) };
-                        Ok(Res::Range(RangeRef { sheet: r.sheet, first: CellRef { row: r1, col: c1 }, last: CellRef { row: r2, col: c2 } }))
+                        let (r1, r2) = if row == 0 {
+                            (r.first.row, r.last.row)
+                        } else {
+                            (r.first.row + row as u32 - 1, r.first.row + row as u32 - 1)
+                        };
+                        let (c1, c2) = if col == 0 {
+                            (r.first.col, r.last.col)
+                        } else {
+                            (r.first.col + col as u32 - 1, r.first.col + col as u32 - 1)
+                        };
+                        Ok(Res::Range(RangeRef {
+                            sheet: r.sheet,
+                            first: CellRef { row: r1, col: c1 },
+                            last: CellRef { row: r2, col: c2 },
+                        }))
                     }
                     other => {
                         let grid = self.grid(other)?;
-                        let (row, col) = if args.len() == 2 && grid.rows() == 1 { (1, row) } else if args.len() == 2 && grid.cols() == 1 { (row, 1) } else { (row, col) };
+                        let (row, col) = if args.len() == 2 && grid.rows() == 1 {
+                            (1, row)
+                        } else if args.len() == 2 && grid.cols() == 1 {
+                            (row, 1)
+                        } else {
+                            (row, col)
+                        };
                         if row == 0 || col == 0 {
                             return unsupported("INDEX de una fila o columna entera de una matriz");
                         }
@@ -1199,17 +1445,29 @@ impl<'c> Eval<'c> {
                 }
             }
             "ROW" | "COLUMN" => match args.first() {
-                None => v(Val::Number(if name == "ROW" { self.at.row } else { self.at.col } as f64)),
+                None => v(Val::Number(if name == "ROW" {
+                    self.at.row
+                } else {
+                    self.at.col
+                } as f64)),
                 Some(Expr::Ref(area)) => {
                     let r = self.area(area)?;
-                    v(Val::Number(if name == "ROW" { r.first.row } else { r.first.col } as f64))
+                    v(Val::Number(if name == "ROW" {
+                        r.first.row
+                    } else {
+                        r.first.col
+                    } as f64))
                 }
                 _ => unsupported(format!("{} de algo que no es una referencia", name)),
             },
             "ROWS" | "COLUMNS" => {
                 Self::arity(name, args, 1, 1)?;
                 let grid = self.arg_grid(&args[0])?;
-                v(Val::Number(if name == "ROWS" { grid.rows() } else { grid.cols() } as f64))
+                v(Val::Number(if name == "ROWS" {
+                    grid.rows()
+                } else {
+                    grid.cols()
+                } as f64))
             }
 
             // Text
@@ -1250,7 +1508,11 @@ impl<'c> Eval<'c> {
                     return fail(VALUE);
                 }
                 let count = (count as usize).min(t.len());
-                let slice = if name == "LEFT" { &t[..count] } else { &t[t.len() - count..] };
+                let slice = if name == "LEFT" {
+                    &t[..count]
+                } else {
+                    &t[t.len() - count..]
+                };
                 v(Val::Text(slice.iter().collect()))
             }
             "MID" => {
@@ -1274,7 +1536,11 @@ impl<'c> Eval<'c> {
                 v(Val::Text(match name {
                     "UPPER" => t.to_uppercase(),
                     "LOWER" => t.to_lowercase(),
-                    "TRIM" => t.split(' ').filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" "),
+                    "TRIM" => t
+                        .split(' ')
+                        .filter(|w| !w.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     _ => {
                         let mut out = String::new();
                         let mut after_letter = false;
@@ -1292,7 +1558,11 @@ impl<'c> Eval<'c> {
             }
             "SUBSTITUTE" => {
                 Self::arity(name, args, 3, 4)?;
-                let (t, old, new) = (self.text(&args[0])?, self.text(&args[1])?, self.text(&args[2])?);
+                let (t, old, new) = (
+                    self.text(&args[0])?,
+                    self.text(&args[1])?,
+                    self.text(&args[2])?,
+                );
                 if old.is_empty() {
                     return v(Val::Text(t));
                 }
@@ -1304,7 +1574,12 @@ impl<'c> Eval<'c> {
                             return fail(VALUE);
                         }
                         match t.match_indices(&old).nth(nth as usize - 1) {
-                            Some((at, _)) => v(Val::Text(format!("{}{}{}", &t[..at], new, &t[at + old.len()..]))),
+                            Some((at, _)) => v(Val::Text(format!(
+                                "{}{}{}",
+                                &t[..at],
+                                new,
+                                &t[at + old.len()..]
+                            ))),
                             None => v(Val::Text(t)),
                         }
                     }
@@ -1337,13 +1612,20 @@ impl<'c> Eval<'c> {
                 } else if has_wildcards(&needle) {
                     let rest_chars: Vec<char> = rest.chars().collect();
                     (0..=rest_chars.len()).find(|i| {
-                        (*i..=rest_chars.len()).any(|j| wildcard_match(&needle, &rest_chars[*i..j].iter().collect::<String>()))
+                        (*i..=rest_chars.len()).any(|j| {
+                            wildcard_match(&needle, &rest_chars[*i..j].iter().collect::<String>())
+                        })
                     })
                 } else {
                     let lower = rest.to_lowercase();
-                    lower.find(&needle.to_lowercase()).map(|b| lower[..b].chars().count())
+                    lower
+                        .find(&needle.to_lowercase())
+                        .map(|b| lower[..b].chars().count())
                 };
-                found.map(|i| Res::Val(Val::Number((from + i + 1) as f64))).map(Ok).unwrap_or_else(|| fail(VALUE))
+                found
+                    .map(|i| Res::Val(Val::Number((from + i + 1) as f64)))
+                    .map(Ok)
+                    .unwrap_or_else(|| fail(VALUE))
             }
             "VALUE" => {
                 Self::arity(name, args, 1, 1)?;
@@ -1361,11 +1643,28 @@ impl<'c> Eval<'c> {
                 let locale = Locale::from_tag("en");
                 let shown = match &value {
                     Val::Text(t) => match parse_number(t) {
-                        Some(x) => numfmt::format(numfmt::Value::Number(x), &code, &locale, self.ctx.date1904()),
-                        None => numfmt::format(numfmt::Value::Text(t), &code, &locale, self.ctx.date1904()),
+                        Some(x) => numfmt::format(
+                            numfmt::Value::Number(x),
+                            &code,
+                            &locale,
+                            self.ctx.date1904(),
+                        ),
+                        None => numfmt::format(
+                            numfmt::Value::Text(t),
+                            &code,
+                            &locale,
+                            self.ctx.date1904(),
+                        ),
                     },
-                    Val::Bool(b) => numfmt::format(numfmt::Value::Bool(*b), &code, &locale, self.ctx.date1904()),
-                    other => numfmt::format(numfmt::Value::Number(to_num(other)?), &code, &locale, self.ctx.date1904()),
+                    Val::Bool(b) => {
+                        numfmt::format(numfmt::Value::Bool(*b), &code, &locale, self.ctx.date1904())
+                    }
+                    other => numfmt::format(
+                        numfmt::Value::Number(to_num(other)?),
+                        &code,
+                        &locale,
+                        self.ctx.date1904(),
+                    ),
                 };
                 v(Val::Text(shown.text))
             }
@@ -1375,7 +1674,11 @@ impl<'c> Eval<'c> {
             "NOW" => n(self.ctx.now()),
             "DATE" => {
                 Self::arity(name, args, 3, 3)?;
-                let (y, m, d) = (self.num(&args[0])?.trunc(), self.num(&args[1])?.trunc(), self.num(&args[2])?.trunc());
+                let (y, m, d) = (
+                    self.num(&args[0])?.trunc(),
+                    self.num(&args[1])?.trunc(),
+                    self.num(&args[2])?.trunc(),
+                );
                 n(self.serial(y as i64, m as i64, d as i64)?)
             }
             "YEAR" | "MONTH" | "DAY" => {
@@ -1409,8 +1712,16 @@ impl<'c> Eval<'c> {
                 let months = self.num(&args[1])?.trunc() as i64;
                 let total = y * 12 + (m - 1) + months;
                 let (ny, nm) = (total.div_euclid(12), total.rem_euclid(12) + 1);
-                let last_day = days_from_civil(if nm == 12 { ny + 1 } else { ny }, if nm == 12 { 1 } else { nm + 1 }, 1) - days_from_civil(ny, nm, 1);
-                let day = if name == "EOMONTH" { last_day } else { d.min(last_day) };
+                let last_day = days_from_civil(
+                    if nm == 12 { ny + 1 } else { ny },
+                    if nm == 12 { 1 } else { nm + 1 },
+                    1,
+                ) - days_from_civil(ny, nm, 1);
+                let day = if name == "EOMONTH" {
+                    last_day
+                } else {
+                    d.min(last_day)
+                };
                 n(self.serial(ny, nm, day)?)
             }
             "DAYS" => {
@@ -1423,9 +1734,18 @@ impl<'c> Eval<'c> {
     }
 
     /// SUMIF(S), COUNTIF(S), AVERAGEIF(S), MAXIFS and MINIFS
-    fn conditional(&self, name: &str, conditions: &[(Grid, Criterion)], target: Option<&Grid>) -> R<Res> {
+    fn conditional(
+        &self,
+        name: &str,
+        conditions: &[(Grid, Criterion)],
+        target: Option<&Grid>,
+    ) -> R<Res> {
         let (rows, cols) = (conditions[0].0.rows(), conditions[0].0.cols());
-        if conditions.iter().any(|(g, _)| g.rows() != rows || g.cols() != cols) && name.ends_with('S') {
+        if conditions
+            .iter()
+            .any(|(g, _)| g.rows() != rows || g.cols() != cols)
+            && name.ends_with('S')
+        {
             return fail(VALUE);
         }
         // Cells past every used area are empty: only count them, for criteria that match blanks
@@ -1445,7 +1765,10 @@ impl<'c> Eval<'c> {
         let mut count = 0f64;
         for r in 0..used_rows {
             for c in 0..used_cols {
-                if conditions.iter().all(|(g, crit)| crit.matches(&g.get(r, c))) {
+                if conditions
+                    .iter()
+                    .all(|(g, crit)| crit.matches(&g.get(r, c)))
+                {
                     count += 1.0;
                     if let Some(t) = target {
                         match t.get(r, c) {
@@ -1488,14 +1811,22 @@ impl<'c> Eval<'c> {
 
 /// Approximate match over values sorted ascending (`direction` 1: largest value ≤ lookup) or
 /// descending (-1: smallest value ≥ lookup); values of another type are skipped
-fn approximate_position(lookup: &Val, values: impl Iterator<Item = Val>, direction: i32) -> Option<usize> {
+fn approximate_position(
+    lookup: &Val,
+    values: impl Iterator<Item = Val>,
+    direction: i32,
+) -> Option<usize> {
     let mut found = None;
     for (i, v) in values.enumerate() {
         if !same_kind(&v, lookup) {
             continue;
         }
         let ord = compare(&v, lookup);
-        let fits = if direction > 0 { ord != Ordering::Greater } else { ord != Ordering::Less };
+        let fits = if direction > 0 {
+            ord != Ordering::Greater
+        } else {
+            ord != Ordering::Less
+        };
         if fits {
             found = Some(i);
             if ord == Ordering::Equal {
@@ -1553,7 +1884,10 @@ mod tests {
         put("A3", Val::Text("x".into()));
         put("A4", Val::Number(40.0));
         put("A5", Val::Bool(true));
-        for (i, region) in ["norte", "sur", "norte", "este", "norte"].iter().enumerate() {
+        for (i, region) in ["norte", "sur", "norte", "este", "norte"]
+            .iter()
+            .enumerate()
+        {
             put(&format!("B{}", i + 1), Val::Text(region.to_string()));
         }
         put("C1", Val::Number(0.5));
@@ -1570,7 +1904,13 @@ mod tests {
 
     fn calc(formula: &str) -> Val {
         let ctx = sheet();
-        evaluate(&ctx, 0, CellRef::parse("H2").unwrap(), &parse(formula).unwrap()).unwrap()
+        evaluate(
+            &ctx,
+            0,
+            CellRef::parse("H2").unwrap(),
+            &parse(formula).unwrap(),
+        )
+        .unwrap()
     }
 
     fn num(formula: &str) -> f64 {
@@ -1690,7 +2030,10 @@ mod tests {
         assert_eq!(text("CONCATENATE(\"a\",A1,\"b\")"), "a10b");
         assert_eq!(text("CONCAT(D1:D3)"), "123");
         assert_eq!(text("TEXTJOIN(\", \",TRUE,E1:E3,Z1)"), "uno, dos, tres");
-        assert_eq!(text("LEFT(\"España\",3)&RIGHT(\"España\",2)&MID(\"España\",2,3)"), "Espñaspa");
+        assert_eq!(
+            text("LEFT(\"España\",3)&RIGHT(\"España\",2)&MID(\"España\",2,3)"),
+            "Espñaspa"
+        );
         assert_eq!(num("LEN(\"ñandú\")"), 5.0);
         assert_eq!(text("PROPER(\"hola mUNDO\")"), "Hola Mundo");
         assert_eq!(text("TRIM(\"  a   b \")"), "a b");
@@ -1706,7 +2049,10 @@ mod tests {
     fn dates() {
         assert_eq!(num("DATE(2023,3,15)"), 45000.0);
         assert_eq!(num("DATE(2023,14,1)"), num("DATE(2024,2,1)"));
-        assert_eq!(num("YEAR(45000)*10000+MONTH(45000)*100+DAY(45000)"), 20230315.0);
+        assert_eq!(
+            num("YEAR(45000)*10000+MONTH(45000)*100+DAY(45000)"),
+            20230315.0
+        );
         assert_eq!(num("WEEKDAY(45000)"), 4.0);
         assert_eq!(num("WEEKDAY(45000,2)"), 3.0);
         assert_eq!(num("EOMONTH(45000,0)"), num("DATE(2023,3,31)"));

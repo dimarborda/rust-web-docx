@@ -26,7 +26,10 @@ fn docx(body: &str) -> DocxModifier {
         let mut zip = ZipWriter::new(&mut buf);
         let opts = SimpleFileOptions::default();
         for (name, content) in [
-            ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            ),
             ("word/document.xml", document.as_str()),
             ("word/theme/theme1.xml", THEME),
         ] {
@@ -74,28 +77,53 @@ fn paragraphs(m: &DocxModifier) -> Vec<rust_web_docx::docx_parser::ParagraphInfo
 fn layout(m: &DocxModifier) -> DocumentLayout {
     let elements: Vec<DocumentElement> = m.extract_elements().unwrap();
     let inputs = m.layout_inputs().unwrap();
-    LayoutEngine::new().with_images(inputs.body_images.clone()).compute_layout(
-        &elements,
-        "FFFFFF",
-        &inputs.page_setup,
-        &inputs.header_footer,
-        None,
-        None,
-        0.0,
-    )
+    LayoutEngine::new()
+        .with_images(inputs.body_images.clone())
+        .compute_layout(
+            &elements,
+            "FFFFFF",
+            &inputs.page_setup,
+            &inputs.header_footer,
+            None,
+            None,
+            0.0,
+        )
 }
 
 /// (x, y, width, height, fill, stroke, paragraph index) of each shape drawn on page 1
-type DrawnShape = (f64, f64, f64, f64, Option<String>, Option<String>, Option<usize>);
+type DrawnShape = (
+    f64,
+    f64,
+    f64,
+    f64,
+    Option<String>,
+    Option<String>,
+    Option<usize>,
+);
 
 fn shapes(l: &DocumentLayout) -> Vec<DrawnShape> {
     l.pages[0]
         .items
         .iter()
         .filter_map(|it| match it {
-            RenderCommand::Shape { x, y, width, height, fill, stroke, paragraph_index, .. } => {
-                Some((*x, *y, *width, *height, fill.clone(), stroke.clone(), *paragraph_index))
-            }
+            RenderCommand::Shape {
+                x,
+                y,
+                width,
+                height,
+                fill,
+                stroke,
+                paragraph_index,
+                ..
+            } => Some((
+                *x,
+                *y,
+                *width,
+                *height,
+                fill.clone(),
+                stroke.clone(),
+                *paragraph_index,
+            )),
             _ => None,
         })
         .collect()
@@ -108,9 +136,14 @@ fn texts(l: &DocumentLayout) -> Vec<(String, f64, f64, bool)> {
         .items
         .iter()
         .filter_map(|it| match it {
-            RenderCommand::Text { text, x, y, line, .. } => {
-                Some((text.clone(), *x, *y, line.as_ref().is_some_and(|r| r.text_box.is_none())))
-            }
+            RenderCommand::Text {
+                text, x, y, line, ..
+            } => Some((
+                text.clone(),
+                *x,
+                *y,
+                line.as_ref().is_some_and(|r| r.text_box.is_none()),
+            )),
             _ => None,
         })
         .collect()
@@ -119,10 +152,17 @@ fn texts(l: &DocumentLayout) -> Vec<(String, f64, f64, bool)> {
 #[test]
 fn test_word_text_box_is_read_once_with_its_text() {
     let fill = r#"<a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill>"#;
-    let m = docx(&format!(r#"<w:p>{}<w:r><w:t>{}</w:t></w:r></w:p>"#, word_text_box(fill, "Nota importante"), LONG));
+    let m = docx(&format!(
+        r#"<w:p>{}<w:r><w:t>{}</w:t></w:r></w:p>"#,
+        word_text_box(fill, "Nota importante"),
+        LONG
+    ));
     let ps = paragraphs(&m);
     assert_eq!(ps.len(), 1, "the box's paragraphs are not body paragraphs");
-    assert_eq!(ps[0].text, LONG, "the box's text is not part of the paragraph");
+    assert_eq!(
+        ps[0].text, LONG,
+        "the box's text is not part of the paragraph"
+    );
     assert_eq!(ps[0].images.len(), 1, "the VML fallback is not read again");
     let img: &ImageRef = &ps[0].images[0];
     assert!(!img.vml);
@@ -143,40 +183,75 @@ fn test_word_text_box_is_read_once_with_its_text() {
 #[test]
 fn test_text_box_is_drawn_and_text_wraps_around_it() {
     let fill = r#"<a:solidFill><a:schemeClr val="accent1"><a:lumMod val="20000"/><a:lumOff val="80000"/></a:schemeClr></a:solidFill>"#;
-    let m = docx(&format!(r#"<w:p>{}<w:r><w:t>{}</w:t></w:r></w:p>"#, word_text_box(fill, "Nota"), LONG));
+    let m = docx(&format!(
+        r#"<w:p>{}<w:r><w:t>{}</w:t></w:r></w:p>"#,
+        word_text_box(fill, "Nota"),
+        LONG
+    ));
     let l = layout(&m);
     let s = shapes(&l);
     assert_eq!(s.len(), 1);
     let (x, y, w, h, fill, stroke, para) = s[0].clone();
     // Right-aligned within the margins: 8.5in page, 1in margins
-    assert!((x + w - (816.0 - 96.0)).abs() < 0.5, "right edge on the right margin: {}", x + w);
+    assert!(
+        (x + w - (816.0 - 96.0)).abs() < 0.5,
+        "right edge on the right margin: {}",
+        x + w
+    );
     assert_eq!((w, h), (200.0, 100.0));
-    assert!(fill.is_some_and(|c| c.starts_with('#')), "theme color resolved");
+    assert!(
+        fill.is_some_and(|c| c.starts_with('#')),
+        "theme color resolved"
+    );
     assert_eq!(stroke.as_deref(), Some("#C00000"));
     assert_eq!(para, Some(0), "selectable like a picture");
 
     let all = texts(&l);
     let inside: Vec<_> = all.iter().filter(|t| !t.3).collect();
-    assert!(inside.iter().any(|t| t.0 == "Nota"), "box text is drawn: {:?}", inside);
+    assert!(
+        inside.iter().any(|t| t.0 == "Nota"),
+        "box text is drawn: {:?}",
+        inside
+    );
     for t in &inside {
-        assert!(t.1 >= x && t.1 <= x + w, "box text inside the box horizontally: {:?}", t);
-        assert!(t.2 > y && t.2 < y + h, "box text inside the box vertically: {:?}", t);
+        assert!(
+            t.1 >= x && t.1 <= x + w,
+            "box text inside the box horizontally: {:?}",
+            t
+        );
+        assert!(
+            t.2 > y && t.2 < y + h,
+            "box text inside the box vertically: {:?}",
+            t
+        );
     }
     // Centered vertically (anchor="ctr"): the text block sits around the box's middle
     let mid = inside.iter().map(|t| t.2).sum::<f64>() / inside.len() as f64;
-    assert!((mid - (y + h / 2.0)).abs() < 14.0, "vertical center {} vs {}", mid, y + h / 2.0);
+    assert!(
+        (mid - (y + h / 2.0)).abs() < 14.0,
+        "vertical center {} vs {}",
+        mid,
+        y + h / 2.0
+    );
 
     // Body lines beside the box end before it (plus its 0.125" distance)
     let body: Vec<_> = l.pages[0]
         .items
         .iter()
         .filter_map(|it| match it {
-            RenderCommand::Text { line: Some(r), .. } if r.top < y + h && r.text_box.is_none() => Some(r.right),
+            RenderCommand::Text { line: Some(r), .. } if r.top < y + h && r.text_box.is_none() => {
+                Some(r.right)
+            }
             _ => None,
         })
         .collect();
     assert!(!body.is_empty());
-    assert!(body.iter().all(|r| *r <= x - 11.9), "body text keeps clear of the box: {:?} vs {}", body, x);
+    assert!(
+        body.iter().all(|r| *r <= x - 11.9),
+        "body text keeps clear of the box: {:?} vs {}",
+        body,
+        x
+    );
 }
 
 #[test]
@@ -194,11 +269,24 @@ fn test_legacy_vml_text_box() {
     assert!(img.vml && img.anchored);
     assert_eq!(img.wrap, "topAndBottom");
     assert_eq!((img.width, img.height), (200.0, 80.0));
-    assert_eq!((img.h_relative.as_str(), img.h_offset, img.v_offset), ("margin", 48.0, 8.0));
+    assert_eq!(
+        (img.h_relative.as_str(), img.h_offset, img.v_offset),
+        ("margin", 48.0, 8.0)
+    );
     let shape = img.shape.as_ref().unwrap();
-    assert_eq!((shape.fill.as_deref(), shape.stroke.as_deref(), shape.stroke_width), (Some("DDEEFF"), Some("FF0000"), 2.0));
+    assert_eq!(
+        (
+            shape.fill.as_deref(),
+            shape.stroke.as_deref(),
+            shape.stroke_width
+        ),
+        (Some("DDEEFF"), Some("FF0000"), 2.0)
+    );
     let tb = img.text_box.as_ref().unwrap();
-    assert_eq!((tb.text().as_str(), tb.v_anchor.as_str()), ("Caja antigua", "b"));
+    assert_eq!(
+        (tb.text().as_str(), tb.v_anchor.as_str()),
+        ("Caja antigua", "b")
+    );
     assert!((tb.inset_left - 4.8).abs() < 1e-9);
 
     let l = layout(&m);
@@ -206,23 +294,52 @@ fn test_legacy_vml_text_box() {
     assert_eq!(s.len(), 1);
     assert_eq!(s[0].6, None, "VML shapes cannot be selected");
     // Top-and-bottom: the paragraph's text goes below the box
-    let body_y = texts(&l).into_iter().find(|t| t.3 && t.0 == "Texto").unwrap().2;
-    assert!(body_y > s[0].1 + s[0].3, "text below the box: {} vs {}", body_y, s[0].1 + s[0].3);
+    let body_y = texts(&l)
+        .into_iter()
+        .find(|t| t.3 && t.0 == "Texto")
+        .unwrap()
+        .2;
+    assert!(
+        body_y > s[0].1 + s[0].3,
+        "text below the box: {} vs {}",
+        body_y,
+        s[0].1 + s[0].3
+    );
 }
 
 #[test]
 fn test_text_box_moves_and_resizes_like_a_picture() {
     let fill = r#"<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>"#;
-    let mut m = docx(&format!(r#"<w:p>{}<w:r><w:t>Hola</w:t></w:r></w:p>"#, word_text_box(fill, "Caja")));
+    let mut m = docx(&format!(
+        r#"<w:p>{}<w:r><w:t>Hola</w:t></w:r></w:p>"#,
+        word_text_box(fill, "Caja")
+    ));
     m.checkpoint(None);
     let img = m
-        .update_image(0, 0, &ImageUpdate { width: Some(300.0), h_relative: Some("page".into()), h_offset: Some(50.0), wrap: Some("topAndBottom".into()), ..Default::default() })
+        .update_image(
+            0,
+            0,
+            &ImageUpdate {
+                width: Some(300.0),
+                h_relative: Some("page".into()),
+                h_offset: Some(50.0),
+                wrap: Some("topAndBottom".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!((img.width, img.height), (300.0, 150.0));
     assert_eq!(img.wrap, "topAndBottom");
-    assert_eq!(img.text_box.as_ref().unwrap().text(), "Caja\nSegunda línea", "the text survives");
+    assert_eq!(
+        img.text_box.as_ref().unwrap().text(),
+        "Caja\nSegunda línea",
+        "the text survives"
+    );
     let doc = m.get_file_string("word/document.xml").unwrap();
-    assert!(doc.contains(r#"<a:ext cx="2857500" cy="1428750"/>"#), "the shape's own size follows");
+    assert!(
+        doc.contains(r#"<a:ext cx="2857500" cy="1428750"/>"#),
+        "the shape's own size follows"
+    );
     assert!(doc.contains("<mc:Fallback>"), "the rest of the run is kept");
     // Editing the paragraph's text keeps the box
     m.replace_paragraph_range(0, 0, 0, "¡").unwrap();
@@ -246,9 +363,15 @@ fn test_shapes_without_text_and_groups() {
     let ellipse = &ps[0].images[0];
     assert_eq!(ellipse.wrap, "inline");
     let s = ellipse.shape.as_ref().unwrap();
-    assert_eq!((s.geometry.as_str(), s.fill.as_deref(), s.stroke.as_deref()), ("ellipse", Some("1F6F6B"), None));
+    assert_eq!(
+        (s.geometry.as_str(), s.fill.as_deref(), s.stroke.as_deref()),
+        ("ellipse", Some("1F6F6B"), None)
+    );
     assert!(ellipse.text_box.is_none());
-    assert!(ps[1].images.is_empty(), "groups are not drawn yet (nor mistaken for a single box)");
+    assert!(
+        ps[1].images.is_empty(),
+        "groups are not drawn yet (nor mistaken for a single box)"
+    );
     let l = layout(&m);
     assert_eq!(shapes(&l).len(), 1);
 }
@@ -281,7 +404,11 @@ fn editable_doc() -> DocxModifier {
 fn test_text_box_paragraphs_have_their_own_numbers() {
     let m = editable_doc();
     let ps = paragraphs(&m);
-    assert_eq!(ps.iter().map(|p| p.index).collect::<Vec<_>>(), vec![0, 1], "body numbering is unchanged");
+    assert_eq!(
+        ps.iter().map(|p| p.index).collect::<Vec<_>>(),
+        vec![0, 1],
+        "body numbering is unchanged"
+    );
     assert_eq!(
         box_texts(&m),
         vec![
@@ -297,25 +424,44 @@ fn test_text_box_paragraphs_have_their_own_numbers() {
 fn test_typing_enter_and_backspace_inside_a_text_box() {
     let mut m = editable_doc();
     m.checkpoint(None);
-    let caret = m.replace_range(TEXT_BOX_BASE, 0, TEXT_BOX_BASE, 0, "¡").unwrap();
+    let caret = m
+        .replace_range(TEXT_BOX_BASE, 0, TEXT_BOX_BASE, 0, "¡")
+        .unwrap();
     assert_eq!(caret, (TEXT_BOX_BASE, 1));
     assert_eq!(box_texts(&m)[0].1, "¡Primera caja");
-    assert_eq!(paragraphs(&m)[0].text, "Cuerpo uno", "the anchor paragraph keeps its text");
+    assert_eq!(
+        paragraphs(&m)[0].text,
+        "Cuerpo uno",
+        "the anchor paragraph keeps its text"
+    );
 
     // Enter in the middle of the box's first paragraph: the box grows, the next box shifts
-    let caret = m.replace_range(TEXT_BOX_BASE, 8, TEXT_BOX_BASE, 8, "\n").unwrap();
+    let caret = m
+        .replace_range(TEXT_BOX_BASE, 8, TEXT_BOX_BASE, 8, "\n")
+        .unwrap();
     assert_eq!(caret, (TEXT_BOX_BASE + 1, 0));
     let texts: Vec<String> = box_texts(&m).into_iter().map(|t| t.1).collect();
-    assert_eq!(texts, vec!["¡Primera", " caja", "Segunda línea", "Otra caja", "Segunda línea"]);
+    assert_eq!(
+        texts,
+        vec![
+            "¡Primera",
+            " caja",
+            "Segunda línea",
+            "Otra caja",
+            "Segunda línea"
+        ]
+    );
     assert_eq!(paragraphs(&m).len(), 2, "no body paragraph was added");
 
     // Backspace at the start of the new paragraph joins it back
-    m.replace_range(TEXT_BOX_BASE, 8, TEXT_BOX_BASE + 1, 0, "").unwrap();
+    m.replace_range(TEXT_BOX_BASE, 8, TEXT_BOX_BASE + 1, 0, "")
+        .unwrap();
     assert_eq!(box_texts(&m)[0].1, "¡Primera caja");
     assert_eq!(box_texts(&m).len(), 4);
 
     // The second box is edited independently
-    m.replace_paragraph_range(TEXT_BOX_BASE + 2, 0, 4, "Esta").unwrap();
+    m.replace_paragraph_range(TEXT_BOX_BASE + 2, 0, 4, "Esta")
+        .unwrap();
     assert_eq!(box_texts(&m)[2].1, "Esta caja");
 
     // Survives saving and reopening
@@ -328,8 +474,19 @@ fn test_typing_enter_and_backspace_inside_a_text_box() {
 fn test_formatting_and_undo_inside_a_text_box() {
     let mut m = editable_doc();
     m.checkpoint(None);
-    let runs = vec![RunInfo { text: "Primera".into(), bold: true, ..Default::default() }, RunInfo { text: " caja".into(), ..Default::default() }];
-    m.update_paragraph_runs(TEXT_BOX_BASE, &runs, Some("right")).unwrap();
+    let runs = vec![
+        RunInfo {
+            text: "Primera".into(),
+            bold: true,
+            ..Default::default()
+        },
+        RunInfo {
+            text: " caja".into(),
+            ..Default::default()
+        },
+    ];
+    m.update_paragraph_runs(TEXT_BOX_BASE, &runs, Some("right"))
+        .unwrap();
     let tb = paragraphs(&m)[0].images[0].text_box.clone().unwrap();
     assert!(tb.paragraphs[0].runs[0].bold);
     assert_eq!(tb.paragraphs[0].align, "right");
@@ -341,8 +498,16 @@ fn test_formatting_and_undo_inside_a_text_box() {
 #[test]
 fn test_mixed_selections_and_tables_are_refused() {
     let mut m = editable_doc();
-    assert!(m.replace_range(0, 2, TEXT_BOX_BASE, 3, "x").is_err(), "body → text box selection");
-    let table = NewTable { rows: vec![vec!["a".into()]], header: false, widths: None, align: None };
+    assert!(
+        m.replace_range(0, 2, TEXT_BOX_BASE, 3, "x").is_err(),
+        "body → text box selection"
+    );
+    let table = NewTable {
+        rows: vec![vec!["a".into()]],
+        header: false,
+        widths: None,
+        align: None,
+    };
     assert!(m.insert_table(TEXT_BOX_BASE, 0, &table).is_err());
     assert_eq!(box_texts(&m)[0].1, "Primera caja", "nothing changed");
 }
@@ -358,7 +523,10 @@ fn test_clicks_inside_a_text_box_reach_its_text() {
     let outside = caret::hit_test(&l, 1, 100.0, y + 5.0, &mut EstimateMeasurer).unwrap();
     assert!(outside.paragraph < TEXT_BOX_BASE, "{:?}", outside);
     // The caret can be shown in the box and moving down stays in it
-    let pos = TextPosition { paragraph: TEXT_BOX_BASE, offset: 2 };
+    let pos = TextPosition {
+        paragraph: TEXT_BOX_BASE,
+        offset: 2,
+    };
     assert!(caret::caret_box(&l, pos, &mut EstimateMeasurer).is_some());
     let down = caret::move_vertical(&l, pos, 1, x + 20.0, &mut EstimateMeasurer).unwrap();
     assert_eq!(down.paragraph, TEXT_BOX_BASE + 1);
@@ -387,15 +555,26 @@ fn document(m: &DocxModifier) -> String {
 fn test_fill_text_box_replaces_whole_box_content() {
     let mut m = editable_doc();
     m.checkpoint(None);
-    let content = TextBoxContent { ooxml: r#"<w:p><w:r><w:t>Nuevo contenido</w:t></w:r></w:p>"#.into(), images: vec![] };
+    let content = TextBoxContent {
+        ooxml: r#"<w:p><w:r><w:t>Nuevo contenido</w:t></w:r></w:p>"#.into(),
+        images: vec![],
+    };
     m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
 
     assert_eq!(
         box_texts(&m),
-        vec![(TEXT_BOX_BASE, "Nuevo contenido".to_string()), (TEXT_BOX_BASE + 1, "Otra caja".to_string()), (TEXT_BOX_BASE + 2, "Segunda línea".to_string())],
+        vec![
+            (TEXT_BOX_BASE, "Nuevo contenido".to_string()),
+            (TEXT_BOX_BASE + 1, "Otra caja".to_string()),
+            (TEXT_BOX_BASE + 2, "Segunda línea".to_string())
+        ],
         "replaces the whole box (its second paragraph is gone); the other box is untouched"
     );
-    assert_eq!(paragraphs(&m)[0].text, "Cuerpo uno", "the anchor paragraph keeps its text");
+    assert_eq!(
+        paragraphs(&m)[0].text,
+        "Cuerpo uno",
+        "the anchor paragraph keeps its text"
+    );
 
     // One undo step
     assert!(m.undo().is_some());
@@ -413,7 +592,10 @@ fn test_fill_text_box_with_image() {
     let mut m = editable_doc();
     let content = TextBoxContent {
         ooxml: r#"<w:p><w:r><w:t>Antes</w:t></w:r></w:p><w:p>{{img:logo}}</w:p>"#.into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(80, 40))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(80, 40))),
+        }],
     };
     m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
 
@@ -423,18 +605,29 @@ fn test_fill_text_box_with_image() {
     assert!(doc.contains("<a:blip r:embed="), "the image is referenced");
 
     let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
-    let rels = reopened.get_file_string("word/_rels/document.xml.rels").unwrap();
+    let rels = reopened
+        .get_file_string("word/_rels/document.xml.rels")
+        .unwrap();
     assert_eq!(rels.matches("relationships/image").count(), 1);
     let types = reopened.get_file_string("[Content_Types].xml").unwrap();
-    assert!(types.contains("image/png"), "the picture's type was registered");
-    assert_eq!(box_texts(&reopened)[0].1, "Antes", "survives saving and reopening");
+    assert!(
+        types.contains("image/png"),
+        "the picture's type was registered"
+    );
+    assert_eq!(
+        box_texts(&reopened)[0].1,
+        "Antes",
+        "survives saving and reopening"
+    );
 }
 
 /// `cx`/`cy` (px) of the inserted picture's own `wp:extent` — the nearest one before its
 /// `<a:blip r:embed=…>`, so it is never confused with a text box's own `wp:extent`.
 fn last_extent_px(xml: &str) -> (f64, f64) {
     let blip = xml.find("<a:blip r:embed=").expect("an inserted picture");
-    let idx = xml[..blip].rfind("<wp:extent").expect("the picture's own wp:extent");
+    let idx = xml[..blip]
+        .rfind("<wp:extent")
+        .expect("the picture's own wp:extent");
     let tag = &xml[idx..xml[idx..].find('/').map(|i| idx + i).unwrap_or(xml.len())];
     let attr = |name: &str| -> f64 {
         let needle = format!(r#"{}="#, name);
@@ -452,11 +645,19 @@ fn test_fill_text_box_shrinks_an_image_larger_than_the_box() {
     let mut m = editable_doc();
     let content = TextBoxContent {
         ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(800, 400))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(800, 400))),
+        }],
     };
     m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
     let (w, h) = last_extent_px(&document(&m));
-    assert!((w - 200.0).abs() < 1.0 && (h - 100.0).abs() < 1.0, "shrunk to the box's own size: {}x{}", w, h);
+    assert!(
+        (w - 200.0).abs() < 1.0 && (h - 100.0).abs() < 1.0,
+        "shrunk to the box's own size: {}x{}",
+        w,
+        h
+    );
 }
 
 #[test]
@@ -466,13 +667,26 @@ fn test_fill_text_box_shrinks_by_the_tighter_side() {
     let mut m = editable_doc();
     let content = TextBoxContent {
         ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(400, 400))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(400, 400))),
+        }],
     };
     m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
     let (w, h) = last_extent_px(&document(&m));
     assert!(w <= 200.5 && h <= 100.5, "fits inside the box: {}x{}", w, h);
-    assert!((w - h).abs() < 1.0, "stayed square (aspect ratio kept): {}x{}", w, h);
-    assert!((h - 100.0).abs() < 1.0, "shrunk down to the box's height: {}x{}", w, h);
+    assert!(
+        (w - h).abs() < 1.0,
+        "stayed square (aspect ratio kept): {}x{}",
+        w,
+        h
+    );
+    assert!(
+        (h - 100.0).abs() < 1.0,
+        "shrunk down to the box's height: {}x{}",
+        w,
+        h
+    );
 }
 
 #[test]
@@ -481,34 +695,61 @@ fn test_fill_text_box_does_not_enlarge_a_smaller_image() {
     let mut m = editable_doc();
     let content = TextBoxContent {
         ooxml: r#"<w:p>{{img:logo}}</w:p>"#.into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(50, 25))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(50, 25))),
+        }],
     };
     m.fill_text_box(TEXT_BOX_BASE, &content).unwrap();
     let (w, h) = last_extent_px(&document(&m));
-    assert!((w - 50.0).abs() < 1.0 && (h - 25.0).abs() < 1.0, "left at its own size: {}x{}", w, h);
+    assert!(
+        (w - 50.0).abs() < 1.0 && (h - 25.0).abs() < 1.0,
+        "left at its own size: {}x{}",
+        w,
+        h
+    );
 }
 
 #[test]
 fn test_fill_text_box_refuses_a_marker_outside_a_text_box() {
     let mut m = editable_doc();
-    let content = TextBoxContent { ooxml: "<w:p/>".into(), images: vec![] };
-    assert!(m.fill_text_box(0, &content).is_err(), "paragraph 0 is in the body, not a text box");
+    let content = TextBoxContent {
+        ooxml: "<w:p/>".into(),
+        images: vec![],
+    };
+    assert!(
+        m.fill_text_box(0, &content).is_err(),
+        "paragraph 0 is in the body, not a text box"
+    );
     assert_eq!(paragraphs(&m)[0].text, "Cuerpo uno", "nothing changed");
 }
 
 #[test]
 fn test_fill_text_box_refuses_a_marker_that_no_longer_exists() {
     let mut m = editable_doc();
-    let content = TextBoxContent { ooxml: "<w:p/>".into(), images: vec![] };
+    let content = TextBoxContent {
+        ooxml: "<w:p/>".into(),
+        images: vec![],
+    };
     assert!(m.fill_text_box(TEXT_BOX_BASE + 99, &content).is_err());
 }
 
 #[test]
 fn test_fill_text_box_refuses_malformed_xml_without_changing_the_document() {
     let mut m = editable_doc();
-    let content = TextBoxContent { ooxml: "<w:p><w:r></w:p>".into(), images: vec![] };
-    assert!(m.fill_text_box(TEXT_BOX_BASE, &content).is_err(), "mismatched tags");
-    assert_eq!(box_texts(&m)[0].1, "Primera caja", "the document was not touched");
+    let content = TextBoxContent {
+        ooxml: "<w:p><w:r></w:p>".into(),
+        images: vec![],
+    };
+    assert!(
+        m.fill_text_box(TEXT_BOX_BASE, &content).is_err(),
+        "mismatched tags"
+    );
+    assert_eq!(
+        box_texts(&m)[0].1,
+        "Primera caja",
+        "the document was not touched"
+    );
 }
 
 #[test]
@@ -516,8 +757,15 @@ fn test_fill_text_box_refuses_an_image_that_is_not_png_jpeg_or_gif() {
     let mut m = editable_doc();
     let content = TextBoxContent {
         ooxml: "<w:p>{{img:logo}}</w:p>".into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(b"no es una imagen")) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(b"no es una imagen")),
+        }],
     };
     assert!(m.fill_text_box(TEXT_BOX_BASE, &content).is_err());
-    assert_eq!(box_texts(&m)[0].1, "Primera caja", "the document was not touched");
+    assert_eq!(
+        box_texts(&m)[0].1,
+        "Primera caja",
+        "the document was not touched"
+    );
 }

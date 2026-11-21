@@ -91,7 +91,9 @@ impl StyleSheetView {
         let mut border: Option<BorderView> = None;
         let mut side: Option<usize> = None;
         loop {
-            let event = reader.read_event().map_err(|e| format!("La hoja de estilos no es XML válido: {}", e))?;
+            let event = reader
+                .read_event()
+                .map_err(|e| format!("La hoja de estilos no es XML válido: {}", e))?;
             let (e, empty) = match &event {
                 Event::Start(e) => (Some(e.clone()), false),
                 Event::Empty(e) => (Some(e.clone()), true),
@@ -113,13 +115,21 @@ impl StyleSheetView {
                     section = In::Borders;
                 } else if tag_is(name, "cellXfs") && !empty {
                     section = In::CellXfs;
-                } else if (tag_is(name, "cellStyleXfs") || tag_is(name, "dxfs") || tag_is(name, "cellStyles")) && !empty {
+                } else if (tag_is(name, "cellStyleXfs")
+                    || tag_is(name, "dxfs")
+                    || tag_is(name, "cellStyles"))
+                    && !empty
+                {
                     section = In::Other;
                 } else {
                     match section {
                         In::Fonts => {
                             if tag_is(name, "font") {
-                                font = Some(FontView { name: "Calibri".to_string(), size: 11.0, ..Default::default() });
+                                font = Some(FontView {
+                                    name: "Calibri".to_string(),
+                                    size: 11.0,
+                                    ..Default::default()
+                                });
                                 if empty {
                                     view.fonts.push(font.take().unwrap());
                                 }
@@ -129,7 +139,9 @@ impl StyleSheetView {
                                         f.name = v;
                                     }
                                 } else if tag_is(name, "sz") {
-                                    f.size = get_attr_value(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(11.0);
+                                    f.size = get_attr_value(&e, "val")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(11.0);
                                 } else if tag_is(name, "b") {
                                     f.bold = flag(&e);
                                 } else if tag_is(name, "i") {
@@ -137,7 +149,9 @@ impl StyleSheetView {
                                 } else if tag_is(name, "strike") {
                                     f.strike = flag(&e);
                                 } else if tag_is(name, "u") {
-                                    f.underline = get_attr_value(&e, "val").map(|v| v != "none").unwrap_or(true);
+                                    f.underline = get_attr_value(&e, "val")
+                                        .map(|v| v != "none")
+                                        .unwrap_or(true);
                                 } else if tag_is(name, "color") {
                                     f.color = theme.resolve(&e);
                                 }
@@ -153,7 +167,10 @@ impl StyleSheetView {
                                 }
                             } else if let Some(f) = fill.as_mut() {
                                 if tag_is(name, "patternFill") {
-                                    f.0 = Some(get_attr_value(&e, "patternType").unwrap_or_else(|| "none".to_string()));
+                                    f.0 = Some(
+                                        get_attr_value(&e, "patternType")
+                                            .unwrap_or_else(|| "none".to_string()),
+                                    );
                                 } else if tag_is(name, "fgColor") {
                                     f.1 = theme.resolve(&e);
                                 } else if tag_is(name, "bgColor") {
@@ -170,18 +187,21 @@ impl StyleSheetView {
                                     view.borders.push(border.take().unwrap());
                                 }
                             } else if let Some(b) = border.as_mut() {
-                                let index = SIDES.iter().position(|s| tag_is(name, s)).or_else(|| {
-                                    if tag_is(name, "start") {
-                                        Some(0)
-                                    } else if tag_is(name, "end") {
-                                        Some(1)
-                                    } else {
-                                        None
-                                    }
-                                });
+                                let index =
+                                    SIDES.iter().position(|s| tag_is(name, s)).or_else(|| {
+                                        if tag_is(name, "start") {
+                                            Some(0)
+                                        } else if tag_is(name, "end") {
+                                            Some(1)
+                                        } else {
+                                            None
+                                        }
+                                    });
                                 if let Some(i) = index {
                                     side = None;
-                                    if let Some(style) = get_attr_value(&e, "style").filter(|s| s != "none") {
+                                    if let Some(style) =
+                                        get_attr_value(&e, "style").filter(|s| s != "none")
+                                    {
                                         b.sides[i] = Some((style, None));
                                         if !empty {
                                             side = Some(i);
@@ -198,7 +218,11 @@ impl StyleSheetView {
                         }
                         In::CellXfs => {
                             if tag_is(name, "xf") {
-                                let id = |n: &str| get_attr_value(&e, n).and_then(|v| v.parse().ok()).unwrap_or(0);
+                                let id = |n: &str| {
+                                    get_attr_value(&e, n)
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0)
+                                };
                                 view.xfs.push(XfView {
                                     num_fmt: id("numFmtId") as u32,
                                     font: id("fontId"),
@@ -212,8 +236,12 @@ impl StyleSheetView {
                                     xf.vertical = get_attr_value(&e, "vertical");
                                     xf.wrap = attr_bool(&e, "wrapText").unwrap_or(false);
                                     xf.shrink = attr_bool(&e, "shrinkToFit").unwrap_or(false);
-                                    xf.indent = get_attr_value(&e, "indent").and_then(|v| v.parse().ok()).unwrap_or(0);
-                                    xf.rotation = get_attr_value(&e, "textRotation").and_then(|v| v.parse().ok()).unwrap_or(0);
+                                    xf.indent = get_attr_value(&e, "indent")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0);
+                                    xf.rotation = get_attr_value(&e, "textRotation")
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(0);
                                 }
                             }
                         }
@@ -245,7 +273,14 @@ impl StyleSheetView {
                             view.borders.push(b);
                         }
                         side = None;
-                    } else if tag_is(name, "fonts") || tag_is(name, "fills") || tag_is(name, "borders") || tag_is(name, "cellXfs") || tag_is(name, "cellStyleXfs") || tag_is(name, "dxfs") || tag_is(name, "cellStyles") {
+                    } else if tag_is(name, "fonts")
+                        || tag_is(name, "fills")
+                        || tag_is(name, "borders")
+                        || tag_is(name, "cellXfs")
+                        || tag_is(name, "cellStyleXfs")
+                        || tag_is(name, "dxfs")
+                        || tag_is(name, "cellStyles")
+                    {
                         section = In::None;
                     }
                 }
@@ -254,7 +289,11 @@ impl StyleSheetView {
             }
         }
         if view.fonts.is_empty() {
-            view.fonts.push(FontView { name: "Calibri".to_string(), size: 11.0, ..Default::default() });
+            view.fonts.push(FontView {
+                name: "Calibri".to_string(),
+                size: 11.0,
+                ..Default::default()
+            });
         }
         if view.xfs.is_empty() {
             view.xfs.push(XfView::default());
@@ -325,12 +364,18 @@ pub struct SheetLayout {
 
 impl SheetLayout {
     pub fn parse(xml: &str) -> Result<SheetLayout, String> {
-        let mut layout = SheetLayout { gridlines: true, headings: true, ..Default::default() };
+        let mut layout = SheetLayout {
+            gridlines: true,
+            headings: true,
+            ..Default::default()
+        };
         let mut reader = Reader::from_str(xml);
         let mut views = 0;
         let mut in_cell = false;
         loop {
-            let event = reader.read_event().map_err(|e| format!("La hoja no es XML válido: {}", e))?;
+            let event = reader
+                .read_event()
+                .map_err(|e| format!("La hoja no es XML válido: {}", e))?;
             match event {
                 Event::Start(e) | Event::Empty(e) => {
                     let name = e.name();
@@ -344,7 +389,8 @@ impl SheetLayout {
                         let r = get_attr_value(&e, "r").and_then(|v| v.parse().ok());
                         let ht = get_attr_value(&e, "ht").and_then(|v| v.parse().ok());
                         let hidden = attr_bool(&e, "hidden").unwrap_or(false);
-                        let r = r.unwrap_or_else(|| layout.rows.last().map(|x| x.0 + 1).unwrap_or(1));
+                        let r =
+                            r.unwrap_or_else(|| layout.rows.last().map(|x| x.0 + 1).unwrap_or(1));
                         if ht.is_some() || hidden {
                             layout.rows.push((r, ht, hidden));
                         } else {
@@ -355,7 +401,12 @@ impl SheetLayout {
                         let n = |a: &str| get_attr_value(&e, a).and_then(|v| v.parse::<u32>().ok());
                         if let (Some(min), Some(max)) = (n("min"), n("max")) {
                             let width = get_attr_value(&e, "width").and_then(|v| v.parse().ok());
-                            layout.cols.push((min, max.min(16_384), width, attr_bool(&e, "hidden").unwrap_or(false)));
+                            layout.cols.push((
+                                min,
+                                max.min(16_384),
+                                width,
+                                attr_bool(&e, "hidden").unwrap_or(false),
+                            ));
                         }
                     } else if tag_is(name, "sheetFormatPr") {
                         let f = |a: &str| get_attr_value(&e, a).and_then(|v| v.parse::<f64>().ok());
@@ -372,14 +423,20 @@ impl SheetLayout {
                     } else if tag_is(name, "pane") && views == 1 {
                         let state = get_attr_value(&e, "state").unwrap_or_default();
                         if state == "frozen" || state == "frozenSplit" {
-                            let f = |a: &str| get_attr_value(&e, a).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) as u32;
+                            let f = |a: &str| {
+                                get_attr_value(&e, a)
+                                    .and_then(|v| v.parse::<f64>().ok())
+                                    .unwrap_or(0.0) as u32
+                            };
                             let (cols, rows) = (f("xSplit"), f("ySplit"));
                             if cols > 0 || rows > 0 {
                                 layout.frozen = Some((rows, cols));
                             }
                         }
                     } else if tag_is(name, "mergeCell") {
-                        if let Some(range) = get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok()) {
+                        if let Some(range) =
+                            get_attr_value(&e, "ref").and_then(|r| CellRange::parse(&r).ok())
+                        {
                             layout.merges.push(range);
                         }
                     }
@@ -431,7 +488,13 @@ pub struct CellView {
 }
 
 /// The cells of a worksheet that show something: a value or a format other than the default
-pub fn cell_views(xml: &str, strings: &SharedStrings, styles: &StyleSheetView, locale: &Locale, date1904: bool) -> Result<Vec<CellView>, String> {
+pub fn cell_views(
+    xml: &str,
+    strings: &SharedStrings,
+    styles: &StyleSheetView,
+    locale: &Locale,
+    date1904: bool,
+) -> Result<Vec<CellView>, String> {
     let sheet = SheetXml::parse(xml)?;
     let mut out = Vec::new();
     for row in &sheet.rows {
@@ -444,22 +507,41 @@ pub fn cell_views(xml: &str, strings: &SharedStrings, styles: &StyleSheetView, l
     Ok(out)
 }
 
-fn cell_view(node: &CellNode, strings: &SharedStrings, styles: &StyleSheetView, locale: &Locale, date1904: bool) -> Option<CellView> {
+fn cell_view(
+    node: &CellNode,
+    strings: &SharedStrings,
+    styles: &StyleSheetView,
+    locale: &Locale,
+    date1904: bool,
+) -> Option<CellView> {
     let raw = node.value.as_deref().unwrap_or("");
     let text_value: Option<String>;
     let (value, kind) = match node.kind.as_deref() {
         Some("s") => {
-            text_value = raw.trim().parse::<usize>().ok().and_then(|i| strings.get(i)).map(str::to_string);
+            text_value = raw
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| strings.get(i))
+                .map(str::to_string);
             (text_value.as_deref().map(FmtValue::Text), "s")
         }
         Some("str") => (Some(FmtValue::Text(raw)), "s"),
-        Some("inlineStr") => (Some(FmtValue::Text(node.inline.as_deref().unwrap_or(raw))), "s"),
-        Some("b") => (Some(FmtValue::Bool(matches!(raw.trim(), "1" | "true"))), "b"),
+        Some("inlineStr") => (
+            Some(FmtValue::Text(node.inline.as_deref().unwrap_or(raw))),
+            "s",
+        ),
+        Some("b") => (
+            Some(FmtValue::Bool(matches!(raw.trim(), "1" | "true"))),
+            "b",
+        ),
         Some("e") => (Some(FmtValue::Error(raw)), "e"),
-        Some("d") => match iso_to_unix_ms(raw).and_then(|ms| unix_ms_to_serial(ms, date1904).ok()) {
-            Some(serial) => (Some(FmtValue::Number(serial)), "n"),
-            None => (Some(FmtValue::Text(raw)), "s"),
-        },
+        Some("d") => {
+            match iso_to_unix_ms(raw).and_then(|ms| unix_ms_to_serial(ms, date1904).ok()) {
+                Some(serial) => (Some(FmtValue::Number(serial)), "n"),
+                None => (Some(FmtValue::Text(raw)), "s"),
+            }
+        }
         _ if raw.trim().is_empty() => (None, ""),
         _ => match raw.trim().parse::<f64>() {
             Ok(n) => (Some(FmtValue::Number(n)), "n"),
@@ -468,7 +550,15 @@ fn cell_view(node: &CellNode, strings: &SharedStrings, styles: &StyleSheetView, 
     };
     let xf = styles.xfs.get(node.style as usize);
     let Some(value) = value else {
-        return (node.style != 0).then(|| CellView { row: node.at.row, col: node.at.col, style: node.style, text: String::new(), kind: "", color: None, number: None });
+        return (node.style != 0).then(|| CellView {
+            row: node.at.row,
+            col: node.at.col,
+            style: node.style,
+            text: String::new(),
+            kind: "",
+            color: None,
+            number: None,
+        });
     };
     let number = match value {
         FmtValue::Number(n) => Some(n),
@@ -476,14 +566,35 @@ fn cell_view(node: &CellNode, strings: &SharedStrings, styles: &StyleSheetView, 
     };
     let code = styles.format_code(xf.map(|x| x.num_fmt).unwrap_or(0), locale);
     let formatted = format(value, code, locale, date1904);
-    Some(CellView { row: node.at.row, col: node.at.col, style: node.style, text: formatted.text, kind, color: formatted.color, number })
+    Some(CellView {
+        row: node.at.row,
+        col: node.at.col,
+        style: node.style,
+        text: formatted.text,
+        kind,
+        color: formatted.color,
+        number,
+    })
 }
 
 /// Numbers as the cell format `style` shows them
-pub fn format_numbers(values: &[f64], style: u32, styles: &StyleSheetView, locale: &Locale, date1904: bool) -> Vec<String> {
-    let id = styles.xfs.get(style as usize).map(|x| x.num_fmt).unwrap_or(0);
+pub fn format_numbers(
+    values: &[f64],
+    style: u32,
+    styles: &StyleSheetView,
+    locale: &Locale,
+    date1904: bool,
+) -> Vec<String> {
+    let id = styles
+        .xfs
+        .get(style as usize)
+        .map(|x| x.num_fmt)
+        .unwrap_or(0);
     let code = styles.format_code(id, locale);
-    values.iter().map(|n| format(FmtValue::Number(*n), code, locale, date1904).text).collect()
+    values
+        .iter()
+        .map(|n| format(FmtValue::Number(*n), code, locale, date1904).text)
+        .collect()
 }
 
 /// Cells as compact JSON rows: `[row, col, style, text, kind, color, number]`; a row ends where
@@ -493,7 +604,9 @@ pub fn cells_json(cells: &[CellView]) -> Value {
         cells
             .iter()
             .map(|c| match (&c.color, c.number) {
-                (color, Some(number)) => json!([c.row, c.col, c.style, c.text, c.kind, color, number]),
+                (color, Some(number)) => {
+                    json!([c.row, c.col, c.style, c.text, c.kind, color, number])
+                }
                 (Some(color), None) => json!([c.row, c.col, c.style, c.text, c.kind, color]),
                 (None, None) => json!([c.row, c.col, c.style, c.text, c.kind]),
             })
@@ -518,16 +631,28 @@ mod tests {
         assert_eq!(view.fonts[0].color.as_deref(), Some("#000000"));
         let f = &view.fonts[1];
         assert!(f.bold && !f.italic && f.underline && !f.strike);
-        assert_eq!((f.name.as_str(), f.size, f.color.as_deref()), ("Arial", 16.0, Some("#FFFFFF")));
+        assert_eq!(
+            (f.name.as_str(), f.size, f.color.as_deref()),
+            ("Arial", 16.0, Some("#FFFFFF"))
+        );
         assert_eq!(view.fills[0], None);
-        assert_eq!(view.fills[1], None, "gray125 is the reserved pattern, not a background");
+        assert_eq!(
+            view.fills[1], None,
+            "gray125 is the reserved pattern, not a background"
+        );
         assert!(view.fills[2].as_deref().unwrap().starts_with('#'));
-        assert_eq!(view.borders[1].sides[0], Some(("thin".to_string(), Some("#000000".to_string()))));
+        assert_eq!(
+            view.borders[1].sides[0],
+            Some(("thin".to_string(), Some("#000000".to_string())))
+        );
         assert_eq!(view.borders[1].sides[1], None);
         assert_eq!(view.borders[1].sides[3], Some(("medium".to_string(), None)));
         let xf = &view.xfs[1];
         assert_eq!((xf.font, xf.fill, xf.border, xf.num_fmt), (1, 2, 1, 164));
-        assert_eq!((xf.horizontal.as_deref(), xf.vertical.as_deref(), xf.wrap), (Some("center"), Some("top"), true));
+        assert_eq!(
+            (xf.horizontal.as_deref(), xf.vertical.as_deref(), xf.wrap),
+            (Some("center"), Some("top"), true)
+        );
         assert_eq!(view.xfs.len(), 3, "cellStyleXfs are not cell formats");
         let json = view.to_json();
         assert_eq!(json["xfs"][1]["font"]["name"], "Arial");
@@ -543,8 +668,14 @@ mod tests {
         let layout = SheetLayout::parse(xml).unwrap();
         assert!(!layout.gridlines);
         assert_eq!(layout.frozen, Some((1, 2)));
-        assert_eq!((layout.default_row_height, layout.base_col_width), (Some(16.0), Some(10.0)));
-        assert_eq!(layout.cols, vec![(1, 1, Some(22.0), false), (3, 5, Some(0.0), true)]);
+        assert_eq!(
+            (layout.default_row_height, layout.base_col_width),
+            (Some(16.0), Some(10.0))
+        );
+        assert_eq!(
+            layout.cols,
+            vec![(1, 1, Some(22.0), false), (3, 5, Some(0.0), true)]
+        );
         assert_eq!(layout.rows, vec![(1, Some(30.0), false), (4, None, true)]);
         assert_eq!(layout.merges[0].to_string(), "A1:D1");
     }
@@ -556,8 +687,21 @@ mod tests {
         let xml = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" s="1"><v>1234.5</v></c><c r="C1" s="2"><v>46037</v></c><c r="D1" t="b"><v>1</v></c><c r="E1" s="1"/><c r="F1"/><c r="G1" t="e"><f>1/0</f><v>#DIV/0!</v></c></row></sheetData></worksheet>"#;
         let cells = cell_views(xml, &strings, &styles, &Locale::from_tag("es"), false).unwrap();
         let texts: Vec<(&str, &str)> = cells.iter().map(|c| (c.text.as_str(), c.kind)).collect();
-        assert_eq!(texts, vec![("Hola", "s"), ("1.234,50 €", "n"), ("15/01/2026", "n"), ("VERDADERO", "b"), ("", ""), ("#DIV/0!", "e")]);
-        assert_eq!(cells[4].col, 5, "an empty cell with a format is drawn; one without is not");
+        assert_eq!(
+            texts,
+            vec![
+                ("Hola", "s"),
+                ("1.234,50 €", "n"),
+                ("15/01/2026", "n"),
+                ("VERDADERO", "b"),
+                ("", ""),
+                ("#DIV/0!", "e")
+            ]
+        );
+        assert_eq!(
+            cells[4].col, 5,
+            "an empty cell with a format is drawn; one without is not"
+        );
         assert_eq!(cells_json(&cells[..1]), json!([[1, 1, 0, "Hola", "s"]]));
     }
 }

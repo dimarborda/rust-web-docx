@@ -133,6 +133,9 @@ if (read('npm', ['view', `${pkg.name}@${version}`, 'version'], { allowFail: true
 }
 
 // ---------- 2. Tests and build ----------
+step('Formato y Clippy');
+run('cargo', ['fmt', '--all', '--check']);
+run('cargo', ['clippy', '--workspace', '--all-targets', '--quiet', '--', '-D', 'warnings']);
 step('Pruebas de Rust');
 run('cargo', ['test', '--workspace', '--quiet']);
 step('Compilando el motor WebAssembly');

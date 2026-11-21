@@ -8,23 +8,23 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 use std::io::Cursor;
+use std::rc::Rc;
 
 pub use ooxml_core::rels::parse_relationships_map;
-pub use ooxml_core::ZipLimits;
 use ooxml_core::xml::escape_xml;
 pub(crate) use ooxml_core::xml::{get_attr_value, tag_is, utf8};
 use ooxml_core::Package;
+pub use ooxml_core::ZipLimits;
 
-use crate::styles::{
-    apply_border_element, apply_ppr_element, apply_rpr_element, is_symbol_font, NumberingCounters, ParaProps,
-    RunProps, StyleSheet,
-};
 use crate::paragraph_edit::{
-    body_paragraph_ranges, edit_paragraph, edit_paragraph_range, is_balanced, is_blank, merge_paragraphs,
-    parse_paragraph_fragment, split_paragraph, table_cell_paragraph_ranges,
+    body_paragraph_ranges, edit_paragraph, edit_paragraph_range, is_balanced, is_blank,
+    merge_paragraphs, parse_paragraph_fragment, split_paragraph, table_cell_paragraph_ranges,
     FormatTarget,
+};
+use crate::styles::{
+    apply_border_element, apply_ppr_element, apply_rpr_element, is_symbol_font, NumberingCounters,
+    ParaProps, RunProps, StyleSheet,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -149,7 +149,12 @@ pub struct PageField {
 
 /// The field kind of an instruction like ` PAGE  \* MERGEFORMAT `, if it is a page number
 fn page_field_kind(instr: &str) -> Option<String> {
-    match instr.split_whitespace().next()?.to_ascii_uppercase().as_str() {
+    match instr
+        .split_whitespace()
+        .next()?
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "PAGE" => Some("PAGE".into()),
         "NUMPAGES" | "SECTIONPAGES" => Some("NUMPAGES".into()),
         _ => None,
@@ -324,8 +329,14 @@ impl CellBorders {
 /// eighths of a point
 pub(crate) fn parse_side_border(e: &BytesStart) -> BorderInfo {
     let val = get_attr_value(e, "val").unwrap_or_default().to_lowercase();
-    let val = if val.is_empty() || val == "nil" { "none".to_string() } else { val };
-    let color = get_attr_value(e, "color").filter(|c| !c.eq_ignore_ascii_case("auto")).unwrap_or_default();
+    let val = if val.is_empty() || val == "nil" {
+        "none".to_string()
+    } else {
+        val
+    };
+    let color = get_attr_value(e, "color")
+        .filter(|c| !c.eq_ignore_ascii_case("auto"))
+        .unwrap_or_default();
     let sz = get_attr_i64(e, "sz").unwrap_or(4) as f64;
     BorderInfo {
         val,
@@ -465,7 +476,11 @@ pub struct ImageRef {
 impl ImageRef {
     /// Text flows around it: the layout keeps its box free of text
     pub fn wraps_text(&self) -> bool {
-        self.anchored && matches!(self.wrap.as_str(), "square" | "tight" | "through" | "topAndBottom")
+        self.anchored
+            && matches!(
+                self.wrap.as_str(),
+                "square" | "tight" | "through" | "topAndBottom"
+            )
     }
 }
 
@@ -500,8 +515,12 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
                 if let (Some(kind), Ok(value)) = (text_kind, unescaped(&t)) {
                     let value = value.trim().to_string();
                     match (axis, kind) {
-                        ('h', "offset") => img.h_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX,
-                        ('v', "offset") => img.v_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX,
+                        ('h', "offset") => {
+                            img.h_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX
+                        }
+                        ('v', "offset") => {
+                            img.v_offset = value.parse::<f64>().unwrap_or(0.0) / EMU_PER_PX
+                        }
                         ('h', "align") => img.h_align = Some(value),
                         ('v', "align") => img.v_align = Some(value),
                         _ => {}
@@ -540,7 +559,11 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             img.text_box = shape.text_box;
             continue;
         }
-        if is_start && ["wgp", "grpSp", "wpc", "lockedCanvas", "chart"].iter().any(|t| tag_is(n, t)) {
+        if is_start
+            && ["wgp", "grpSp", "wpc", "lockedCanvas", "chart"]
+                .iter()
+                .any(|t| tag_is(n, t))
+        {
             // Groups, drawing canvases and charts are not drawn yet
             let end = n.to_string();
             buf.clear();
@@ -559,15 +582,23 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
             if tag_is(n, "anchor") {
                 img.anchored = true;
                 img.z_order = get_attr_i64(&e, "relativeHeight").unwrap_or(0);
-                img.behind_text = get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
+                img.behind_text =
+                    get_attr_value(&e, "behindDoc").is_some_and(|v| v == "1" || v == "true");
                 // Without a wrap element Word floats the picture over the text
                 img.wrap = if img.behind_text { "behind" } else { "inFront" }.into();
             }
-        } else if img.anchored && ["wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom"].iter().any(|t| tag_is(n, t)) {
+        } else if img.anchored
+            && ["wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom"]
+                .iter()
+                .any(|t| tag_is(n, t))
+        {
             let local = utf8(n).rsplit(':').next().unwrap_or("");
             let kind = &local["wrap".len()..];
             let mut chars = kind.chars();
-            img.wrap = chars.next().map(|c| c.to_ascii_lowercase().to_string() + chars.as_str()).unwrap_or_default();
+            img.wrap = chars
+                .next()
+                .map(|c| c.to_ascii_lowercase().to_string() + chars.as_str())
+                .unwrap_or_default();
             img.wrap_side = get_attr_value(&e, "wrapText").unwrap_or_else(|| "bothSides".into());
         } else if is_start && tag_is(n, "wrapPolygon") {
             in_polygon = true;
@@ -581,7 +612,11 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
         } else if tag_is(n, "positionH") || tag_is(n, "positionV") {
             axis = if tag_is(n, "positionH") { 'h' } else { 'v' };
             if let Some(rel) = get_attr_value(&e, "relativeFrom") {
-                if axis == 'h' { img.h_relative = rel } else { img.v_relative = rel }
+                if axis == 'h' {
+                    img.h_relative = rel
+                } else {
+                    img.v_relative = rel
+                }
             }
         } else if is_start && tag_is(n, "posOffset") {
             text_kind = Some("offset");
@@ -599,7 +634,8 @@ pub(crate) fn parse_drawing(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> 
         }
         buf.clear();
     }
-    (!unsupported && (!img.rel_id.is_empty() || img.shape.is_some()) && img.width > 0.0).then_some(img)
+    (!unsupported && (!img.rel_id.is_empty() || img.shape.is_some()) && img.width > 0.0)
+        .then_some(img)
 }
 
 /// Every picture of an XML part (e.g. a header), in document order
@@ -627,7 +663,11 @@ pub(crate) fn extract_drawings(xml: &str) -> Vec<ImageRef> {
 /// `data:` URL of a related image part (`target` as written in a .rels file)
 pub(crate) fn image_data_url(files: &HashMap<String, Vec<u8>>, target: &str) -> Option<String> {
     let clean = target.trim_start_matches("../").trim_start_matches('/');
-    let path = if clean.starts_with("word/") { clean.to_string() } else { format!("word/{}", clean) };
+    let path = if clean.starts_with("word/") {
+        clean.to_string()
+    } else {
+        format!("word/{}", clean)
+    };
     let bytes = files.get(&path)?;
     let lower = path.to_lowercase();
     let mime = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
@@ -644,7 +684,9 @@ pub(crate) fn image_data_url(files: &HashMap<String, Vec<u8>>, target: &str) -> 
 
 /// Pictures of a part with their pixels, resolved through the part's relationships
 fn placed_images(files: &HashMap<String, Vec<u8>>, part: &str) -> Vec<PlacedImage> {
-    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else { return Vec::new() };
+    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else {
+        return Vec::new();
+    };
     let rels_path = match part.rsplit_once('/') {
         Some((dir, file)) => format!("{}/_rels/{}.rels", dir, file),
         None => return Vec::new(),
@@ -665,9 +707,15 @@ fn placed_images(files: &HashMap<String, Vec<u8>>, part: &str) -> Vec<PlacedImag
 
 /// Part name of the header or footer (`kind`) of type `ref_type` ("default", "first",
 /// "even") of the document's last section
-fn header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str, ref_type: &str) -> Option<String> {
+fn header_footer_part(
+    files: &HashMap<String, Vec<u8>>,
+    kind: &str,
+    ref_type: &str,
+) -> Option<String> {
     let doc = std::str::from_utf8(files.get("word/document.xml")?).ok()?;
-    let rels = parse_relationships_map(std::str::from_utf8(files.get("word/_rels/document.xml.rels")?).ok()?);
+    let rels = parse_relationships_map(
+        std::str::from_utf8(files.get("word/_rels/document.xml.rels")?).ok()?,
+    );
     let tag = format!("<w:{}Reference ", kind);
     let mut chosen = None;
     let mut from = 0;
@@ -675,12 +723,19 @@ fn header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str, ref_type: &s
         let end = doc[i..].find('>').map(|j| i + j).unwrap_or(doc.len());
         let element = &doc[i..end];
         if element.contains(&format!("w:type=\"{}\"", ref_type)) {
-            chosen = element.split("r:id=\"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
+            chosen = element
+                .split("r:id=\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .map(str::to_string);
         }
         from = end;
     }
     let target = rels.get(&chosen?)?;
-    Some(format!("word/{}", target.trim_start_matches('/').trim_start_matches("word/")))
+    Some(format!(
+        "word/{}",
+        target.trim_start_matches('/').trim_start_matches("word/")
+    ))
 }
 
 fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> Option<String> {
@@ -689,8 +744,15 @@ fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> O
 
 /// True when the last section shows a different header and footer on its first page
 fn has_title_page(files: &HashMap<String, Vec<u8>>) -> bool {
-    let Some(doc) = files.get("word/document.xml").and_then(|b| std::str::from_utf8(b).ok()) else { return false };
-    let Some(start) = doc.rfind("<w:sectPr") else { return false };
+    let Some(doc) = files
+        .get("word/document.xml")
+        .and_then(|b| std::str::from_utf8(b).ok())
+    else {
+        return false;
+    };
+    let Some(start) = doc.rfind("<w:sectPr") else {
+        return false;
+    };
     let sect = &doc[start..];
     let sect = &sect[..sect.find("</w:sectPr>").unwrap_or(sect.len())];
     sect.find("<w:titlePg").is_some_and(|i| {
@@ -707,7 +769,9 @@ fn header_footer_elements(
     styles: &StyleSheet,
     images: &mut HashMap<String, String>,
 ) -> Vec<DocumentElement> {
-    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else { return Vec::new() };
+    let Some(xml) = files.get(part).and_then(|b| std::str::from_utf8(b).ok()) else {
+        return Vec::new();
+    };
     let rels = match part.rsplit_once('/') {
         Some((dir, file)) => files
             .get(&format!("{}/_rels/{}.rels", dir, file))
@@ -719,7 +783,9 @@ fn header_footer_elements(
     let mut elements = parse_document_elements_with(xml, styles);
     // Top-level paragraphs and the paragraphs of any text box inside them get editable numbers
     if let Some(slot) = header_footer_parts(files).iter().position(|p| p == part) {
-        for_each_paragraph_mut(&mut elements, &mut |p| p.index += HEADER_FOOTER_BASE + slot * PART_SLOT);
+        for_each_paragraph_mut(&mut elements, &mut |p| {
+            p.index += HEADER_FOOTER_BASE + slot * PART_SLOT
+        });
         number_text_box_paragraphs(&mut elements, HEADER_FOOTER_TEXTBOX_BASE + slot * PART_SLOT);
     }
     let mut rename = |img: &mut ImageRef| {
@@ -765,7 +831,9 @@ pub(crate) fn header_footer_parts(files: &HashMap<String, Vec<u8>>) -> Vec<Strin
         .keys()
         .filter(|name| {
             let file = name.strip_prefix("word/").unwrap_or("");
-            !file.contains('/') && (file.starts_with("header") || file.starts_with("footer")) && file.ends_with(".xml")
+            !file.contains('/')
+                && (file.starts_with("header") || file.starts_with("footer"))
+                && file.ends_with(".xml")
         })
         .cloned()
         .collect();
@@ -823,7 +891,11 @@ impl ParagraphRanges {
 
 /// Byte range of paragraph `index` of a part (a text box paragraph from `TEXT_BOX_BASE`)
 fn range_of(xml: &str, index: usize) -> Result<Option<std::ops::Range<usize>>, String> {
-    Ok(if index >= TEXT_BOX_BASE { paragraph_ranges(xml)?.get(index) } else { body_paragraph_ranges(xml)?.get(index).cloned() })
+    Ok(if index >= TEXT_BOX_BASE {
+        paragraph_ranges(xml)?.get(index)
+    } else {
+        body_paragraph_ranges(xml)?.get(index).cloned()
+    })
 }
 
 pub(crate) fn paragraph_ranges(xml: &str) -> Result<ParagraphRanges, String> {
@@ -852,7 +924,10 @@ pub(crate) fn paragraph_ranges(xml: &str) -> Result<ParagraphRanges, String> {
 fn text_box_paragraph_ranges(drawing: &str) -> Result<Vec<std::ops::Range<usize>>, String> {
     use crate::paragraph_edit::{element_end, tokenize};
     let tokens = tokenize(drawing)?;
-    let Some(start) = tokens.iter().position(|t| matches!(&t.ev, Event::Start(e) if tag_is(e.name().as_ref(), "txbxContent"))) else {
+    let Some(start) = tokens
+        .iter()
+        .position(|t| matches!(&t.ev, Event::Start(e) if tag_is(e.name().as_ref(), "txbxContent")))
+    else {
         return Ok(Vec::new());
     };
     let end = element_end(&tokens, start);
@@ -882,7 +957,10 @@ fn text_box_paragraph_ranges(drawing: &str) -> Result<Vec<std::ops::Range<usize>
 }
 
 /// Calls `f` on every paragraph of `elements`, table cells included
-pub(crate) fn for_each_paragraph_mut(elements: &mut [DocumentElement], f: &mut dyn FnMut(&mut ParagraphInfo)) {
+pub(crate) fn for_each_paragraph_mut(
+    elements: &mut [DocumentElement],
+    f: &mut dyn FnMut(&mut ParagraphInfo),
+) {
     for el in elements.iter_mut() {
         match el {
             DocumentElement::Paragraph(p) => f(p),
@@ -949,20 +1027,23 @@ pub use shapes::{ShapeStyle, TextBox};
 mod insert_objects;
 #[path = "section_edit.rs"]
 mod section_edit;
-pub use section_edit::{section_key_from_title, HeadingSections, SectionInfo, SectionPlace, SkippedHeading, SECTION_TAG_PREFIX};
+pub use section_edit::{
+    section_key_from_title, HeadingSections, SectionInfo, SectionPlace, SkippedHeading,
+    SECTION_TAG_PREFIX,
+};
 #[path = "section_schema.rs"]
 mod section_schema;
 pub use section_schema::{SchemaSection, SectionSchema, SECTION_SCHEMA_NS};
-#[path = "structure_edit.rs"]
-mod structure_edit;
 #[path = "paragraph_format.rs"]
 mod paragraph_format;
+#[path = "structure_edit.rs"]
+mod structure_edit;
 pub use paragraph_format::StyleEntry;
 #[path = "table_edit.rs"]
 mod table_edit;
-pub use table_edit::TableSummary;
 pub use image_edit::ImageUpdate;
 pub use insert_objects::{CellImage, NewCell, NewImage, NewTable, TextBoxContent, TextBoxImage};
+pub use table_edit::TableSummary;
 
 /// A paragraph for `insert_paragraphs`: its text plus optional run formatting for the
 /// whole paragraph (unset properties are inherited) and alignment.
@@ -988,7 +1069,10 @@ pub struct NewParagraph {
 
 impl NewParagraph {
     fn has_format(&self) -> bool {
-        self.bold.is_some() || self.italic.is_some() || self.underline.is_some() || self.font_size.is_some()
+        self.bold.is_some()
+            || self.italic.is_some()
+            || self.underline.is_some()
+            || self.font_size.is_some()
     }
 }
 
@@ -1040,7 +1124,10 @@ fn layout_inputs_signature(doc: &str) -> u64 {
     let mut hash_spans = |open: &str, close: &str| {
         let mut from = 0;
         while let Some(start) = doc[from..].find(open).map(|i| i + from) {
-            let end = doc[start..].find(close).map(|i| start + i + close.len()).unwrap_or(doc.len());
+            let end = doc[start..]
+                .find(close)
+                .map(|i| start + i + close.len())
+                .unwrap_or(doc.len());
             doc[start..end].hash(&mut hasher);
             from = end;
         }
@@ -1064,7 +1151,10 @@ impl DocxModifier {
 
         // Verify that this is indeed a docx
         if !files.contains_key("word/document.xml") {
-            return Err("El archivo no es un documento DOCX válido (falta 'word/document.xml').".to_string());
+            return Err(
+                "El archivo no es un documento DOCX válido (falta 'word/document.xml')."
+                    .to_string(),
+            );
         }
 
         // Extract background color if present
@@ -1080,7 +1170,11 @@ impl DocxModifier {
         let bg_image_ext = "png".to_string();
 
         let part = |path: &str| files.get(path).and_then(|b| std::str::from_utf8(b).ok());
-        let theme_path = files.keys().filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml")).min().cloned();
+        let theme_path = files
+            .keys()
+            .filter(|k| k.starts_with("word/theme/") && k.ends_with(".xml"))
+            .min()
+            .cloned();
         let styles = StyleSheet::load(
             part("word/styles.xml"),
             theme_path.as_deref().and_then(part),
@@ -1135,7 +1229,10 @@ impl DocxModifier {
     fn after_step(&mut self, parts: &[String]) {
         self.revision += 1;
         self.parts_revision += 1;
-        if parts.iter().any(|name| name == "word/styles.xml" || name == "word/numbering.xml") {
+        if parts
+            .iter()
+            .any(|name| name == "word/styles.xml" || name == "word/numbering.xml")
+        {
             self.reload_styles();
         }
     }
@@ -1166,7 +1263,9 @@ impl DocxModifier {
     /// box paragraph (header and footer paragraphs live in other parts, see `locate`)
     fn body_paragraph(&self, xml: &str, index: usize) -> Result<std::ops::Range<usize>, String> {
         if index >= HEADER_FOOTER_BASE {
-            return Err("Esta operación no está disponible en encabezados y pies de página.".to_string());
+            return Err(
+                "Esta operación no está disponible en encabezados y pies de página.".to_string(),
+            );
         }
         let range = if index >= TEXT_BOX_BASE {
             paragraph_ranges(xml)?.get(index)
@@ -1199,10 +1298,14 @@ impl DocxModifier {
     }
 
     /// Paragraph `index` of whichever part holds it: (part name, part XML, byte range)
-    fn paragraph_in_part(&self, index: usize) -> Result<(String, String, std::ops::Range<usize>), String> {
+    fn paragraph_in_part(
+        &self,
+        index: usize,
+    ) -> Result<(String, String, std::ops::Range<usize>), String> {
         let (part, local) = self.locate(index)?;
         let xml = self.get_file_string(&part)?;
-        let range = range_of(&xml, local)?.ok_or_else(|| format!("No existe el párrafo {}.", index))?;
+        let range =
+            range_of(&xml, local)?.ok_or_else(|| format!("No existe el párrafo {}.", index))?;
         Ok((part, xml, range))
     }
 
@@ -1217,7 +1320,13 @@ impl DocxModifier {
 
     /// Deletes from (`p1`, `o1`) to (`p2`, `o2`) across paragraphs: whole paragraphs and tables
     /// in between are removed and the two ends are joined into one paragraph
-    pub fn delete_range(&mut self, p1: usize, o1: usize, p2: usize, o2: usize) -> Result<(), String> {
+    pub fn delete_range(
+        &mut self,
+        p1: usize,
+        o1: usize,
+        p2: usize,
+        o2: usize,
+    ) -> Result<(), String> {
         if p1 == p2 {
             return self.replace_paragraph_range(p1, o1, o2, "").map(|_| ());
         }
@@ -1225,7 +1334,10 @@ impl DocxModifier {
             return self.delete_range(p2, o2, p1, o1);
         }
         if (p1 >= TEXT_BOX_BASE) != (p2 >= TEXT_BOX_BASE) {
-            return Err("La selección no puede ir del texto del documento a un cuadro de texto.".to_string());
+            return Err(
+                "La selección no puede ir del texto del documento a un cuadro de texto."
+                    .to_string(),
+            );
         }
         let ((part, l1), (part2, l2)) = (self.locate(p1)?, self.locate(p2)?);
         if part != part2 {
@@ -1259,7 +1371,10 @@ impl DocxModifier {
             (Some(a), Some(b)) if a.end <= b.start && is_blank(&xml[a.end..b.start]) => a,
             _ => return Err("Solo se pueden unir párrafos contiguos.".to_string()),
         };
-        let len = parse_paragraph_fragment(&xml[current], &self.styles).text.chars().count();
+        let len = parse_paragraph_fragment(&xml[current], &self.styles)
+            .text
+            .chars()
+            .count();
         self.delete_range(index, len, index + 1, 0)
     }
 
@@ -1288,7 +1403,10 @@ impl DocxModifier {
         let break_after = offset < len;
 
         // A line break inside one paragraph travels as U+000B (Word's Shift+Enter)
-        let lines: Vec<String> = paragraphs.iter().map(|p| p.text.replace("\r\n", "\n").replace('\n', "\u{000B}")).collect();
+        let lines: Vec<String> = paragraphs
+            .iter()
+            .map(|p| p.text.replace("\r\n", "\n").replace('\n', "\u{000B}"))
+            .collect();
         let mut text = String::new();
         if break_before {
             text.push('\n');
@@ -1342,7 +1460,11 @@ impl DocxModifier {
         o2: usize,
         text: &str,
     ) -> Result<(usize, usize), String> {
-        let ((p1, o1), (p2, o2)) = if (p2, o2) < (p1, o1) { ((p2, o2), (p1, o1)) } else { ((p1, o1), (p2, o2)) };
+        let ((p1, o1), (p2, o2)) = if (p2, o2) < (p1, o1) {
+            ((p2, o2), (p1, o1))
+        } else {
+            ((p1, o1), (p2, o2))
+        };
         if (p1, o1) != (p2, o2) {
             self.delete_range(p1, o1, p2, o2)?;
         }
@@ -1515,7 +1637,10 @@ impl DocxModifier {
     }
 
     /// Applies replace rules to every XML part under word/, returning (count, affected files)
-    fn apply_replace_rules(&mut self, rules: &[ReplaceRule]) -> Result<(usize, Vec<String>), String> {
+    fn apply_replace_rules(
+        &mut self,
+        rules: &[ReplaceRule],
+    ) -> Result<(usize, Vec<String>), String> {
         let mut target_files: Vec<String> = self
             .package
             .parts()
@@ -1529,7 +1654,9 @@ impl DocxModifier {
         let mut affected_files = Vec::new();
 
         for filename in target_files {
-            let Ok(xml_str) = self.get_file_string(&filename) else { continue };
+            let Ok(xml_str) = self.get_file_string(&filename) else {
+                continue;
+            };
             let (new_xml, count) = replace_in_docx_xml(&xml_str, rules)?;
             if count > 0 {
                 total_replacements += count;
@@ -1545,7 +1672,12 @@ impl DocxModifier {
     pub fn update_paragraphs(&mut self, updates: &[ParagraphUpdate]) -> Result<usize, String> {
         let edits: Vec<ParagraphEdit> = updates
             .iter()
-            .map(|u| ParagraphEdit { index: u.index, text: &u.text, formats: None, align: None })
+            .map(|u| ParagraphEdit {
+                index: u.index,
+                text: &u.text,
+                formats: None,
+                align: None,
+            })
             .collect();
         self.edit_body_paragraphs(&edits)
     }
@@ -1575,9 +1707,14 @@ impl DocxModifier {
         let text: String = runs.iter().map(|r| r.text.as_str()).collect();
         let formats: Vec<FormatTarget> = runs
             .iter()
-            .flat_map(|r| std::iter::repeat(FormatTarget::from_run(r)).take(r.text.chars().count()))
+            .flat_map(|r| std::iter::repeat_n(FormatTarget::from_run(r), r.text.chars().count()))
             .collect();
-        self.edit_body_paragraphs(&[ParagraphEdit { index, text: &text, formats: Some(formats), align }])?;
+        self.edit_body_paragraphs(&[ParagraphEdit {
+            index,
+            text: &text,
+            formats: Some(formats),
+            align,
+        }])?;
         Ok(true)
     }
 
@@ -1598,7 +1735,12 @@ impl DocxModifier {
             ..Default::default()
         };
         let formats = vec![format; text.chars().count()];
-        self.edit_body_paragraphs(&[ParagraphEdit { index, text, formats: Some(formats), align: Some(align) }])?;
+        self.edit_body_paragraphs(&[ParagraphEdit {
+            index,
+            text,
+            formats: Some(formats),
+            align: Some(align),
+        }])?;
         Ok(true)
     }
 
@@ -1609,7 +1751,13 @@ impl DocxModifier {
             // paragraphs live in their own parts: edit one at a time, finding each again
             for edit in edits {
                 let (part, mut xml, range) = self.paragraph_in_part(edit.index)?;
-                let edited = edit_paragraph(&xml[range.clone()], &self.styles, edit.text, edit.formats.as_deref(), edit.align)?;
+                let edited = edit_paragraph(
+                    &xml[range.clone()],
+                    &self.styles,
+                    edit.text,
+                    edit.formats.as_deref(),
+                    edit.align,
+                )?;
                 xml.replace_range(range, &edited);
                 self.put_file(part, xml.into_bytes());
             }
@@ -1620,13 +1768,19 @@ impl DocxModifier {
 
         // Splice from the end so earlier byte ranges stay valid
         let mut ordered: Vec<&ParagraphEdit> = edits.iter().collect();
-        ordered.sort_by(|a, b| b.index.cmp(&a.index));
+        ordered.sort_by_key(|e| std::cmp::Reverse(e.index));
         for edit in &ordered {
             let range = ranges
                 .get(edit.index)
                 .cloned()
                 .ok_or_else(|| format!("No existe el párrafo {}.", edit.index))?;
-            let edited = edit_paragraph(&xml[range.clone()], &self.styles, edit.text, edit.formats.as_deref(), edit.align)?;
+            let edited = edit_paragraph(
+                &xml[range.clone()],
+                &self.styles,
+                edit.text,
+                edit.formats.as_deref(),
+                edit.align,
+            )?;
             xml.replace_range(range, &edited);
         }
 
@@ -1653,10 +1807,20 @@ impl DocxModifier {
     /// Replaces the text of a cell whose paragraphs are `ranges` (byte ranges of `xml`), keeping
     /// paragraph properties and run formatting. Paragraph boundaries outside the edited region
     /// survive; new line breaks become `<w:br/>`.
-    fn replace_cell_text(&self, xml: &mut String, ranges: &[std::ops::Range<usize>], new_text: &str) -> Result<(), String> {
+    fn replace_cell_text(
+        &self,
+        xml: &mut String,
+        ranges: &[std::ops::Range<usize>],
+        new_text: &str,
+    ) -> Result<(), String> {
         let old_lens: Vec<usize> = ranges
             .iter()
-            .map(|r| parse_paragraph_fragment(&xml[r.clone()], &self.styles).text.chars().count())
+            .map(|r| {
+                parse_paragraph_fragment(&xml[r.clone()], &self.styles)
+                    .text
+                    .chars()
+                    .count()
+            })
             .collect();
         let old: Vec<char> = ranges
             .iter()
@@ -1696,7 +1860,10 @@ impl DocxModifier {
         for (k, &(p, start)) in kept.iter().enumerate() {
             let end = kept.get(k + 1).map(|&(_, s)| s - 1).unwrap_or(new.len());
             let slice: String = new[start..end].iter().collect();
-            edits.push((ranges[p].clone(), edit_paragraph(&xml[ranges[p].clone()], &self.styles, &slice, None, None)?));
+            edits.push((
+                ranges[p].clone(),
+                edit_paragraph(&xml[ranges[p].clone()], &self.styles, &slice, None, None)?,
+            ));
         }
         // Paragraphs whose boundary fell inside the edited region are merged into the previous one
         for (p, range) in ranges.iter().enumerate() {
@@ -1705,7 +1872,7 @@ impl DocxModifier {
             }
         }
 
-        edits.sort_by(|a, b| b.0.start.cmp(&a.0.start));
+        edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
         for (range, replacement) in edits {
             xml.replace_range(range, &replacement);
         }
@@ -1713,7 +1880,12 @@ impl DocxModifier {
     }
 
     /// Appends an empty table (header row from `headers`) at the end of the document
-    pub fn add_table(&mut self, rows: usize, cols: usize, headers: &[String]) -> Result<bool, String> {
+    pub fn add_table(
+        &mut self,
+        rows: usize,
+        cols: usize,
+        headers: &[String],
+    ) -> Result<bool, String> {
         let doc_xml = self.get_file_string("word/document.xml")?;
         let new_xml = insert_objects::append_table_xml(&doc_xml, rows, cols, headers)?;
         self.put_file("word/document.xml".to_string(), new_xml.into_bytes());
@@ -1735,9 +1907,13 @@ impl DocxModifier {
     /// Sets background/watermark image bytes
     pub fn set_background_image(&mut self, image_bytes: Vec<u8>, ext: &str) -> Result<(), String> {
         self.parts_revision += 1;
-        let clean_ext = if ext.contains("jpg") || ext.contains("jpeg") { "jpeg" } else { "png" };
+        let clean_ext = if ext.contains("jpg") || ext.contains("jpeg") {
+            "jpeg"
+        } else {
+            "png"
+        };
         let image_filename = format!("word/media/background.{}", clean_ext);
-        
+
         self.put_file(image_filename.clone(), image_bytes);
         self.package.keep_in_order(&image_filename);
 
@@ -1747,8 +1923,15 @@ impl DocxModifier {
         if let Ok(mut types_xml) = self.get_file_string("[Content_Types].xml") {
             let ext_tag = format!("Extension=\"{}\"", clean_ext);
             if !types_xml.contains(&ext_tag) {
-                let mime = if clean_ext == "png" { "image/png" } else { "image/jpeg" };
-                let default_tag = format!("<Default Extension=\"{}\" ContentType=\"{}\"/>", clean_ext, mime);
+                let mime = if clean_ext == "png" {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                };
+                let default_tag = format!(
+                    "<Default Extension=\"{}\" ContentType=\"{}\"/>",
+                    clean_ext, mime
+                );
                 if let Some(pos) = types_xml.find("</Types>") {
                     types_xml.insert_str(pos, &default_tag);
                     self.put_file("[Content_Types].xml".to_string(), types_xml.into_bytes());
@@ -1814,7 +1997,8 @@ impl DocxModifier {
             files_in_zip: self.package.order().to_vec(),
             original_size_bytes: self.package.original_size(),
             background_color: inputs.background_color.clone(),
-            has_background_image: self.background_image.is_some() || inputs.bg_image_data_url.is_some(),
+            has_background_image: self.background_image.is_some()
+                || inputs.bg_image_data_url.is_some(),
             page_setup: inputs.page_setup.clone(),
             header_footer: inputs.header_footer.clone(),
             bg_image_data_url: inputs.bg_image_data_url.clone(),
@@ -1837,7 +2021,8 @@ impl DocxModifier {
         let files = &self.package.parts();
         let mut images = HashMap::new();
         let mut content = |kind: &str, ref_type: &str| {
-            header_footer_part(files, kind, ref_type).map(|part| header_footer_elements(files, &part, &self.styles, &mut images))
+            header_footer_part(files, kind, ref_type)
+                .map(|part| header_footer_elements(files, &part, &self.styles, &mut images))
         };
         info.header = content("header", "default").unwrap_or_default();
         info.footer = content("footer", "default").unwrap_or_default();
@@ -1861,7 +2046,7 @@ impl DocxModifier {
         extract_drawing_embed_ids(doc)
             .into_iter()
             .filter_map(|id| {
-                let url = image_data_url(&self.package.parts(), rels.get(&id)?)?;
+                let url = image_data_url(self.package.parts(), rels.get(&id)?)?;
                 Some((id, url))
             })
             .collect()
@@ -1871,7 +2056,8 @@ impl DocxModifier {
     pub fn get_bg_image_data_url(&self) -> Option<String> {
         // 1. If explicitly set via UI/API
         if let Some(bytes) = &self.background_image {
-            let mime = if self.background_image_ext == "jpeg" || self.background_image_ext == "jpg" {
+            let mime = if self.background_image_ext == "jpeg" || self.background_image_ext == "jpg"
+            {
                 "image/jpeg"
             } else {
                 "image/png"
@@ -1905,7 +2091,9 @@ pub fn extract_drawing_embed_ids(xml: &str) -> Vec<String> {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 let name = e.name();
                 if tag_is(name.as_ref(), "blip") || tag_is(name.as_ref(), "imagedata") {
-                    if let Some(embed_id) = get_attr_value(e, "embed").or_else(|| get_attr_value(e, "id")) {
+                    if let Some(embed_id) =
+                        get_attr_value(e, "embed").or_else(|| get_attr_value(e, "id"))
+                    {
                         ids.push(embed_id);
                     }
                 }
@@ -2001,14 +2189,16 @@ pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> Head
 
                 // Check header image via header rels
                 if info.header_image_data_url.is_none() {
-                    let rel_path = format!("word/_rels/{}.rels", h_name.trim_start_matches("word/"));
+                    let rel_path =
+                        format!("word/_rels/{}.rels", h_name.trim_start_matches("word/"));
                     if let Some(rel_bytes) = files.get(&rel_path) {
                         if let Ok(rel_xml) = String::from_utf8(rel_bytes.clone()) {
                             let rels = parse_relationships_map(&rel_xml);
                             let embed_ids = extract_drawing_embed_ids(&xml);
                             for eid in embed_ids {
                                 if let Some(target) = rels.get(&eid) {
-                                    let clean_target = target.trim_start_matches("../").trim_start_matches('/');
+                                    let clean_target =
+                                        target.trim_start_matches("../").trim_start_matches('/');
                                     let img_path = if clean_target.starts_with("media/") {
                                         format!("word/{}", clean_target)
                                     } else if clean_target.starts_with("word/") {
@@ -2018,7 +2208,9 @@ pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> Head
                                     };
 
                                     if let Some(img_bytes) = files.get(&img_path) {
-                                        let mime = if img_path.ends_with(".jpg") || img_path.ends_with(".jpeg") {
+                                        let mime = if img_path.ends_with(".jpg")
+                                            || img_path.ends_with(".jpeg")
+                                        {
                                             "image/jpeg"
                                         } else if img_path.ends_with(".png") {
                                             "image/png"
@@ -2028,7 +2220,8 @@ pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> Head
                                             "image/png"
                                         };
                                         let b64 = BASE64.encode(img_bytes);
-                                        info.header_image_data_url = Some(format!("data:{};base64,{}", mime, b64));
+                                        info.header_image_data_url =
+                                            Some(format!("data:{};base64,{}", mime, b64));
                                         break;
                                     }
                                 }
@@ -2041,10 +2234,14 @@ pub fn extract_header_footer_quick_xml(files: &HashMap<String, Vec<u8>>) -> Head
     }
 
     // Pictures of the default header/footer (the ones shown on regular pages)
-    if let Some(part) = default_header_footer_part(files, "header").filter(|p| files.contains_key(p)) {
+    if let Some(part) =
+        default_header_footer_part(files, "header").filter(|p| files.contains_key(p))
+    {
         info.header_images = placed_images(files, &part);
     }
-    if let Some(part) = default_header_footer_part(files, "footer").filter(|p| files.contains_key(p)) {
+    if let Some(part) =
+        default_header_footer_part(files, "footer").filter(|p| files.contains_key(p))
+    {
         info.footer_images = placed_images(files, &part);
     }
 
@@ -2110,9 +2307,15 @@ pub(crate) fn unescaped<'a>(t: &BytesText<'a>) -> Result<std::borrow::Cow<'a, st
 /// The character(s) a general reference stands for: `&amp;` → "&", `&#233;` → "é"
 pub(crate) fn general_ref_text(r: &quick_xml::events::BytesRef) -> String {
     if r.is_char_ref() {
-        r.resolve_char_ref().ok().flatten().map(|c| c.to_string()).unwrap_or_default()
+        r.resolve_char_ref()
+            .ok()
+            .flatten()
+            .map(|c| c.to_string())
+            .unwrap_or_default()
     } else {
-        quick_xml::escape::resolve_predefined_entity(r).map(str::to_string).unwrap_or_default()
+        quick_xml::escape::resolve_predefined_entity(r)
+            .map(str::to_string)
+            .unwrap_or_default()
     }
 }
 
@@ -2176,14 +2379,23 @@ pub fn parse_document_elements_with(xml: &str, styles: &StyleSheet) -> Vec<Docum
             Ok(Event::Start(ref e)) => {
                 let name = e.name();
                 // Headers and footers (w:hdr / w:ftr) hold the same content as the body
-                if tag_is(name.as_ref(), "body") || tag_is(name.as_ref(), "hdr") || tag_is(name.as_ref(), "ftr") {
+                if tag_is(name.as_ref(), "body")
+                    || tag_is(name.as_ref(), "hdr")
+                    || tag_is(name.as_ref(), "ftr")
+                {
                     in_body = true;
                 } else if in_body && tag_is(name.as_ref(), "p") {
                     let p = parse_paragraph_with(&mut reader, p_index, styles, Some(&mut counters));
                     elements.push(DocumentElement::Paragraph(p));
                     p_index += 1;
                 } else if in_body && tag_is(name.as_ref(), "tbl") {
-                    let tbl = parse_table_with(&mut reader, tbl_index, styles, Some(&mut counters), &mut p_index);
+                    let tbl = parse_table_with(
+                        &mut reader,
+                        tbl_index,
+                        styles,
+                        Some(&mut counters),
+                        &mut p_index,
+                    );
                     elements.push(DocumentElement::Table(tbl));
                     tbl_index += 1;
                 }
@@ -2250,7 +2462,9 @@ fn section_types(xml: &str) -> Vec<String> {
             Ok(Event::Empty(ref e)) if tag_is(e.name().as_ref(), "sectPr") => {
                 types.push("nextPage".to_string());
             }
-            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if in_sect && tag_is(e.name().as_ref(), "type") => {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e))
+                if in_sect && tag_is(e.name().as_ref(), "type") =>
+            {
                 if let (Some(last), Some(v)) = (types.last_mut(), get_attr_value(e, "val")) {
                     *last = v;
                 }
@@ -2310,7 +2524,11 @@ pub fn parse_paragraph_with(
 
     loop {
         let chars_so_far = |raw_runs: &[RawRun], run: &RawRun, in_r: bool| {
-            raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>() + if in_r { run.text.chars().count() } else { 0 }
+            raw_runs
+                .iter()
+                .map(|r| r.text.chars().count())
+                .sum::<usize>()
+                + if in_r { run.text.chars().count() } else { 0 }
         };
         let (e, is_start) = match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => (e, true),
@@ -2384,7 +2602,10 @@ pub fn parse_paragraph_with(
         if is_start && tag_is(n, "drawing") {
             buf.clear();
             if let Some(mut img) = parse_drawing(reader, styles) {
-                img.offset = raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>()
+                img.offset = raw_runs
+                    .iter()
+                    .map(|r| r.text.chars().count())
+                    .sum::<usize>()
                     + if in_r { run.text.chars().count() } else { 0 };
                 images.push(img);
             }
@@ -2400,7 +2621,10 @@ pub fn parse_paragraph_with(
         if is_start && tag_is(n, "pict") {
             buf.clear();
             if let Some(mut img) = shapes::parse_vml_pict(reader, styles) {
-                img.offset = raw_runs.iter().map(|r| r.text.chars().count()).sum::<usize>()
+                img.offset = raw_runs
+                    .iter()
+                    .map(|r| r.text.chars().count())
+                    .sum::<usize>()
                     + if in_r { run.text.chars().count() } else { 0 };
                 vml_images.push(img);
             }
@@ -2422,7 +2646,8 @@ pub fn parse_paragraph_with(
 
         if is_start && tag_is(n, "fldSimple") {
             let instr = get_attr_value(&e, "instr").unwrap_or_default();
-            simple_field = page_field_kind(&instr).map(|kind| (kind, chars_so_far(&raw_runs, &run, in_r)));
+            simple_field =
+                page_field_kind(&instr).map(|kind| (kind, chars_so_far(&raw_runs, &run, in_r)));
         }
         if in_r && tag_is(n, "fldChar") {
             match get_attr_value(&e, "fldCharType").as_deref() {
@@ -2432,8 +2657,14 @@ pub fn parse_paragraph_with(
                 }
                 Some("separate") => field_result = Some(chars_so_far(&raw_runs, &run, in_r)),
                 Some("end") => {
-                    if let (Some(start), Some(kind)) = (field_result.take(), page_field_kind(&field_instr)) {
-                        fields.push(PageField { kind, start, end: chars_so_far(&raw_runs, &run, in_r) });
+                    if let (Some(start), Some(kind)) =
+                        (field_result.take(), page_field_kind(&field_instr))
+                    {
+                        fields.push(PageField {
+                            kind,
+                            start,
+                            end: chars_so_far(&raw_runs, &run, in_r),
+                        });
                     }
                     field_instr.clear();
                 }
@@ -2466,7 +2697,8 @@ pub fn parse_paragraph_with(
                 if is_start {
                     let end_name = n.to_string();
                     let mut skip_buf = Vec::new();
-                    let _ = reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
+                    let _ =
+                        reader.read_to_end_into(quick_xml::name::QName(&end_name), &mut skip_buf);
                 }
             } else if in_ppr_rpr {
                 apply_rpr_element(&mut mark_rpr, &e, &styles.theme);
@@ -2493,7 +2725,15 @@ pub fn parse_paragraph_with(
         buf.clear();
     }
 
-    let mut info = resolve_paragraph(index, styles, counters, style_id, &direct_ppr, &mark_rpr, raw_runs);
+    let mut info = resolve_paragraph(
+        index,
+        styles,
+        counters,
+        style_id,
+        &direct_ppr,
+        &mark_rpr,
+        raw_runs,
+    );
     info.ends_section = ends_section;
     images.extend(vml_images);
     info.images = images;
@@ -2542,7 +2782,10 @@ fn to_run_info(text: String, p: &RunProps) -> RunInfo {
         font_size: p.font_size,
         font_family: p.font_family.clone(),
         strike: p.strike.unwrap_or(false),
-        vert_align: p.vert_align.clone().filter(|v| v == "superscript" || v == "subscript"),
+        vert_align: p
+            .vert_align
+            .clone()
+            .filter(|v| v == "superscript" || v == "subscript"),
         highlight: p.highlight.clone().filter(|h| !h.is_empty()),
         href: None,
     }
@@ -2558,7 +2801,9 @@ fn resolve_paragraph(
     mark_rpr: &RunProps,
     raw_runs: Vec<RawRun>,
 ) -> ParagraphInfo {
-    let effective_style = styles.effective_paragraph_style(style_id.as_deref()).map(str::to_string);
+    let effective_style = styles
+        .effective_paragraph_style(style_id.as_deref())
+        .map(str::to_string);
     let (style_ppr, style_rpr) = styles.style_props(effective_style.as_deref());
 
     let num_id = direct_ppr
@@ -2570,19 +2815,26 @@ fn resolve_paragraph(
 
     let mut ppr = styles.doc_ppr.clone();
     ppr.merge(&style_ppr);
-    if let Some(level) = num_id.as_deref().and_then(|id| styles.numbering.level(id, ilvl)) {
+    if let Some(level) = num_id
+        .as_deref()
+        .and_then(|id| styles.numbering.level(id, ilvl))
+    {
         ppr.merge(&level.ppr);
     }
     ppr.merge(direct_ppr);
 
     // Word's own defaults close the cascade: Times New Roman 10pt when neither document
     // defaults nor styles say otherwise
-    let base_rpr = word_default_rpr().merged(&styles.doc_rpr).merged(&style_rpr);
+    let base_rpr = word_default_rpr()
+        .merged(&styles.doc_rpr)
+        .merged(&style_rpr);
     let mark = base_rpr.merged(mark_rpr);
     let runs: Vec<RunInfo> = raw_runs
         .into_iter()
         .map(|r| {
-            let eff = base_rpr.merged(&styles.character_props(r.style.as_deref())).merged(&r.props);
+            let eff = base_rpr
+                .merged(&styles.character_props(r.style.as_deref()))
+                .merged(&r.props);
             let mut info = to_run_info(r.text, &eff);
             // Holds the raw `r:id` until `elements_shared` resolves it against the relationships
             info.href = r.rel_id;
@@ -2595,7 +2847,11 @@ fn resolve_paragraph(
             .next_label(&styles.numbering, id, ilvl)
             .filter(|(label, _)| !label.is_empty())
             .map(|(label, level)| {
-                let text = if level.suffix == "space" { format!("{} ", label) } else { label };
+                let text = if level.suffix == "space" {
+                    format!("{} ", label)
+                } else {
+                    label
+                };
                 let mut run = to_run_info(text, &mark.merged(&level.rpr));
                 if is_symbol_font(level.rpr.font_family.as_deref()) {
                     run.font_family = mark.font_family.clone();
@@ -2610,11 +2866,19 @@ fn resolve_paragraph(
         .and_then(|id| styles.style_name(id))
         .unwrap_or("")
         .to_lowercase();
-    let style_key = style_id.clone().or(effective_style).unwrap_or_else(|| "Normal".to_string());
+    let style_key = style_id
+        .clone()
+        .or(effective_style)
+        .unwrap_or_else(|| "Normal".to_string());
     let is_heading = ppr.outline_level.is_some_and(|l| l < 9)
-        || [style_name.as_str(), style_key.to_lowercase().as_str()].iter().any(|s| {
-            s.contains("heading") || s.contains("title") || s.contains("encabezado") || s.contains("título")
-        });
+        || [style_name.as_str(), style_key.to_lowercase().as_str()]
+            .iter()
+            .any(|s| {
+                s.contains("heading")
+                    || s.contains("title")
+                    || s.contains("encabezado")
+                    || s.contains("título")
+            });
 
     let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
     let non_empty_runs: Vec<&RunInfo> = runs.iter().filter(|r| !r.text.trim().is_empty()).collect();
@@ -2654,11 +2918,22 @@ fn resolve_paragraph(
         list_kind: num_id
             .as_deref()
             .and_then(|id| styles.numbering.level(id, ilvl))
-            .map(|l| if l.fmt == "bullet" { "bullet" } else { "number" }.to_string()),
+            .map(|l| {
+                if l.fmt == "bullet" {
+                    "bullet"
+                } else {
+                    "number"
+                }
+                .to_string()
+            }),
         list_level: num_id.as_ref().map(|_| ilvl),
         num_id,
-        line_exact: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("exact")),
-        line_at_least: ppr.line_pt.filter(|_| ppr.line_rule.as_deref() == Some("atLeast")),
+        line_exact: ppr
+            .line_pt
+            .filter(|_| ppr.line_rule.as_deref() == Some("exact")),
+        line_at_least: ppr
+            .line_pt
+            .filter(|_| ppr.line_rule.as_deref() == Some("atLeast")),
         keep_next: ppr.keep_next.unwrap_or(false),
         keep_lines: ppr.keep_lines.unwrap_or(false),
         page_break_before: ppr.page_break_before.unwrap_or(false),
@@ -2785,7 +3060,10 @@ pub fn parse_table_with(
                 } else if in_tbl_borders {
                     table_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
-                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                        if !col.is_empty()
+                            && col.to_lowercase() != "auto"
+                            && col.to_lowercase() != "none"
+                        {
                             table_border_color = Some(col);
                         }
                     }
@@ -2823,7 +3101,10 @@ pub fn parse_table_with(
                 } else if in_tc_borders {
                     current_cell_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
-                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                        if !col.is_empty()
+                            && col.to_lowercase() != "auto"
+                            && col.to_lowercase() != "none"
+                        {
                             current_cell_border = Some(col);
                         }
                     }
@@ -2856,7 +3137,10 @@ pub fn parse_table_with(
                 if in_tbl_borders {
                     table_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
-                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                        if !col.is_empty()
+                            && col.to_lowercase() != "auto"
+                            && col.to_lowercase() != "none"
+                        {
                             table_border_color = Some(col);
                         }
                     }
@@ -2882,14 +3166,22 @@ pub fn parse_table_with(
                 } else if in_tc_pr && tag_is(name.as_ref(), "shd") {
                     if let Some(fill) = get_attr_value(e, "fill") {
                         let f_low = fill.to_lowercase();
-                        if !f_low.is_empty() && f_low != "auto" && f_low != "clear" && f_low != "none" && f_low != "ffffff" {
+                        if !f_low.is_empty()
+                            && f_low != "auto"
+                            && f_low != "clear"
+                            && f_low != "none"
+                            && f_low != "ffffff"
+                        {
                             current_cell_bg = Some(fill);
                         }
                     }
                 } else if in_tc_borders {
                     current_cell_borders.set_side(e);
                     if let Some(col) = get_attr_value(e, "color") {
-                        if !col.is_empty() && col.to_lowercase() != "auto" && col.to_lowercase() != "none" {
+                        if !col.is_empty()
+                            && col.to_lowercase() != "auto"
+                            && col.to_lowercase() != "none"
+                        {
                             current_cell_border = Some(col);
                         }
                     }
@@ -2907,7 +3199,8 @@ pub fn parse_table_with(
                         _ => "continue".to_string(),
                     });
                 } else if in_tr_pr && tag_is(name.as_ref(), "gridBefore") {
-                    current_row_grid_before = get_attr_i64(e, "val").unwrap_or(0).clamp(0, 64) as usize;
+                    current_row_grid_before =
+                        get_attr_i64(e, "val").unwrap_or(0).clamp(0, 64) as usize;
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -2937,19 +3230,27 @@ pub fn parse_table_with(
                         .join("\n");
 
                     let first_p = current_cell_paragraphs.first();
-                    let align = first_p.map(|p| p.align.clone()).unwrap_or_else(|| "left".to_string());
+                    let align = first_p
+                        .map(|p| p.align.clone())
+                        .unwrap_or_else(|| "left".to_string());
 
                     // Check explicit text color from runs or paragraph
                     let explicit_color = first_p
-                        .and_then(|p| p.runs.iter().find(|r| !r.color.is_empty()).map(|r| r.color.clone()))
+                        .and_then(|p| {
+                            p.runs
+                                .iter()
+                                .find(|r| !r.color.is_empty())
+                                .map(|r| r.color.clone())
+                        })
                         .or_else(|| first_p.map(|p| p.color.clone()).filter(|c| !c.is_empty()));
 
-                    let is_dark_bg = current_cell_bg.as_deref().map(is_dark_hex_str).unwrap_or(false);
+                    let is_dark_bg = current_cell_bg
+                        .as_deref()
+                        .map(is_dark_hex_str)
+                        .unwrap_or(false);
                     let color = if let Some(c) = explicit_color {
                         c
-                    } else if is_dark_bg {
-                        "FAF7F0".to_string()
-                    } else if current_row_is_header && current_cell_bg.is_some() {
+                    } else if is_dark_bg || (current_row_is_header && current_cell_bg.is_some()) {
                         "FAF7F0".to_string()
                     } else {
                         "1B1F1E".to_string()
@@ -2962,10 +3263,17 @@ pub fn parse_table_with(
                         .map(|p| p.italic || p.runs.iter().any(|r| r.italic))
                         .unwrap_or(false);
                     let font_size = first_p
-                        .and_then(|p| p.font_size.or_else(|| p.runs.first().and_then(|r| r.font_size)))
+                        .and_then(|p| {
+                            p.font_size
+                                .or_else(|| p.runs.first().and_then(|r| r.font_size))
+                        })
                         .unwrap_or(if current_row_is_header { 10.0 } else { 9.5 });
                     let font_family = first_p
-                        .and_then(|p| p.font_family.clone().or_else(|| p.runs.first().and_then(|r| r.font_family.clone())))
+                        .and_then(|p| {
+                            p.font_family
+                                .clone()
+                                .or_else(|| p.runs.first().and_then(|r| r.font_family.clone()))
+                        })
                         .unwrap_or_else(|| "Calibri, Inter, sans-serif".to_string());
 
                     let border_color = current_cell_border
@@ -3039,10 +3347,24 @@ pub struct ReplaceRule {
 }
 
 impl ReplaceRule {
-    pub fn new(search: &str, replacement: &str, match_case: bool, use_regex: bool) -> Result<Self, String> {
-        let body = if use_regex { search.to_string() } else { regex::escape(search) };
-        let pattern = if match_case { body } else { format!("(?i){}", body) };
-        let regex = Regex::new(&pattern).map_err(|e| format!("Expresión regular inválida: {}", e))?;
+    pub fn new(
+        search: &str,
+        replacement: &str,
+        match_case: bool,
+        use_regex: bool,
+    ) -> Result<Self, String> {
+        let body = if use_regex {
+            search.to_string()
+        } else {
+            regex::escape(search)
+        };
+        let pattern = if match_case {
+            body
+        } else {
+            format!("(?i){}", body)
+        };
+        let regex =
+            Regex::new(&pattern).map_err(|e| format!("Expresión regular inválida: {}", e))?;
         Ok(ReplaceRule {
             regex,
             replacement: replacement.to_string(),
@@ -3081,9 +3403,25 @@ struct TextNode {
 
 /// Elements that interrupt the visible text flow: a match may never span across them
 const TEXT_FLOW_BREAKS: &[&str] = &[
-    "p", "tab", "ptab", "br", "cr", "drawing", "pict", "object", "sym", "fldChar",
-    "instrText", "footnoteReference", "endnoteReference", "commentReference",
-    "noBreakHyphen", "softHyphen", "delText", "txbxContent", "tc",
+    "p",
+    "tab",
+    "ptab",
+    "br",
+    "cr",
+    "drawing",
+    "pict",
+    "object",
+    "sym",
+    "fldChar",
+    "instrText",
+    "footnoteReference",
+    "endnoteReference",
+    "commentReference",
+    "noBreakHyphen",
+    "softHyphen",
+    "delText",
+    "txbxContent",
+    "tc",
 ];
 
 fn is_text_flow_break(tag: impl AsRef<[u8]>) -> bool {
@@ -3138,17 +3476,20 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
             Event::End(e) if open_t.is_some() && tag_is(e.name().as_ref(), "t") => {
                 let (start, text) = open_t.take().unwrap();
                 current_group.push(nodes.len());
-                nodes.push(TextNode { start, end: i, text, modified: false });
+                nodes.push(TextNode {
+                    start,
+                    end: i,
+                    text,
+                    modified: false,
+                });
             }
             Event::Start(e) | Event::Empty(e) if is_text_flow_break(e.name().as_ref()) => {
                 if !current_group.is_empty() {
                     groups.push(std::mem::take(&mut current_group));
                 }
             }
-            Event::End(e) if is_text_flow_break(e.name().as_ref()) => {
-                if !current_group.is_empty() {
-                    groups.push(std::mem::take(&mut current_group));
-                }
+            Event::End(e) if is_text_flow_break(e.name().as_ref()) && !current_group.is_empty() => {
+                groups.push(std::mem::take(&mut current_group));
             }
             _ => {}
         }
@@ -3212,8 +3553,11 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
 
     // 3. Write events back, rewriting modified <w:t> nodes
     let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let modified: HashMap<usize, &TextNode> =
-        nodes.iter().filter(|n| n.modified).map(|n| (n.start, n)).collect();
+    let modified: HashMap<usize, &TextNode> = nodes
+        .iter()
+        .filter(|n| n.modified)
+        .map(|n| (n.start, n))
+        .collect();
 
     let mut i = 0;
     while i < events.len() {
@@ -3225,15 +3569,23 @@ fn replace_in_docx_xml(xml: &str, rules: &[ReplaceRule]) -> Result<(String, usiz
                 }
             }
             t_start.push_attribute(("xml:space", "preserve"));
-            writer.write_event(Event::Start(t_start)).map_err(|e| e.to_string())?;
+            writer
+                .write_event(Event::Start(t_start))
+                .map_err(|e| e.to_string())?;
             if !node.text.is_empty() {
-                writer.write_event(Event::Text(BytesText::new(&node.text))).map_err(|e| e.to_string())?;
+                writer
+                    .write_event(Event::Text(BytesText::new(&node.text)))
+                    .map_err(|e| e.to_string())?;
             }
-            writer.write_event(events[node.end].clone()).map_err(|e| e.to_string())?;
+            writer
+                .write_event(events[node.end].clone())
+                .map_err(|e| e.to_string())?;
             i = node.end + 1;
             continue;
         }
-        writer.write_event(events[i].clone()).map_err(|e| e.to_string())?;
+        writer
+            .write_event(events[i].clone())
+            .map_err(|e| e.to_string())?;
         i += 1;
     }
 
@@ -3305,7 +3657,9 @@ mod tests {
         let sample_bytes = generate_sample_docx().expect("Should generate sample docx");
         let mut modifier = DocxModifier::from_bytes(&sample_bytes).expect("Should parse docx");
 
-        let elements = modifier.extract_elements().expect("Should extract elements");
+        let elements = modifier
+            .extract_elements()
+            .expect("Should extract elements");
         assert!(elements.len() >= 5);
 
         // Verify tables exist in sample
@@ -3314,14 +3668,19 @@ mod tests {
         assert_eq!(tables[0].rows[0][0], "Hito / Fase");
 
         // Test Table cell update with multiline text
-        modifier.update_table_cell(0, 1, 0, "Fase 1: Nueva Arquitectura\n(Detalle Técnico)").expect("Should update cell");
+        modifier
+            .update_table_cell(0, 1, 0, "Fase 1: Nueva Arquitectura\n(Detalle Técnico)")
+            .expect("Should update cell");
 
         // Test Paragraph rich update (alignment and color)
-        modifier.update_paragraph_rich(0, "CONTRATO MODIFICADO", "center", "DC2626", true, false)
+        modifier
+            .update_paragraph_rich(0, "CONTRATO MODIFICADO", "center", "DC2626", true, false)
             .expect("Should update paragraph formatting");
 
         // Test Page background
-        modifier.set_background_color("F0F9FF").expect("Should set background");
+        modifier
+            .set_background_color("F0F9FF")
+            .expect("Should set background");
 
         // Export bytes and re-parse
         let exported_bytes = modifier.to_bytes().expect("Should export bytes");
@@ -3341,11 +3700,17 @@ mod tests {
         reader.config_mut().trim_text(false);
         let p = parse_paragraph_from_reader(&mut reader, 0);
 
-        assert!(!p.bold, "Paragraph should NOT be marked bold if only first run is bold");
+        assert!(
+            !p.bold,
+            "Paragraph should NOT be marked bold if only first run is bold"
+        );
         assert_eq!(p.runs.len(), 2);
         assert!(p.runs[0].bold, "First run should be bold");
         assert!(!p.runs[1].bold, "Second run should NOT be bold");
-        assert_eq!(p.text, "1. OBJETO: El presente contrato regula los servicios.");
+        assert_eq!(
+            p.text,
+            "1. OBJETO: El presente contrato regula los servicios."
+        );
     }
 
     #[test]
@@ -3355,8 +3720,16 @@ mod tests {
         reader.config_mut().trim_text(false);
         let p = parse_paragraph_from_reader(&mut reader, 0);
         assert!(!p.runs[0].bold, "pPr/rPr only formats the paragraph mark");
-        assert_eq!(p.runs[0].font_size, Some(10.0), "Word's default, not the mark's 20pt");
-        assert_eq!(p.font_size, Some(20.0), "the mark size is still reported for empty-line height");
+        assert_eq!(
+            p.runs[0].font_size,
+            Some(10.0),
+            "Word's default, not the mark's 20pt"
+        );
+        assert_eq!(
+            p.font_size,
+            Some(20.0),
+            "the mark size is still reported for empty-line height"
+        );
     }
 
     #[test]
@@ -3402,9 +3775,21 @@ mod tests {
         let (out, count) = replace_in_docx_xml(&xml, &[literal("{name}", "Ana")]).unwrap();
         assert_eq!(count, 1);
         // Replacement lands in the run where the match starts, keeping its formatting
-        assert!(out.contains(r#"<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hola Ana</w:t>"#), "{}", out);
-        assert!(out.contains(r#"<w:t xml:space="preserve"></w:t>"#), "{}", out);
-        assert!(out.contains(r#"<w:t xml:space="preserve">!</w:t>"#), "{}", out);
+        assert!(
+            out.contains(r#"<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hola Ana</w:t>"#),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains(r#"<w:t xml:space="preserve"></w:t>"#),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains(r#"<w:t xml:space="preserve">!</w:t>"#),
+            "{}",
+            out
+        );
         let p = &parse_document_elements(&out)[0];
         match p {
             DocumentElement::Paragraph(p) => assert_eq!(p.text, "Hola Ana!"),
@@ -3474,7 +3859,9 @@ mod tests {
             r#"<w:p><w:r><w:t>Antes </w:t></w:r><w:hyperlink r:id="rId7"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>ancla</w:t></w:r></w:hyperlink><w:r><w:t> después</w:t></w:r></w:p>"#,
         );
         let elements = parse_document_elements(&xml);
-        let DocumentElement::Paragraph(p) = &elements[0] else { panic!("expected paragraph") };
+        let DocumentElement::Paragraph(p) = &elements[0] else {
+            panic!("expected paragraph")
+        };
         let hrefs: Vec<Option<&str>> = p.runs.iter().map(|r| r.href.as_deref()).collect();
         // "ancla" is its own run (the rStyle differs from its neighbors), with the raw r:id;
         // elements_shared() resolves it to a URL once the package's relationships are known
@@ -3484,7 +3871,9 @@ mod tests {
 
     #[test]
     fn test_hyperlink_run_resolves_to_its_relationship_target() {
-        let bytes = crate::blank_generator::generate_blank_docx(crate::blank_generator::PageSize::Letter).unwrap();
+        let bytes =
+            crate::blank_generator::generate_blank_docx(crate::blank_generator::PageSize::Letter)
+                .unwrap();
         let mut modifier = DocxModifier::from_bytes(&bytes).expect("Should parse blank docx");
         let doc_xml = wrap_body(
             r#"<w:p><w:hyperlink r:id="rIdAnchor1"><w:r><w:t>Firmante1</w:t></w:r></w:hyperlink></w:p>"#,
@@ -3494,10 +3883,20 @@ mod tests {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rIdAnchor1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="http://anchor/Firmante1" TargetMode="External"/>
 </Relationships>"#;
-        modifier.put_file("word/_rels/document.xml.rels".to_string(), rels.as_bytes().to_vec());
+        modifier.put_file(
+            "word/_rels/document.xml.rels".to_string(),
+            rels.as_bytes().to_vec(),
+        );
 
         let elements = modifier.elements_shared().expect("Should resolve elements");
-        let DocumentElement::Paragraph(p) = &elements[0] else { panic!("expected paragraph") };
-        assert_eq!(p.runs[0].href.as_deref(), Some("http://anchor/Firmante1"), "{:?}", p.runs);
+        let DocumentElement::Paragraph(p) = &elements[0] else {
+            panic!("expected paragraph")
+        };
+        assert_eq!(
+            p.runs[0].href.as_deref(),
+            Some("http://anchor/Firmante1"),
+            "{:?}",
+            p.runs
+        );
     }
 }

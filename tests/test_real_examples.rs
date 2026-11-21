@@ -1,4 +1,4 @@
-use rust_web_docx::docx_parser::{DocxModifier, DocumentElement};
+use rust_web_docx::docx_parser::{DocumentElement, DocxModifier};
 use rust_web_docx::layout_engine::LayoutEngine;
 use std::fs;
 use std::path::Path;
@@ -39,7 +39,9 @@ fn test_analyze_real_examples() {
             println!("   - Zip Files: {}", stats.files_in_zip.len());
             println!("   - Background Color: {}", stats.background_color);
 
-            let elements = modifier.extract_elements().expect("Should extract elements");
+            let elements = modifier
+                .extract_elements()
+                .expect("Should extract elements");
             println!("📑 Document Elements: Total {}", elements.len());
 
             let mut heading_count = 0;
@@ -61,10 +63,18 @@ fn test_analyze_real_examples() {
                         }
                         runs_total += p.runs.len();
                         for r in &p.runs {
-                            if r.bold { bold_runs_count += 1; }
-                            if r.italic { italic_runs_count += 1; }
-                            if !r.color.is_empty() { colored_runs_count += 1; }
-                            if r.text.contains('\t') { tabs_count += 1; }
+                            if r.bold {
+                                bold_runs_count += 1;
+                            }
+                            if r.italic {
+                                italic_runs_count += 1;
+                            }
+                            if !r.color.is_empty() {
+                                colored_runs_count += 1;
+                            }
+                            if r.text.contains('\t') {
+                                tabs_count += 1;
+                            }
                         }
 
                         if idx < 5 || p.is_heading || p.indent_left > 0.0 {
@@ -79,10 +89,16 @@ fn test_analyze_real_examples() {
                         let num_cols = t.rows.first().map(|r| r.len()).unwrap_or(0);
                         println!(
                             "   [TBL#{}] Rows: {}, Cols: {}, Header: {}",
-                            t.index, t.rows.len(), num_cols, t.header_row
+                            t.index,
+                            t.rows.len(),
+                            num_cols,
+                            t.header_row
                         );
                         for (r_idx, r) in t.rows.iter().enumerate().take(3) {
-                            let row_preview: Vec<String> = r.iter().map(|c| c.replace('\n', "\\n").chars().take(30).collect()).collect();
+                            let row_preview: Vec<String> = r
+                                .iter()
+                                .map(|c| c.replace('\n', "\\n").chars().take(30).collect())
+                                .collect();
                             println!("       Row {}: {:?}", r_idx, row_preview);
                         }
                     }
@@ -109,14 +125,24 @@ fn test_analyze_real_examples() {
                 None,
                 0.0,
             );
-            println!("📄 Multi-Page Canvas Layout computed: {} pages ({:?}, {}x{} px)", layout.total_pages, stats.page_setup.orientation, layout.page_width, layout.page_height);
+            println!(
+                "📄 Multi-Page Canvas Layout computed: {} pages ({:?}, {}x{} px)",
+                layout.total_pages,
+                stats.page_setup.orientation,
+                layout.page_width,
+                layout.page_height
+            );
             for p in &layout.pages {
                 println!("   Page {}: {} render items", p.page_number, p.items.len());
             }
 
             // Test round-trip export
             let exported_bytes = modifier.to_bytes().expect("Should export bytes");
-            println!("💾 Re-export verified: {} bytes (original: {} bytes)", exported_bytes.len(), bytes.len());
+            println!(
+                "💾 Re-export verified: {} bytes (original: {} bytes)",
+                exported_bytes.len(),
+                bytes.len()
+            );
             assert!(!exported_bytes.is_empty());
         }
     }

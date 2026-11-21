@@ -63,7 +63,9 @@ fn char_len(s: &str) -> usize {
 
 impl Line<'_> {
     fn last_run_end(&self) -> usize {
-        self.runs.last().map_or(self.start, |r| r.start + char_len(&r.text))
+        self.runs
+            .last()
+            .map_or(self.start, |r| r.start + char_len(&r.text))
     }
 
     /// Last caret offset drawn on this line: a wrapped line hands `end` to the next line
@@ -93,7 +95,9 @@ impl Line<'_> {
     }
 
     fn x_at(&self, offset: usize, m: &mut dyn TextMeasurer) -> f64 {
-        let Some(first) = self.runs.first() else { return self.x };
+        let Some(first) = self.runs.first() else {
+            return self.x;
+        };
         if offset <= first.start {
             return first.x;
         }
@@ -109,7 +113,9 @@ impl Line<'_> {
 
     /// Nearest caret offset to `x` on this line
     fn offset_at(&self, x: f64, m: &mut dyn TextMeasurer) -> usize {
-        let Some(first) = self.runs.first() else { return self.start };
+        let Some(first) = self.runs.first() else {
+            return self.start;
+        };
         if x <= first.x {
             return first.start;
         }
@@ -204,7 +210,10 @@ fn lines(layout: &DocumentLayout) -> Vec<Line<'_>> {
 fn line_index_on(lines: &[Line], pos: TextPosition, page: Option<usize>) -> Option<usize> {
     let on_page = page.filter(|_| pos.paragraph >= HEADER_FOOTER_BASE);
     if let Some(p) = on_page {
-        if lines.iter().any(|l| l.paragraph == pos.paragraph && l.page == p) {
+        if lines
+            .iter()
+            .any(|l| l.paragraph == pos.paragraph && l.page == p)
+        {
             return line_index_in(lines, pos, |l| l.page == p);
         }
     }
@@ -232,53 +241,96 @@ fn line_index_in(lines: &[Line], pos: TextPosition, keep: impl Fn(&Line) -> bool
 /// Text position under a point of a page (`page` is 1-based, coordinates in page px).
 /// Lines in the clicked column win over closer lines in other columns (table cells side by
 /// side share the same height band); clicks in a margin go to the line at that height.
-pub fn hit_test(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dyn TextMeasurer) -> Option<TextPosition> {
+pub fn hit_test(
+    layout: &DocumentLayout,
+    page: usize,
+    x: f64,
+    y: f64,
+    m: &mut dyn TextMeasurer,
+) -> Option<TextPosition> {
     let all = lines(layout);
     let score = |l: &Line| (l.distance_x(x) > 0.5, l.distance_y(y), l.distance_x(x));
     // Inside an editable text box only its own lines count; elsewhere only the body's
     // (headers and footers are reached with `hit_test_header_footer`)
     let in_box = text_box_at(layout, page, x, y);
-    let line = all.iter().filter(|l| l.page == page && l.text_box == in_box && l.paragraph < HEADER_FOOTER_BASE).min_by(|a, b| {
-        score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
-    })?;
-    Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
+    let line = all
+        .iter()
+        .filter(|l| l.page == page && l.text_box == in_box && l.paragraph < HEADER_FOOTER_BASE)
+        .min_by(|a, b| {
+            score(a)
+                .partial_cmp(&score(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+    Some(TextPosition {
+        paragraph: line.paragraph,
+        offset: line.offset_at(x, m),
+    })
 }
 
 /// Text position in the header or footer of a page under a point, or `None` when the point
 /// is not on (or right next to) header or footer text: header editing mode
-pub fn hit_test_header_footer(layout: &DocumentLayout, page: usize, x: f64, y: f64, m: &mut dyn TextMeasurer) -> Option<TextPosition> {
+pub fn hit_test_header_footer(
+    layout: &DocumentLayout,
+    page: usize,
+    x: f64,
+    y: f64,
+    m: &mut dyn TextMeasurer,
+) -> Option<TextPosition> {
     const REACH: f64 = 24.0;
     let all = lines(layout);
     let score = |l: &Line| (l.distance_y(y), l.distance_x(x));
     let line = all
         .iter()
         .filter(|l| l.page == page && l.paragraph >= HEADER_FOOTER_BASE && l.distance_y(y) < REACH)
-        .min_by(|a, b| score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal))?;
-    Some(TextPosition { paragraph: line.paragraph, offset: line.offset_at(x, m) })
+        .min_by(|a, b| {
+            score(a)
+                .partial_cmp(&score(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+    Some(TextPosition {
+        paragraph: line.paragraph,
+        offset: line.offset_at(x, m),
+    })
 }
 
 /// The topmost editable text box under a point of a page, as `[anchor paragraph, index]`
 fn text_box_at(layout: &DocumentLayout, page: usize, x: f64, y: f64) -> Option<[usize; 2]> {
     let page = layout.pages.iter().find(|p| p.page_number == page)?;
     page.items.iter().rev().find_map(|item| match item {
-        RenderCommand::Shape { x: sx, y: sy, width, height, editable_text: true, paragraph_index: Some(p), image_index: Some(i), .. }
-            if x >= *sx && x <= sx + width && y >= *sy && y <= sy + height =>
-        {
-            Some([*p, *i])
-        }
+        RenderCommand::Shape {
+            x: sx,
+            y: sy,
+            width,
+            height,
+            editable_text: true,
+            paragraph_index: Some(p),
+            image_index: Some(i),
+            ..
+        } if x >= *sx && x <= sx + width && y >= *sy && y <= sy + height => Some([*p, *i]),
         _ => None,
     })
 }
 
-pub fn caret_box(layout: &DocumentLayout, pos: TextPosition, m: &mut dyn TextMeasurer) -> Option<CaretBox> {
+pub fn caret_box(
+    layout: &DocumentLayout,
+    pos: TextPosition,
+    m: &mut dyn TextMeasurer,
+) -> Option<CaretBox> {
     caret_box_on(layout, pos, None, m)
 }
 
 /// `caret_box`, choosing for a header or footer paragraph the copy on `page`
-pub fn caret_box_on(layout: &DocumentLayout, pos: TextPosition, page: Option<usize>, m: &mut dyn TextMeasurer) -> Option<CaretBox> {
+pub fn caret_box_on(
+    layout: &DocumentLayout,
+    pos: TextPosition,
+    page: Option<usize>,
+    m: &mut dyn TextMeasurer,
+) -> Option<CaretBox> {
     let all = lines(layout);
     let line = &all[line_index_on(&all, pos, page)?];
-    let offset = pos.offset.clamp(line.start, line.caret_end().max(line.start));
+    let offset = pos
+        .offset
+        .clamp(line.start, line.caret_end().max(line.start));
     Some(CaretBox {
         page: line.page,
         x: line.x_at(offset, m),
@@ -344,15 +396,24 @@ pub fn move_vertical_on(
     let candidates: Vec<&Line> = all
         .iter()
         .filter(beyond)
-        .filter(|l| l.text_box == current.text_box && (l.paragraph >= HEADER_FOOTER_BASE) == in_part)
+        .filter(|l| {
+            l.text_box == current.text_box && (l.paragraph >= HEADER_FOOTER_BASE) == in_part
+        })
         .filter(|l| !in_part || l.page == current.page)
         .collect();
-    let in_column: Vec<&Line> = candidates.iter().copied().filter(|l| l.distance_x(goal_x) == 0.0).collect();
+    let in_column: Vec<&Line> = candidates
+        .iter()
+        .copied()
+        .filter(|l| l.distance_x(goal_x) == 0.0)
+        .collect();
     let target = match nearest(in_column.clone()) {
         Some(i) => in_column[i],
         None => candidates[nearest(candidates.clone())?],
     };
-    Some(TextPosition { paragraph: target.paragraph, offset: target.offset_at(goal_x, m) })
+    Some(TextPosition {
+        paragraph: target.paragraph,
+        offset: target.offset_at(goal_x, m),
+    })
 }
 
 /// Highlight rectangles for the characters `start..end` of a paragraph
@@ -363,7 +424,18 @@ pub fn selection_rects(
     end: usize,
     m: &mut dyn TextMeasurer,
 ) -> Vec<Rect> {
-    selection_rects_range(layout, TextPosition { paragraph, offset: start }, TextPosition { paragraph, offset: end }, m)
+    selection_rects_range(
+        layout,
+        TextPosition {
+            paragraph,
+            offset: start,
+        },
+        TextPosition {
+            paragraph,
+            offset: end,
+        },
+        m,
+    )
 }
 
 /// Highlight rectangles for a selection that may span several paragraphs
@@ -384,7 +456,11 @@ pub fn selection_rects_range_on(
     page: Option<usize>,
     m: &mut dyn TextMeasurer,
 ) -> Vec<Rect> {
-    let (from, to) = if (to.paragraph, to.offset) < (from.paragraph, from.offset) { (to, from) } else { (from, to) };
+    let (from, to) = if (to.paragraph, to.offset) < (from.paragraph, from.offset) {
+        (to, from)
+    } else {
+        (from, to)
+    };
     let mut rects = Vec::new();
     if from == to {
         return rects;
@@ -396,8 +472,16 @@ pub fn selection_rects_range_on(
         .filter(|l| part_page.is_none_or(|p| l.page == p))
     {
         // Whole paragraphs in the middle of the selection, including their paragraph mark
-        let start = if line.paragraph == from.paragraph { from.offset } else { 0 };
-        let end = if line.paragraph == to.paragraph { to.offset } else { usize::MAX };
+        let start = if line.paragraph == from.paragraph {
+            from.offset
+        } else {
+            0
+        };
+        let end = if line.paragraph == to.paragraph {
+            to.offset
+        } else {
+            usize::MAX
+        };
         if start >= end {
             continue;
         }
@@ -412,7 +496,13 @@ pub fn selection_rects_range_on(
             x1 += line.font_size * 0.3;
         }
         if x1 > x0 {
-            rects.push(Rect { page: line.page, x: x0, y: line.top, width: x1 - x0, height: line.height });
+            rects.push(Rect {
+                page: line.page,
+                x: x0,
+                y: line.top,
+                width: x1 - x0,
+                height: line.height,
+            });
         }
     }
     rects
@@ -421,7 +511,9 @@ pub fn selection_rects_range_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::docx_parser::{DocumentElement, HeaderFooterInfo, PageSetup, ParagraphInfo, RunInfo};
+    use crate::docx_parser::{
+        DocumentElement, HeaderFooterInfo, PageSetup, ParagraphInfo, RunInfo,
+    };
     use crate::layout_engine::{EstimateMeasurer, LayoutEngine};
 
     /// Every character is 10px wide: easy to reason about positions
@@ -441,13 +533,20 @@ mod tests {
             font_size: Some(12.0),
             spacing_resolved: true,
             widow_control: true,
-            runs: vec![RunInfo { text: text.to_string(), font_size: Some(12.0), ..Default::default() }],
+            runs: vec![RunInfo {
+                text: text.to_string(),
+                font_size: Some(12.0),
+                ..Default::default()
+            }],
             ..Default::default()
         }
     }
 
     fn layout(paragraphs: Vec<ParagraphInfo>) -> DocumentLayout {
-        let elements: Vec<DocumentElement> = paragraphs.into_iter().map(DocumentElement::Paragraph).collect();
+        let elements: Vec<DocumentElement> = paragraphs
+            .into_iter()
+            .map(DocumentElement::Paragraph)
+            .collect();
         LayoutEngine::new().compute_layout_with(
             &elements,
             "FFFFFF",
@@ -477,8 +576,16 @@ mod tests {
         let y = caret.y + 1.0;
         assert_eq!(hit_test(&l, 1, LEFT + 43.0, y, &mut Mono), Some(pos(0, 4)));
         assert_eq!(hit_test(&l, 1, LEFT + 46.0, y, &mut Mono), Some(pos(0, 5)));
-        assert_eq!(hit_test(&l, 1, 5.0, y, &mut Mono), Some(pos(0, 0)), "left margin → line start");
-        assert_eq!(hit_test(&l, 1, 700.0, y, &mut Mono), Some(pos(0, 10)), "past the end → paragraph end");
+        assert_eq!(
+            hit_test(&l, 1, 5.0, y, &mut Mono),
+            Some(pos(0, 0)),
+            "left margin → line start"
+        );
+        assert_eq!(
+            hit_test(&l, 1, 700.0, y, &mut Mono),
+            Some(pos(0, 10)),
+            "past the end → paragraph end"
+        );
     }
 
     #[test]
@@ -490,7 +597,10 @@ mod tests {
         let space = caret_box(&l, pos(0, 61), &mut Mono).unwrap();
         assert!(space.y > first.y, "offset 61 starts the second line");
         assert_eq!(space.x, LEFT);
-        assert_eq!(first.line_end, 60, "the swallowed space is the last caret stop of line 1");
+        assert_eq!(
+            first.line_end, 60,
+            "the swallowed space is the last caret stop of line 1"
+        );
 
         // Clicking past the end of line 1 stays on line 1
         let hit = hit_test(&l, 1, 900.0, first.y + 1.0, &mut Mono).unwrap();
@@ -499,15 +609,27 @@ mod tests {
         // Down from offset 5 keeps the column on the next line
         let down = move_vertical(&l, pos(0, 5), 1, LEFT + 50.0, &mut Mono).unwrap();
         assert_eq!(down, pos(0, 66));
-        assert_eq!(move_vertical(&l, pos(0, 66), -1, LEFT + 50.0, &mut Mono), Some(pos(0, 5)));
+        assert_eq!(
+            move_vertical(&l, pos(0, 66), -1, LEFT + 50.0, &mut Mono),
+            Some(pos(0, 5))
+        );
     }
 
     #[test]
     fn test_vertical_moves_cross_paragraphs_and_stop_at_edges() {
         let l = layout(vec![para(0, "uno", "left"), para(1, "dos tres", "left")]);
-        assert_eq!(move_vertical(&l, pos(0, 2), 1, LEFT + 20.0, &mut Mono), Some(pos(1, 2)));
-        assert_eq!(move_vertical(&l, pos(0, 2), -1, LEFT + 20.0, &mut Mono), None);
-        assert_eq!(move_vertical(&l, pos(1, 7), 1, LEFT + 70.0, &mut Mono), None);
+        assert_eq!(
+            move_vertical(&l, pos(0, 2), 1, LEFT + 20.0, &mut Mono),
+            Some(pos(1, 2))
+        );
+        assert_eq!(
+            move_vertical(&l, pos(0, 2), -1, LEFT + 20.0, &mut Mono),
+            None
+        );
+        assert_eq!(
+            move_vertical(&l, pos(1, 7), 1, LEFT + 70.0, &mut Mono),
+            None
+        );
     }
 
     #[test]
@@ -533,7 +655,10 @@ mod tests {
         // Line 1 = "aaa… bbb…" (61 chars = 610px) stretched to 670px: its one space gets +60px
         let b_start = caret_box(&l, pos(0, 31), &mut Mono).unwrap();
         assert_eq!(b_start.x, LEFT + 310.0 + 60.0);
-        assert_eq!(hit_test(&l, 1, LEFT + 375.0, b_start.y + 1.0, &mut Mono), Some(pos(0, 31)));
+        assert_eq!(
+            hit_test(&l, 1, LEFT + 375.0, b_start.y + 1.0, &mut Mono),
+            Some(pos(0, 31))
+        );
         // The last line is not justified
         let c = caret_box(&l, pos(0, 63), &mut Mono).unwrap();
         assert_eq!(c.x, LEFT + 10.0);
@@ -546,7 +671,10 @@ mod tests {
         let rects = selection_rects(&l, 0, 58, 63, &mut Mono);
         assert_eq!(rects.len(), 2);
         assert_eq!(rects[0].x, LEFT + 580.0);
-        assert!((rects[0].width - (20.0 + 16.0 * 0.3)).abs() < 0.01, "2 chars + line-break marker");
+        assert!(
+            (rects[0].width - (20.0 + 16.0 * 0.3)).abs() < 0.01,
+            "2 chars + line-break marker"
+        );
         assert_eq!((rects[1].x, rects[1].width), (LEFT, 20.0));
         assert!(selection_rects(&l, 0, 5, 5, &mut Mono).is_empty());
     }
@@ -559,14 +687,28 @@ mod tests {
         let s = m.get_statistics().unwrap();
         let mut est = EstimateMeasurer;
         let l = LayoutEngine::new().compute_layout_with(
-            &elements, &s.background_color, &s.page_setup, &s.header_footer, None, None, 0.0, &mut est,
+            &elements,
+            &s.background_color,
+            &s.page_setup,
+            &s.header_footer,
+            None,
+            None,
+            0.0,
+            &mut est,
         );
         for p in m.extract_paragraphs().unwrap() {
             for offset in 0..=p.text.chars().count() {
                 let at = pos(p.index, offset);
                 let caret = caret_box(&l, at, &mut est).expect("every position has a caret");
                 // Clicking where the caret is drawn finds the same position again
-                let hit = hit_test(&l, caret.page, caret.x, caret.y + caret.height / 2.0, &mut est).unwrap();
+                let hit = hit_test(
+                    &l,
+                    caret.page,
+                    caret.x,
+                    caret.y + caret.height / 2.0,
+                    &mut est,
+                )
+                .unwrap();
                 assert_eq!(hit, at, "paragraph {:?}", p.text);
             }
         }
@@ -575,30 +717,63 @@ mod tests {
     #[test]
     fn test_blank_document_has_a_caret_at_the_start() {
         use crate::blank_generator::{generate_blank_docx, PageSize};
-        let m = crate::docx_parser::DocxModifier::from_bytes(&generate_blank_docx(PageSize::Letter).unwrap()).unwrap();
+        let m = crate::docx_parser::DocxModifier::from_bytes(
+            &generate_blank_docx(PageSize::Letter).unwrap(),
+        )
+        .unwrap();
         let elements = m.extract_elements().unwrap();
         let s = m.get_statistics().unwrap();
         let mut est = EstimateMeasurer;
         let l = LayoutEngine::new().compute_layout_with(
-            &elements, &s.background_color, &s.page_setup, &s.header_footer, None, None, 0.0, &mut est,
+            &elements,
+            &s.background_color,
+            &s.page_setup,
+            &s.header_footer,
+            None,
+            None,
+            0.0,
+            &mut est,
         );
-        let caret = caret_box(&l, pos(0, 0), &mut est).expect("an empty paragraph still has a caret");
+        let caret =
+            caret_box(&l, pos(0, 0), &mut est).expect("an empty paragraph still has a caret");
         assert_eq!(caret.page, 1);
         assert!(caret.height > 0.0);
-        let hit = hit_test(&l, 1, caret.x + 200.0, caret.y + caret.height / 2.0, &mut est).unwrap();
-        assert_eq!(hit, pos(0, 0), "clicking anywhere on the empty line lands on it");
+        let hit = hit_test(
+            &l,
+            1,
+            caret.x + 200.0,
+            caret.y + caret.height / 2.0,
+            &mut est,
+        )
+        .unwrap();
+        assert_eq!(
+            hit,
+            pos(0, 0),
+            "clicking anywhere on the empty line lands on it"
+        );
     }
 
     /// Body paragraph 0, a 2×2 table (paragraphs 1–4, row by row), body paragraph 5
     fn table_layout() -> DocumentLayout {
         use crate::docx_parser::{TableCellData, TableInfo, TableRowData};
-        let cell = |i: usize, text: &str| TableCellData { paragraphs: vec![para(i, text, "left")], ..Default::default() };
+        let cell = |i: usize, text: &str| TableCellData {
+            paragraphs: vec![para(i, text, "left")],
+            ..Default::default()
+        };
         let table = TableInfo {
             index: 0,
             rows: vec![],
             rich_rows: vec![
-                TableRowData { cells: vec![cell(1, "a1 primera línea larga"), cell(2, "b1")], is_header: false, ..Default::default() },
-                TableRowData { cells: vec![cell(3, "a2"), cell(4, "b2")], is_header: false, ..Default::default() },
+                TableRowData {
+                    cells: vec![cell(1, "a1 primera línea larga"), cell(2, "b1")],
+                    is_header: false,
+                    ..Default::default()
+                },
+                TableRowData {
+                    cells: vec![cell(3, "a2"), cell(4, "b2")],
+                    is_header: false,
+                    ..Default::default()
+                },
             ],
             // Two 3000-twip (200px) columns
             grid_cols: vec![3000.0, 3000.0],
@@ -643,11 +818,20 @@ mod tests {
         let l = table_layout();
         let x_b = LEFT + 200.0 + 7.2 + 10.0;
         // ↓ from b1 goes to b2 (below), not to a2 (next in reading order)
-        assert_eq!(move_vertical(&l, pos(2, 1), 1, x_b, &mut Mono), Some(pos(4, 1)));
+        assert_eq!(
+            move_vertical(&l, pos(2, 1), 1, x_b, &mut Mono),
+            Some(pos(4, 1))
+        );
         // ↓ from the last row leaves the table into the following paragraph
-        assert_eq!(move_vertical(&l, pos(4, 1), 1, x_b, &mut Mono).map(|p| p.paragraph), Some(5));
+        assert_eq!(
+            move_vertical(&l, pos(4, 1), 1, x_b, &mut Mono).map(|p| p.paragraph),
+            Some(5)
+        );
         // ↑ from the paragraph above the table enters the column under the caret
-        assert_eq!(move_vertical(&l, pos(0, 1), 1, x_b, &mut Mono).map(|p| p.paragraph), Some(2));
+        assert_eq!(
+            move_vertical(&l, pos(0, 1), 1, x_b, &mut Mono).map(|p| p.paragraph),
+            Some(2)
+        );
     }
 
     #[test]
@@ -658,8 +842,13 @@ mod tests {
         let second = caret_box(&l, pos(0, 67), &mut Mono).unwrap();
         assert!(second.y > first.y, "the word continues on the next line");
         assert_eq!(second.x, LEFT);
-        assert_eq!(caret_box(&l, pos(0, 100), &mut Mono).unwrap().x, LEFT + 330.0);
-        assert_eq!(hit_test(&l, 1, LEFT + 50.0, second.y + 1.0, &mut Mono), Some(pos(0, 72)));
+        assert_eq!(
+            caret_box(&l, pos(0, 100), &mut Mono).unwrap().x,
+            LEFT + 330.0
+        );
+        assert_eq!(
+            hit_test(&l, 1, LEFT + 50.0, second.y + 1.0, &mut Mono),
+            Some(pos(0, 72))
+        );
     }
 }
-

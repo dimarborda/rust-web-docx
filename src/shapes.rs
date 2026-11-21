@@ -45,7 +45,11 @@ impl PartialEq for TextBox {
             && self.inset_bottom == other.inset_bottom
             && self.v_anchor == other.v_anchor
             && self.paragraphs.len() == other.paragraphs.len()
-            && self.paragraphs.iter().zip(&other.paragraphs).all(|(a, b)| a.text == b.text)
+            && self
+                .paragraphs
+                .iter()
+                .zip(&other.paragraphs)
+                .all(|(a, b)| a.text == b.text)
     }
 }
 
@@ -63,7 +67,11 @@ impl TextBox {
 
     /// Plain text of the box, paragraphs separated by line breaks
     pub fn text(&self) -> String {
-        self.paragraphs.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n")
+        self.paragraphs
+            .iter()
+            .map(|p| p.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -128,7 +136,13 @@ impl ColorBuilder {
         let hex = if tag_is(n, "srgbClr") {
             val
         } else if tag_is(n, "sysClr") {
-            get_attr_value(e, "lastClr").or(val.map(|v| if v == "window" { "FFFFFF".into() } else { "000000".into() }))
+            get_attr_value(e, "lastClr").or(val.map(|v| {
+                if v == "window" {
+                    "FFFFFF".into()
+                } else {
+                    "000000".into()
+                }
+            }))
         } else if tag_is(n, "schemeClr") {
             val.and_then(|v| theme.color(&v))
         } else if tag_is(n, "prstClr") {
@@ -136,7 +150,13 @@ impl ColorBuilder {
         } else {
             return None;
         };
-        Some(ColorBuilder { base: hex.as_deref().and_then(parse_hex), lum_mod: None, lum_off: None, shade: None, tint: None })
+        Some(ColorBuilder {
+            base: hex.as_deref().and_then(parse_hex),
+            lum_mod: None,
+            lum_off: None,
+            shade: None,
+            tint: None,
+        })
     }
 
     fn modifier(&mut self, e: &BytesStart) {
@@ -213,7 +233,11 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
         return (0.0, 0.0, l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if max == g {
@@ -229,7 +253,11 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
     if s == 0.0 {
         return (to(l), to(l), to(l));
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let hue = |mut t: f64| {
         if t < 0.0 {
@@ -391,7 +419,9 @@ pub(super) fn parse_wsp(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> WspR
                 }
             }
             "bodyPr" => {
-                let inset = |name: &str, default: f64| get_attr_i64(&e, name).map_or(default, |v| v as f64 / EMU_PER_PX);
+                let inset = |name: &str, default: f64| {
+                    get_attr_i64(&e, name).map_or(default, |v| v as f64 / EMU_PER_PX)
+                };
                 body.inset_left = inset("lIns", INSET_X);
                 body.inset_top = inset("tIns", INSET_Y);
                 body.inset_right = inset("rIns", INSET_X);
@@ -427,7 +457,9 @@ pub(super) fn parse_wsp(reader: &mut Reader<&[u8]>, styles: &StyleSheet) -> WspR
 /// A VML length ("12pt", "1.5in", "2cm", "40px", "0") in px
 fn vml_length(v: &str) -> Option<f64> {
     let v = v.trim();
-    let split = v.find(|c: char| c.is_ascii_alphabetic() || c == '%').unwrap_or(v.len());
+    let split = v
+        .find(|c: char| c.is_ascii_alphabetic() || c == '%')
+        .unwrap_or(v.len());
     let (num, unit) = v.split_at(split);
     let n: f64 = num.trim().parse().ok()?;
     Some(match unit.trim() {
@@ -447,7 +479,12 @@ fn vml_color(v: &str) -> Option<String> {
     if let Some(hex) = v.strip_prefix('#') {
         return match hex.len() {
             6 => Some(hex.to_ascii_uppercase()),
-            3 => Some(hex.chars().flat_map(|c| [c, c]).collect::<String>().to_ascii_uppercase()),
+            3 => Some(
+                hex.chars()
+                    .flat_map(|c| [c, c])
+                    .collect::<String>()
+                    .to_ascii_uppercase(),
+            ),
             _ => None,
         };
     }
@@ -550,7 +587,13 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
                     Some("tight") => "tight",
                     Some("through") => "through",
                     Some("topAndBottom") => "topAndBottom",
-                    _ => if current.behind_text { "behind" } else { "inFront" },
+                    _ => {
+                        if current.behind_text {
+                            "behind"
+                        } else {
+                            "inFront"
+                        }
+                    }
                 }
                 .into();
                 if matches!(current.wrap.as_str(), "square" | "tight" | "through") {
@@ -570,7 +613,9 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
                 if let Some(shape) = current.shape.as_mut() {
                     if !vml_on(get_attr_value(&e, "on"), true) {
                         shape.fill = None;
-                    } else if let Some(c) = get_attr_value(&e, "color").as_deref().and_then(vml_color) {
+                    } else if let Some(c) =
+                        get_attr_value(&e, "color").as_deref().and_then(vml_color)
+                    {
                         shape.fill = Some(c);
                     }
                 }
@@ -579,7 +624,9 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
                 if let Some(shape) = current.shape.as_mut() {
                     if !vml_on(get_attr_value(&e, "on"), true) {
                         shape.stroke = None;
-                    } else if let Some(c) = get_attr_value(&e, "color").as_deref().and_then(vml_color) {
+                    } else if let Some(c) =
+                        get_attr_value(&e, "color").as_deref().and_then(vml_color)
+                    {
                         shape.stroke = Some(c);
                     }
                 }
@@ -591,7 +638,12 @@ pub(super) fn parse_vml_pict(reader: &mut Reader<&[u8]>, styles: &StyleSheet) ->
         }
     }
     let img = img?;
-    let drawable = !img.rel_id.is_empty() || img.text_box.is_some() || img.shape.as_ref().is_some_and(|s| s.fill.is_some() || s.stroke.is_some());
+    let drawable = !img.rel_id.is_empty()
+        || img.text_box.is_some()
+        || img
+            .shape
+            .as_ref()
+            .is_some_and(|s| s.fill.is_some() || s.stroke.is_some());
     (drawable && img.width > 0.0 && img.height > 0.0).then_some(img)
 }
 
@@ -606,10 +658,16 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
     }
     let len = |k: &str| css.get(k).and_then(|v| vml_length(v));
     let anchored = css.get("position").map(String::as_str) == Some("absolute");
-    let z_index = css.get("z-index").and_then(|z| z.trim().parse::<i64>().ok()).unwrap_or(0);
+    let z_index = css
+        .get("z-index")
+        .and_then(|z| z.trim().parse::<i64>().ok())
+        .unwrap_or(0);
     let behind = z_index < 0;
 
-    let h_relative = match css.get("mso-position-horizontal-relative").map(String::as_str) {
+    let h_relative = match css
+        .get("mso-position-horizontal-relative")
+        .map(String::as_str)
+    {
         Some("margin") => "margin",
         Some("page") => "page",
         Some("char") => "character",
@@ -619,7 +677,10 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
         Some("outer-margin-area") => "outsideMargin",
         _ => "column",
     };
-    let v_relative = match css.get("mso-position-vertical-relative").map(String::as_str) {
+    let v_relative = match css
+        .get("mso-position-vertical-relative")
+        .map(String::as_str)
+    {
         Some("margin") => "margin",
         Some("page") => "page",
         Some("line") => "line",
@@ -638,9 +699,22 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
             _ => "rect",
         }
         .into(),
-        fill: filled.then(|| get_attr_value(e, "fillcolor").as_deref().and_then(vml_color).unwrap_or_else(|| "FFFFFF".into())),
-        stroke: stroked.then(|| get_attr_value(e, "strokecolor").as_deref().and_then(vml_color).unwrap_or_else(|| "000000".into())),
-        stroke_width: get_attr_value(e, "strokeweight").as_deref().and_then(vml_length).unwrap_or(1.0),
+        fill: filled.then(|| {
+            get_attr_value(e, "fillcolor")
+                .as_deref()
+                .and_then(vml_color)
+                .unwrap_or_else(|| "FFFFFF".into())
+        }),
+        stroke: stroked.then(|| {
+            get_attr_value(e, "strokecolor")
+                .as_deref()
+                .and_then(vml_color)
+                .unwrap_or_else(|| "000000".into())
+        }),
+        stroke_width: get_attr_value(e, "strokeweight")
+            .as_deref()
+            .and_then(vml_length)
+            .unwrap_or(1.0),
     };
 
     ImageRef {
@@ -648,7 +722,14 @@ fn vml_shape(e: &BytesStart, local: &str) -> ImageRef {
         height: len("height").unwrap_or(0.0),
         anchored,
         behind_text: anchored && behind,
-        wrap: if !anchored { "inline" } else if behind { "behind" } else { "inFront" }.into(),
+        wrap: if !anchored {
+            "inline"
+        } else if behind {
+            "behind"
+        } else {
+            "inFront"
+        }
+        .into(),
         h_relative: h_relative.into(),
         h_offset: len("margin-left").or_else(|| len("left")).unwrap_or(0.0),
         h_align: align("mso-position-horizontal"),
@@ -678,9 +759,13 @@ mod tests {
         theme.colors.insert("lt1".into(), "FFFFFF".into());
         let xml = r#"<a:schemeClr val="accent1"><a:lumMod val="50000"/></a:schemeClr>"#;
         let mut reader = Reader::from_str(xml);
-        let Ok(Event::Start(e)) = reader.read_event() else { panic!() };
+        let Ok(Event::Start(e)) = reader.read_event() else {
+            panic!()
+        };
         let mut b = ColorBuilder::start(&e, &theme).unwrap();
-        let Ok(Event::Empty(m)) = reader.read_event() else { panic!() };
+        let Ok(Event::Empty(m)) = reader.read_event() else {
+            panic!()
+        };
         b.modifier(&m);
         // accent1 at 50 % luminance: Word's "darker 50 %"
         assert_eq!(b.finish().as_deref(), Some("203864"));

@@ -5,7 +5,8 @@
 //! character style chain → direct formatting.
 
 use crate::docx_parser::{
-    get_attr_value, is_bool_element_true, parse_border_element, tag_is, ParagraphBorders, TableBorders,
+    get_attr_value, is_bool_element_true, parse_border_element, tag_is, ParagraphBorders,
+    TableBorders,
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
@@ -101,9 +102,22 @@ impl ParaProps {
         macro_rules! take {
             ($($f:ident),*) => { $( if over.$f.is_some() { self.$f = over.$f.clone(); } )* };
         }
-        take!(align, indent_left, indent_right, indent_first_line, space_before, space_after,
-              num_id, ilvl, outline_level, keep_next, keep_lines, page_break_before, widow_control,
-              contextual_spacing);
+        take!(
+            align,
+            indent_left,
+            indent_right,
+            indent_first_line,
+            space_before,
+            space_after,
+            num_id,
+            ilvl,
+            outline_level,
+            keep_next,
+            keep_lines,
+            page_break_before,
+            widow_control,
+            contextual_spacing
+        );
         if over.line_rule.is_some() {
             self.line_rule = over.line_rule.clone();
             self.line_spacing = over.line_spacing;
@@ -225,7 +239,11 @@ pub struct StyleSheet {
 }
 
 impl StyleSheet {
-    pub fn load(styles_xml: Option<&str>, theme_xml: Option<&str>, numbering_xml: Option<&str>) -> Self {
+    pub fn load(
+        styles_xml: Option<&str>,
+        theme_xml: Option<&str>,
+        numbering_xml: Option<&str>,
+    ) -> Self {
         let mut sheet = StyleSheet {
             theme: theme_xml.map(parse_theme_fonts).unwrap_or_default(),
             ..Default::default()
@@ -260,7 +278,9 @@ impl StyleSheet {
 
     /// Flattened (pPr, rPr) of a style chain, without document defaults
     pub fn style_props(&self, id: Option<&str>) -> (ParaProps, RunProps) {
-        id.and_then(|id| self.resolved.get(id)).cloned().unwrap_or_default()
+        id.and_then(|id| self.resolved.get(id))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Borders of a table style chain (falls back to the default table style)
@@ -351,7 +371,8 @@ impl StyleSheet {
                     kind: get_attr_value(&e, "type").unwrap_or_else(|| "paragraph".to_string()),
                     ..Default::default()
                 });
-                let is_default = get_attr_value(&e, "default").is_some_and(|v| v == "1" || v == "true");
+                let is_default =
+                    get_attr_value(&e, "default").is_some_and(|v| v == "1" || v == "true");
                 if let (true, Some(s)) = (is_default, current.as_ref()) {
                     match s.kind.as_str() {
                         "paragraph" => self.default_paragraph_style = Some(s.id.clone()),
@@ -368,7 +389,10 @@ impl StyleSheet {
                         "next" => style.next = get_attr_value(&e, "val"),
                         "qFormat" => style.quick = is_bool_element_true(&e),
                         "semiHidden" | "hidden" => style.hidden = is_bool_element_true(&e),
-                        "uiPriority" => style.ui_priority = get_attr_value(&e, "val").and_then(|v| v.parse().ok()),
+                        "uiPriority" => {
+                            style.ui_priority =
+                                get_attr_value(&e, "val").and_then(|v| v.parse().ok())
+                        }
                         _ => {}
                     }
                 } else if path.iter().any(|p| p == "tblStylePr") {
@@ -402,7 +426,13 @@ fn local_name(e: &BytesStart) -> String {
 }
 
 /// Applies an element found inside a property block; `path` holds the enclosing local names
-fn apply_property(path: &[String], e: &BytesStart, ppr: &mut ParaProps, rpr: &mut RunProps, theme: &ThemeFonts) {
+fn apply_property(
+    path: &[String],
+    e: &BytesStart,
+    ppr: &mut ParaProps,
+    rpr: &mut RunProps,
+    theme: &ThemeFonts,
+) {
     if path.iter().any(|p| p == "pPrChange" || p == "rPrChange") {
         return;
     }
@@ -453,7 +483,11 @@ pub fn apply_rpr_element(rpr: &mut RunProps, e: &BytesStart, theme: &ThemeFonts)
         }
     } else if tag_is(n, "color") {
         if let Some(val) = get_attr_value(e, "val") {
-            rpr.color = Some(if val.eq_ignore_ascii_case("auto") { String::new() } else { val.to_uppercase() });
+            rpr.color = Some(if val.eq_ignore_ascii_case("auto") {
+                String::new()
+            } else {
+                val.to_uppercase()
+            });
         }
     } else if tag_is(n, "sz") || tag_is(n, "szCs") {
         if let Some(v) = get_attr_value(e, "val").and_then(|v| v.parse::<f64>().ok()) {
@@ -463,7 +497,13 @@ pub fn apply_rpr_element(rpr: &mut RunProps, e: &BytesStart, theme: &ThemeFonts)
         let themed = get_attr_value(e, "asciiTheme")
             .or_else(|| get_attr_value(e, "hAnsiTheme"))
             .or_else(|| get_attr_value(e, "cstheme"))
-            .and_then(|t| if t.starts_with("major") { theme.major.clone() } else { theme.minor.clone() });
+            .and_then(|t| {
+                if t.starts_with("major") {
+                    theme.major.clone()
+                } else {
+                    theme.minor.clone()
+                }
+            });
         if let Some(fam) = themed
             .or_else(|| get_attr_value(e, "ascii"))
             .or_else(|| get_attr_value(e, "hAnsi"))
@@ -552,10 +592,18 @@ fn parse_theme_fonts(xml: &str) -> ThemeFonts {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let n = e.name();
-                let local = crate::docx_parser::utf8(n.as_ref()).rsplit(':').next().unwrap_or("").to_string();
+                let local = crate::docx_parser::utf8(n.as_ref())
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
                 if local == "clrScheme" {
                     in_colors = true;
-                } else if in_colors && scheme_slot.is_none() && local != "srgbClr" && local != "sysClr" {
+                } else if in_colors
+                    && scheme_slot.is_none()
+                    && local != "srgbClr"
+                    && local != "sysClr"
+                {
                     scheme_slot = Some(local);
                 } else if in_colors && (local == "srgbClr" || local == "sysClr") {
                     let value = get_attr_value(&e, "lastClr").or_else(|| get_attr_value(&e, "val"));
@@ -611,8 +659,13 @@ fn parse_numbering(xml: &str, theme: &ThemeFonts) -> Numbering {
             Ok(Event::End(_)) => {
                 match path.pop().as_deref() {
                     Some("lvl") if path.last().map(String::as_str) == Some("abstractNum") => {
-                        if let (Some(id), Some((ilvl, lvl))) = (abstract_id.as_ref(), level.take()) {
-                            numbering.abstracts.entry(id.clone()).or_default().insert(ilvl, lvl);
+                        if let (Some(id), Some((ilvl, lvl))) = (abstract_id.as_ref(), level.take())
+                        {
+                            numbering
+                                .abstracts
+                                .entry(id.clone())
+                                .or_default()
+                                .insert(ilvl, lvl);
                         }
                     }
                     Some("abstractNum") => abstract_id = None,
@@ -639,14 +692,29 @@ fn parse_numbering(xml: &str, theme: &ThemeFonts) -> Numbering {
         match (name.as_str(), parent) {
             ("abstractNum", _) => {
                 abstract_id = get_attr_value(&e, "abstractNumId");
-                numbering.abstracts.entry(abstract_id.clone().unwrap_or_default()).or_default();
+                numbering
+                    .abstracts
+                    .entry(abstract_id.clone().unwrap_or_default())
+                    .or_default();
             }
             ("lvl", Some("abstractNum")) => {
-                let ilvl = get_attr_value(&e, "ilvl").and_then(|v| v.parse().ok()).unwrap_or(0);
-                level = Some((ilvl, Level { start: 1, fmt: "decimal".into(), suffix: "tab".into(), ..Default::default() }));
+                let ilvl = get_attr_value(&e, "ilvl")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                level = Some((
+                    ilvl,
+                    Level {
+                        start: 1,
+                        fmt: "decimal".into(),
+                        suffix: "tab".into(),
+                        ..Default::default()
+                    },
+                ));
             }
             ("start", Some("lvl")) => {
-                if let (Some((_, l)), Some(v)) = (level.as_mut(), val().and_then(|v| v.parse().ok())) {
+                if let (Some((_, l)), Some(v)) =
+                    (level.as_mut(), val().and_then(|v| v.parse().ok()))
+                {
                     l.start = v;
                 }
             }
@@ -677,9 +745,11 @@ fn parse_numbering(xml: &str, theme: &ThemeFonts) -> Numbering {
                 override_lvl = get_attr_value(&e, "ilvl").and_then(|v| v.parse().ok());
             }
             ("startOverride", Some("lvlOverride")) => {
-                if let (Some((_, def)), Some(ilvl), Some(v)) =
-                    (num.as_mut(), override_lvl, val().and_then(|v| v.parse().ok()))
-                {
+                if let (Some((_, def)), Some(ilvl), Some(v)) = (
+                    num.as_mut(),
+                    override_lvl,
+                    val().and_then(|v| v.parse().ok()),
+                ) {
                     def.start_overrides.insert(ilvl, v);
                 }
             }
@@ -701,28 +771,53 @@ fn parse_numbering(xml: &str, theme: &ThemeFonts) -> Numbering {
 
 /// Word's highlight colors (`ST_HighlightColor`) and their RGB values
 pub const HIGHLIGHT_COLORS: &[(&str, &str)] = &[
-    ("yellow", "FFFF00"), ("green", "00FF00"), ("cyan", "00FFFF"), ("magenta", "FF00FF"),
-    ("blue", "0000FF"), ("red", "FF0000"), ("darkBlue", "000080"), ("darkCyan", "008080"),
-    ("darkGreen", "008000"), ("darkMagenta", "800080"), ("darkRed", "800000"), ("darkYellow", "808000"),
-    ("darkGray", "808080"), ("lightGray", "C0C0C0"), ("black", "000000"), ("white", "FFFFFF"),
+    ("yellow", "FFFF00"),
+    ("green", "00FF00"),
+    ("cyan", "00FFFF"),
+    ("magenta", "FF00FF"),
+    ("blue", "0000FF"),
+    ("red", "FF0000"),
+    ("darkBlue", "000080"),
+    ("darkCyan", "008080"),
+    ("darkGreen", "008000"),
+    ("darkMagenta", "800080"),
+    ("darkRed", "800000"),
+    ("darkYellow", "808000"),
+    ("darkGray", "808080"),
+    ("lightGray", "C0C0C0"),
+    ("black", "000000"),
+    ("white", "FFFFFF"),
 ];
 
 /// RGB of a `w:highlight` value; `None` for `none` or an unknown name
 pub fn highlight_hex(name: &str) -> Option<&'static str> {
-    HIGHLIGHT_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, hex)| *hex)
+    HIGHLIGHT_COLORS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, hex)| *hex)
 }
 
 /// The highlight color closest to `hex` (Word only accepts its named colors)
 pub fn highlight_name(hex: &str) -> &'static str {
     let rgb = |h: &str| -> [i64; 3] {
         let h = h.trim_start_matches('#');
-        let c = |i: usize| h.get(i..i + 2).and_then(|v| i64::from_str_radix(v, 16).ok()).unwrap_or(0);
+        let c = |i: usize| {
+            h.get(i..i + 2)
+                .and_then(|v| i64::from_str_radix(v, 16).ok())
+                .unwrap_or(0)
+        };
         [c(0), c(2), c(4)]
     };
     let target = rgb(hex);
     HIGHLIGHT_COLORS
         .iter()
-        .min_by_key(|(_, h)| rgb(h).iter().zip(target).map(|(a, b)| (a - b) * (a - b)).sum::<i64>())
+        .min_by_key(|(_, h)| {
+            rgb(h)
+                .iter()
+                .zip(target)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<i64>()
+        })
         .map(|(n, _)| *n)
         .unwrap_or("yellow")
 }
@@ -737,12 +832,20 @@ pub struct NumberingCounters {
 
 impl NumberingCounters {
     /// Advances the counter of (num_id, ilvl) and returns the rendered label
-    pub fn next_label(&mut self, numbering: &Numbering, num_id: &str, ilvl: u32) -> Option<(String, Level)> {
+    pub fn next_label(
+        &mut self,
+        numbering: &Numbering,
+        num_id: &str,
+        ilvl: u32,
+    ) -> Option<(String, Level)> {
         let ilvl = ilvl.min(8);
         let num = numbering.nums.get(num_id)?;
         let levels = numbering.abstracts.get(&num.abstract_id)?;
         let level = levels.get(&ilvl)?.clone();
-        let values = self.lists.entry(num.abstract_id.clone()).or_insert([None; 9]);
+        let values = self
+            .lists
+            .entry(num.abstract_id.clone())
+            .or_insert([None; 9]);
 
         if !self.seen_nums.iter().any(|n| n == num_id) {
             self.seen_nums.push(num_id.to_string());
@@ -802,7 +905,7 @@ fn to_letters(n: i64) -> String {
         return n.to_string();
     }
     let letter = (b'A' + ((n - 1) % 26) as u8) as char;
-    std::iter::repeat(letter).take(((n - 1) / 26 + 1) as usize).collect()
+    std::iter::repeat_n(letter, ((n - 1) / 26 + 1) as usize).collect()
 }
 
 fn to_roman(mut n: i64) -> String {
@@ -810,8 +913,19 @@ fn to_roman(mut n: i64) -> String {
         return n.to_string();
     }
     const TABLE: [(i64, &str); 13] = [
-        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
-        (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
     ];
     let mut out = String::new();
     for (value, numeral) in TABLE {
@@ -829,7 +943,11 @@ pub fn map_bullet(text: &str, font: Option<&str>) -> String {
     text.chars()
         .map(|c| {
             let code = c as u32;
-            let low = if (0xF000..=0xF0FF).contains(&code) { code - 0xF000 } else { code };
+            let low = if (0xF000..=0xF0FF).contains(&code) {
+                code - 0xF000
+            } else {
+                code
+            };
             if font.contains("wingdings") {
                 match low {
                     0xA7 | 0x6E => '▪',
@@ -893,7 +1011,11 @@ mod tests {
         assert_eq!(sheet.doc_ppr.space_after, Some(8.0));
 
         let (ppr, rpr) = sheet.style_props(Some("Ttulo2"));
-        assert_eq!(rpr.font_size, Some(13.0), "own size overrides the base style");
+        assert_eq!(
+            rpr.font_size,
+            Some(13.0),
+            "own size overrides the base style"
+        );
         assert_eq!(rpr.bold, Some(true), "bold inherited from Ttulo1");
         assert_eq!(rpr.color.as_deref(), Some("2F5496"));
         assert_eq!(rpr.font_family.as_deref(), Some("Calibri Light"));
@@ -938,7 +1060,11 @@ mod tests {
         assert_eq!(label("1", 0), "2.");
         assert_eq!(label("1", 1), "2.a)", "deeper levels restart");
         assert_eq!(label("2", 0), "•");
-        assert_eq!(label("3", 0), "1.", "startOverride restarts the shared list");
+        assert_eq!(
+            label("3", 0),
+            "1.",
+            "startOverride restarts the shared list"
+        );
         assert_eq!(label("1", 0), "2.", "and the list continues from there");
         assert_eq!(label("4", 0), "I.");
         assert_eq!(label("4", 0), "II.");

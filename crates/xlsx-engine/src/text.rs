@@ -26,7 +26,9 @@ pub fn text_spans(xml: &str, within: &str) -> Result<Vec<TextSpan>, String> {
     let mut open: Option<Range<usize>> = None;
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("XML no válido: {}", e))?;
+        let event = reader
+            .read_event()
+            .map_err(|e| format!("XML no válido: {}", e))?;
         let after = reader.buffer_position() as usize;
         match event {
             Event::Start(e) => {
@@ -74,7 +76,9 @@ fn decode_escapes(text: &str) -> String {
     while let Some(at) = rest.find("_x") {
         out.push_str(&rest[..at]);
         let candidate = &rest[at..];
-        let code = candidate.get(2..6).filter(|h| h.chars().all(|c| c.is_ascii_hexdigit()));
+        let code = candidate
+            .get(2..6)
+            .filter(|h| h.chars().all(|c| c.is_ascii_hexdigit()));
         match (code, candidate.as_bytes().get(6)) {
             (Some(hex), Some(b'_')) => {
                 if let Some(c) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
@@ -95,7 +99,10 @@ fn decode_escapes(text: &str) -> String {
 /// Whether `text` starts with `_xHHHH_`
 fn starts_with_escape(text: &str) -> bool {
     let b = text.as_bytes();
-    b.len() >= 7 && b.starts_with(b"_x") && b[2..6].iter().all(u8::is_ascii_hexdigit) && b[6] == b'_'
+    b.len() >= 7
+        && b.starts_with(b"_x")
+        && b[2..6].iter().all(u8::is_ascii_hexdigit)
+        && b[6] == b'_'
 }
 
 /// Raw `<t>` content for `text`: XML-escaped, with `_xHHHH_` for control characters and for
@@ -117,12 +124,18 @@ pub fn encode(text: &str) -> String {
 /// A `<t>` element for `text`, with `xml:space="preserve"` when spaces at its ends would
 /// otherwise be dropped
 pub fn t_element(prefix: &str, text: &str) -> String {
-    let space = if needs_preserve(text) { r#" xml:space="preserve""# } else { "" };
+    let space = if needs_preserve(text) {
+        r#" xml:space="preserve""#
+    } else {
+        ""
+    };
     format!("<{p}t{}>{}</{p}t>", space, encode(text), p = prefix)
 }
 
 fn needs_preserve(text: &str) -> bool {
-    text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) || text.contains('\n')
+    text.starts_with(char::is_whitespace)
+        || text.ends_with(char::is_whitespace)
+        || text.contains('\n')
 }
 
 /// `text` with every `{{FIELD}}` (spaces around the name and a `: hint` after it allowed, as in
@@ -133,7 +146,9 @@ pub fn fill_placeholders(text: &str, values: &HashMap<String, String>) -> (Strin
     let mut count = 0;
     let mut rest = text;
     while let Some(open) = rest.find("{{") {
-        let Some(close) = rest[open + 2..].find("}}") else { break };
+        let Some(close) = rest[open + 2..].find("}}") else {
+            break;
+        };
         let inner = &rest[open + 2..open + 2 + close];
         let key = inner.split_once(':').map_or(inner, |(key, _)| key).trim();
         out.push_str(&rest[..open]);
@@ -152,7 +167,11 @@ pub fn fill_placeholders(text: &str, values: &HashMap<String, String>) -> (Strin
 
 /// `xml` with the placeholders filled in every `<t>` inside `within` elements, and how many
 /// were replaced (`None` when nothing changed, so the part can be left untouched)
-pub fn fill_xml(xml: &str, within: &str, values: &HashMap<String, String>) -> Result<Option<(String, usize)>, String> {
+pub fn fill_xml(
+    xml: &str,
+    within: &str,
+    values: &HashMap<String, String>,
+) -> Result<Option<(String, usize)>, String> {
     if !xml.contains("{{") {
         return Ok(None);
     }
@@ -187,12 +206,22 @@ mod tests {
     use super::*;
 
     fn values(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn escapes_round_trip() {
-        for text in ["a & <b>", "línea\r\nnueva", "bell\u{7}", "_x0041_ literal", "snake_xcase", "_x12"] {
+        for text in [
+            "a & <b>",
+            "línea\r\nnueva",
+            "bell\u{7}",
+            "_x0041_ literal",
+            "snake_xcase",
+            "_x12",
+        ] {
             assert_eq!(decode(&encode(text)), text, "{}", text);
         }
         assert_eq!(decode("_x0041__x000D_"), "A\r");
@@ -202,20 +231,35 @@ mod tests {
     #[test]
     fn finds_shown_text_only() {
         let xml = r#"<si><r><t>Ho</t></r><r><t xml:space="preserve">la </t></r><rPh><t>ホ</t></rPh></si><x><t>no</t></x>"#;
-        let texts: Vec<_> = text_spans(xml, "si").unwrap().iter().map(|s| decode(&xml[s.content.clone()])).collect();
+        let texts: Vec<_> = text_spans(xml, "si")
+            .unwrap()
+            .iter()
+            .map(|s| decode(&xml[s.content.clone()]))
+            .collect();
         assert_eq!(texts, ["Ho", "la "]);
     }
 
     #[test]
     fn fills_known_placeholders() {
         let v = values(&[("NOMBRE", "Ana & Luis"), ("X", " ")]);
-        assert_eq!(fill_placeholders("Hola {{NOMBRE}}, {{ NOMBRE }} y {{OTRO}} {{", &v), ("Hola Ana & Luis, Ana & Luis y {{OTRO}} {{".to_string(), 2));
-        assert_eq!(fill_placeholders("{{NOMBRE: completo}}", &v), ("Ana & Luis".to_string(), 1));
+        assert_eq!(
+            fill_placeholders("Hola {{NOMBRE}}, {{ NOMBRE }} y {{OTRO}} {{", &v),
+            ("Hola Ana & Luis, Ana & Luis y {{OTRO}} {{".to_string(), 2)
+        );
+        assert_eq!(
+            fill_placeholders("{{NOMBRE: completo}}", &v),
+            ("Ana & Luis".to_string(), 1)
+        );
 
         let xml = r#"<sst><si><t>Para {{NOMBRE}}</t></si><si><t>{{X}}</t></si><si><t>{{OTRO}}</t></si></sst>"#;
         let (out, count) = fill_xml(xml, "si", &v).unwrap().unwrap();
         assert_eq!(count, 2);
-        assert_eq!(out, r#"<sst><si><t>Para Ana &amp; Luis</t></si><si><t xml:space="preserve"> </t></si><si><t>{{OTRO}}</t></si></sst>"#);
-        assert!(fill_xml(xml, "si", &values(&[("Z", "1")])).unwrap().is_none());
+        assert_eq!(
+            out,
+            r#"<sst><si><t>Para Ana &amp; Luis</t></si><si><t xml:space="preserve"> </t></si><si><t>{{OTRO}}</t></si></sst>"#
+        );
+        assert!(fill_xml(xml, "si", &values(&[("Z", "1")]))
+            .unwrap()
+            .is_none());
     }
 }

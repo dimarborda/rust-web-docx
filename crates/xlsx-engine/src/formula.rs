@@ -118,11 +118,38 @@ fn unsupported<T>(message: impl Into<String>) -> Parsed<T> {
 
 /// Functions Excel stores with the `_xlfn.` prefix (added after Excel 2007)
 const FUTURE_FUNCTIONS: &[&str] = &[
-    "CONCAT", "TEXTJOIN", "IFS", "SWITCH", "MAXIFS", "MINIFS", "XLOOKUP", "XMATCH", "IFNA", "DAYS", "CEILING.MATH",
-    "FLOOR.MATH", "XOR", "FILTER", "SORT", "UNIQUE", "SEQUENCE", "LET", "STDEV.S", "STDEV.P",
+    "CONCAT",
+    "TEXTJOIN",
+    "IFS",
+    "SWITCH",
+    "MAXIFS",
+    "MINIFS",
+    "XLOOKUP",
+    "XMATCH",
+    "IFNA",
+    "DAYS",
+    "CEILING.MATH",
+    "FLOOR.MATH",
+    "XOR",
+    "FILTER",
+    "SORT",
+    "UNIQUE",
+    "SEQUENCE",
+    "LET",
+    "STDEV.S",
+    "STDEV.P",
 ];
 
-const ERRORS: &[&str] = &["#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"];
+const ERRORS: &[&str] = &[
+    "#NULL!",
+    "#DIV/0!",
+    "#VALUE!",
+    "#REF!",
+    "#NAME?",
+    "#NUM!",
+    "#N/A",
+    "#GETTING_DATA",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
@@ -241,7 +268,9 @@ fn tokenize(text: &str) -> Parsed<Vec<Tok>> {
                     }
                 }
                 let s: String = chars[start..i].iter().collect();
-                let n = s.parse::<f64>().or_else(|_| invalid(format!("'{}' no es un número.", s)))?;
+                let n = s
+                    .parse::<f64>()
+                    .or_else(|_| invalid(format!("'{}' no es un número.", s)))?;
                 toks.push(Tok::Number(n));
             }
             '+' => {
@@ -272,22 +301,20 @@ fn tokenize(text: &str) -> Parsed<Vec<Tok>> {
                 toks.push(Tok::Op(Op::Eq));
                 i += 1;
             }
-            '<' => {
-                match chars.get(i + 1) {
-                    Some('>') => {
-                        toks.push(Tok::Op(Op::Ne));
-                        i += 2;
-                    }
-                    Some('=') => {
-                        toks.push(Tok::Op(Op::Le));
-                        i += 2;
-                    }
-                    _ => {
-                        toks.push(Tok::Op(Op::Lt));
-                        i += 1;
-                    }
+            '<' => match chars.get(i + 1) {
+                Some('>') => {
+                    toks.push(Tok::Op(Op::Ne));
+                    i += 2;
                 }
-            }
+                Some('=') => {
+                    toks.push(Tok::Op(Op::Le));
+                    i += 2;
+                }
+                _ => {
+                    toks.push(Tok::Op(Op::Lt));
+                    i += 1;
+                }
+            },
             '>' => {
                 if chars.get(i + 1) == Some(&'=') {
                     toks.push(Tok::Op(Op::Ge));
@@ -379,12 +406,23 @@ pub(crate) fn parse_pos(word: &str) -> Option<Pos> {
         i += 1;
     }
     let digits = &word[i..];
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || digits.starts_with('0') || digits.len() > 7 {
+    if digits.is_empty()
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+        || digits.starts_with('0')
+        || digits.len() > 7
+    {
         return None;
     }
-    let col = letters.bytes().fold(0u32, |acc, b| acc * 26 + (b.to_ascii_uppercase() - b'A' + 1) as u32);
+    let col = letters.bytes().fold(0u32, |acc, b| {
+        acc * 26 + (b.to_ascii_uppercase() - b'A' + 1) as u32
+    });
     let row: u32 = digits.parse().ok()?;
-    ((1..=MAX_ROW).contains(&row) && (1..=MAX_COL).contains(&col)).then_some(Pos { row, col, row_abs, col_abs })
+    ((1..=MAX_ROW).contains(&row) && (1..=MAX_COL).contains(&col)).then_some(Pos {
+        row,
+        col,
+        row_abs,
+        col_abs,
+    })
 }
 
 /// `$C` → (column, absolute); `None` when the word is not a column
@@ -393,10 +431,13 @@ pub(crate) fn parse_col(word: &str) -> Option<(u32, bool)> {
         Some(rest) => (true, rest),
         None => (false, word),
     };
-    if letters.is_empty() || letters.len() > 3 || !letters.bytes().all(|b| b.is_ascii_alphabetic()) {
+    if letters.is_empty() || letters.len() > 3 || !letters.bytes().all(|b| b.is_ascii_alphabetic())
+    {
         return None;
     }
-    let col = letters.bytes().fold(0u32, |acc, b| acc * 26 + (b.to_ascii_uppercase() - b'A' + 1) as u32);
+    let col = letters.bytes().fold(0u32, |acc, b| {
+        acc * 26 + (b.to_ascii_uppercase() - b'A' + 1) as u32
+    });
     (col <= MAX_COL).then_some((col, abs))
 }
 
@@ -427,7 +468,9 @@ impl Parser {
 
     fn comparison(&mut self) -> Parsed<Expr> {
         let mut left = self.concat()?;
-        while let Some(Tok::Op(op @ (Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge))) = self.peek().cloned() {
+        while let Some(Tok::Op(op @ (Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge))) =
+            self.peek().cloned()
+        {
             self.at += 1;
             let right = self.concat()?;
             left = Expr::Binary(op, Box::new(left), Box::new(right));
@@ -541,20 +584,48 @@ impl Parser {
                     Some(Tok::Word(w)) => parse_pos(&w),
                     _ => None,
                 };
-                let Some(last) = last else { return invalid(format!("Rango incompleto después de '{}:'.", word)) };
-                return Ok(Expr::Ref(Area { sheet, first, last, whole_cols: false, is_range: true }));
+                let Some(last) = last else {
+                    return invalid(format!("Rango incompleto después de '{}:'.", word));
+                };
+                return Ok(Expr::Ref(Area {
+                    sheet,
+                    first,
+                    last,
+                    whole_cols: false,
+                    is_range: true,
+                }));
             }
-            return Ok(Expr::Ref(Area { sheet, first, last: first, whole_cols: false, is_range: false }));
+            return Ok(Expr::Ref(Area {
+                sheet,
+                first,
+                last: first,
+                whole_cols: false,
+                is_range: false,
+            }));
         }
         if self.peek() == Some(&Tok::Colon) {
             if let Some((c1, a1)) = parse_col(word) {
                 self.at += 1;
-                let Some(Tok::Word(w)) = self.next() else { return invalid("Rango de columnas incompleto.") };
-                let Some((c2, a2)) = parse_col(&w) else { return invalid("Rango de columnas incompleto.") };
+                let Some(Tok::Word(w)) = self.next() else {
+                    return invalid("Rango de columnas incompleto.");
+                };
+                let Some((c2, a2)) = parse_col(&w) else {
+                    return invalid("Rango de columnas incompleto.");
+                };
                 return Ok(Expr::Ref(Area {
                     sheet,
-                    first: Pos { row: 1, col: c1, row_abs: true, col_abs: a1 },
-                    last: Pos { row: MAX_ROW, col: c2, row_abs: true, col_abs: a2 },
+                    first: Pos {
+                        row: 1,
+                        col: c1,
+                        row_abs: true,
+                        col_abs: a1,
+                    },
+                    last: Pos {
+                        row: MAX_ROW,
+                        col: c2,
+                        row_abs: true,
+                        col_abs: a2,
+                    },
                     whole_cols: true,
                     is_range: true,
                 }));
@@ -572,7 +643,10 @@ impl Parser {
 
     fn call(&mut self, word: &str) -> Parsed<Expr> {
         let upper = word.to_uppercase();
-        let name = upper.trim_start_matches("_XLFN.").trim_start_matches("_XLWS.").to_string();
+        let name = upper
+            .trim_start_matches("_XLFN.")
+            .trim_start_matches("_XLWS.")
+            .to_string();
         let mut args = Vec::new();
         if self.eat(&Tok::Close) {
             return Ok(Expr::Call(name, args));
@@ -597,15 +671,20 @@ impl Parser {
         let mut rows = vec![Vec::new()];
         loop {
             let negative = self.eat(&Tok::Op(Op::Sub));
-            let item = match self.next() {
-                Some(Tok::Number(n)) => Expr::Number(if negative { -n } else { n }),
-                Some(Tok::Text(s)) if !negative => Expr::Text(s),
-                Some(Tok::Error(e)) if !negative => Expr::Error(e),
-                Some(Tok::Word(w)) if !negative && matches!(w.to_uppercase().as_str(), "TRUE" | "FALSE") => {
-                    Expr::Bool(w.eq_ignore_ascii_case("TRUE"))
-                }
-                _ => return invalid("Una matriz constante solo admite números, textos, booleanos y errores."),
-            };
+            let item =
+                match self.next() {
+                    Some(Tok::Number(n)) => Expr::Number(if negative { -n } else { n }),
+                    Some(Tok::Text(s)) if !negative => Expr::Text(s),
+                    Some(Tok::Error(e)) if !negative => Expr::Error(e),
+                    Some(Tok::Word(w))
+                        if !negative && matches!(w.to_uppercase().as_str(), "TRUE" | "FALSE") =>
+                    {
+                        Expr::Bool(w.eq_ignore_ascii_case("TRUE"))
+                    }
+                    _ => return invalid(
+                        "Una matriz constante solo admite números, textos, booleanos y errores.",
+                    ),
+                };
             rows.last_mut().unwrap().push(item);
             match self.next() {
                 Some(Tok::Comma) => {}
@@ -628,7 +707,10 @@ pub fn parse(text: &str) -> Parsed<Expr> {
     if text.trim().is_empty() {
         return invalid("La fórmula está vacía.");
     }
-    let mut parser = Parser { toks: tokenize(text)?, at: 0 };
+    let mut parser = Parser {
+        toks: tokenize(text)?,
+        at: 0,
+    };
     let expr = parser.comparison()?;
     match parser.peek() {
         None => Ok(expr),
@@ -646,13 +728,32 @@ impl Expr {
         match self {
             Expr::Ref(area) => {
                 let shift = |p: Pos, whole_cols: bool| -> Option<Pos> {
-                    let row = if p.row_abs || whole_cols { p.row as i64 } else { p.row as i64 + rows };
-                    let col = if p.col_abs { p.col as i64 } else { p.col as i64 + cols };
+                    let row = if p.row_abs || whole_cols {
+                        p.row as i64
+                    } else {
+                        p.row as i64 + rows
+                    };
+                    let col = if p.col_abs {
+                        p.col as i64
+                    } else {
+                        p.col as i64 + cols
+                    };
                     (row >= 1 && row <= MAX_ROW as i64 && col >= 1 && col <= MAX_COL as i64)
-                        .then_some(Pos { row: row as u32, col: col as u32, ..p })
+                        .then_some(Pos {
+                            row: row as u32,
+                            col: col as u32,
+                            ..p
+                        })
                 };
-                match (shift(area.first, area.whole_cols), shift(area.last, area.whole_cols)) {
-                    (Some(first), Some(last)) => Expr::Ref(Area { first, last, ..area.clone() }),
+                match (
+                    shift(area.first, area.whole_cols),
+                    shift(area.last, area.whole_cols),
+                ) {
+                    (Some(first), Some(last)) => Expr::Ref(Area {
+                        first,
+                        last,
+                        ..area.clone()
+                    }),
                     _ => Expr::Error("#REF!".to_string()),
                 }
             }
@@ -661,7 +762,10 @@ impl Expr {
             Expr::Percent(e) => Expr::Percent(boxed(e)),
             Expr::Paren(e) => Expr::Paren(boxed(e)),
             Expr::Binary(op, a, b) => Expr::Binary(*op, boxed(a), boxed(b)),
-            Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.shifted(rows, cols)).collect()),
+            Expr::Call(name, args) => Expr::Call(
+                name.clone(),
+                args.iter().map(|a| a.shifted(rows, cols)).collect(),
+            ),
             other => other.clone(),
         }
     }
@@ -780,7 +884,9 @@ pub fn quote_sheet(sheet: &str) -> String {
 
 fn write_sheet(sheet: &str, out: &mut String) {
     let plain = !sheet.is_empty()
-        && sheet.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        && sheet
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
         && !sheet.chars().next().unwrap().is_ascii_digit()
         && parse_pos(sheet).is_none();
     if plain {
@@ -849,23 +955,41 @@ mod tests {
         ] {
             assert_eq!(round_trip(f), f, "{}", f);
         }
-        assert_eq!(round_trip("=sum( a1 ; b2 )"), "SUM(a1,b2)".replace("a1", "A1").replace("b2", "B2"));
+        assert_eq!(
+            round_trip("=sum( a1 ; b2 )"),
+            "SUM(a1,b2)".replace("a1", "A1").replace("b2", "B2")
+        );
         assert_eq!(round_trip("XLOOKUP(1,A:A,B:B)"), "_xlfn.XLOOKUP(1,A:A,B:B)");
-        assert_eq!(parse("_xlfn.CONCAT(A1)").unwrap().to_display(), "CONCAT(A1)");
+        assert_eq!(
+            parse("_xlfn.CONCAT(A1)").unwrap().to_display(),
+            "CONCAT(A1)"
+        );
     }
 
     #[test]
     fn precedence_follows_excel() {
-        let Expr::Binary(Op::Pow, left, _) = parse("-2^2").unwrap() else { panic!() };
+        let Expr::Binary(Op::Pow, left, _) = parse("-2^2").unwrap() else {
+            panic!()
+        };
         assert!(matches!(*left, Expr::Neg(_)));
-        let Expr::Binary(Op::Add, _, right) = parse("1+2*3").unwrap() else { panic!() };
+        let Expr::Binary(Op::Add, _, right) = parse("1+2*3").unwrap() else {
+            panic!()
+        };
         assert!(matches!(*right, Expr::Binary(Op::Mul, _, _)));
-        let Expr::Binary(Op::Eq, _, _) = parse("A1&\"x\"=\"1x\"").unwrap() else { panic!() };
+        let Expr::Binary(Op::Eq, _, _) = parse("A1&\"x\"=\"1x\"").unwrap() else {
+            panic!()
+        };
     }
 
     #[test]
     fn reports_unsupported_and_invalid_formulas() {
-        for f in ["[1]Hoja1!A1", "Hoja1:Hoja3!A1", "Tabla1[Importe]", "SUM((A1,B1))", "1:1"] {
+        for f in [
+            "[1]Hoja1!A1",
+            "Hoja1:Hoja3!A1",
+            "Tabla1[Importe]",
+            "SUM((A1,B1))",
+            "1:1",
+        ] {
             assert!(matches!(parse(f), Err(ParseError::Unsupported(_))), "{}", f);
         }
         for f in ["", "SUM(A1", "1+", "\"abc", "A1 B1", "$$A1"] {

@@ -4,8 +4,8 @@
 //! header/footer's own top-level paragraphs (`tests/test_header_footer.rs`).
 
 use rust_web_docx::docx_parser::{
-    DocumentElement, DocxModifier, ImageUpdate, NewImage, HEADER_FOOTER_BASE, HEADER_FOOTER_TEXTBOX_BASE, PART_SLOT, TextBoxContent,
-    TextBoxImage,
+    DocumentElement, DocxModifier, ImageUpdate, NewImage, TextBoxContent, TextBoxImage,
+    HEADER_FOOTER_BASE, HEADER_FOOTER_TEXTBOX_BASE, PART_SLOT,
 };
 use rust_web_docx::layout_engine::{LayoutEngine, RenderCommand};
 use std::io::{Cursor, Write};
@@ -61,7 +61,9 @@ fn text_box(text: &str, doc_pr_id: u32) -> String {
 fn docx(parts: &[(&str, &str, &str, &str, &str)]) -> DocxModifier {
     let refs: String = parts
         .iter()
-        .map(|(_, id, ty, kind, _)| format!(r#"<w:{}Reference w:type="{}" r:id="{}"/>"#, kind, ty, id))
+        .map(|(_, id, ty, kind, _)| {
+            format!(r#"<w:{}Reference w:type="{}" r:id="{}"/>"#, kind, ty, id)
+        })
         .collect();
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body><w:p><w:r><w:t>Cuerpo</w:t></w:r></w:p><w:sectPr>{refs}<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr></w:body></w:document>"#,
@@ -72,7 +74,10 @@ fn docx(parts: &[(&str, &str, &str, &str, &str)]) -> DocxModifier {
             format!(r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{}" Target="{}"/>"#, id, kind, file)
         })
         .collect();
-    let rels = format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#, rels);
+    let rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
+        rels
+    );
     let mut buf = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buf);
@@ -84,7 +89,10 @@ fn docx(parts: &[(&str, &str, &str, &str, &str)]) -> DocxModifier {
         ];
         for (file, _, _, kind, xml) in parts {
             let root = if *kind == "header" { "hdr" } else { "ftr" };
-            files.push((format!("word/{}", file), format!(r#"<?xml version="1.0"?><w:{root} {W}>{xml}</w:{root}>"#)));
+            files.push((
+                format!("word/{}", file),
+                format!(r#"<?xml version="1.0"?><w:{root} {W}>{xml}</w:{root}>"#),
+            ));
         }
         for (name, content) in files {
             zip.start_file(name, opts).unwrap();
@@ -100,7 +108,11 @@ fn docx(parts: &[(&str, &str, &str, &str, &str)]) -> DocxModifier {
 fn box_texts(m: &DocxModifier, part: &str) -> Vec<(usize, String)> {
     let inputs = m.layout_inputs().unwrap();
     let hf = &inputs.header_footer;
-    let elements = if part == "header" { &hf.header } else { &hf.footer };
+    let elements = if part == "header" {
+        &hf.header
+    } else {
+        &hf.footer
+    };
     elements
         .iter()
         .filter_map(|e| match e {
@@ -125,15 +137,25 @@ fn test_marker_inside_a_header_text_box_is_numbered_and_fillable() {
     let mut m = docx(&[("header1.xml", "rIdH", "default", "header", &header)]);
 
     let texts = box_texts(&m, "header");
-    assert_eq!(texts.len(), 1, "the box's paragraph is numbered: {:?}", texts);
+    assert_eq!(
+        texts.len(),
+        1,
+        "the box's paragraph is numbered: {:?}",
+        texts
+    );
     let (index, text) = texts[0].clone();
     assert_eq!(text, "{{empresa}}");
-    assert!(index >= HEADER_FOOTER_TEXTBOX_BASE, "numbered from HEADER_FOOTER_TEXTBOX_BASE: {}", index);
+    assert!(
+        index >= HEADER_FOOTER_TEXTBOX_BASE,
+        "numbered from HEADER_FOOTER_TEXTBOX_BASE: {}",
+        index
+    );
 
     // Fillable like any other paragraph (replace_paragraph_range, as the header's own text is
     // already tested with in tests/test_header_footer.rs)
     m.checkpoint(None);
-    m.replace_paragraph_range(index, 0, text.chars().count(), "Operadox S.A.S.").unwrap();
+    m.replace_paragraph_range(index, 0, text.chars().count(), "Operadox S.A.S.")
+        .unwrap();
     assert_eq!(box_texts(&m, "header")[0].1, "Operadox S.A.S.");
     assert!(part_text(&m, "word/header1.xml").contains("Operadox S.A.S."));
 
@@ -157,12 +179,22 @@ fn test_fill_text_box_on_a_header_text_box_replaces_only_the_header_part() {
     };
     m.fill_text_box(index, &content).unwrap();
 
-    assert!(part_text(&m, "word/header1.xml").contains("Operadox S.A.S."), "header1.xml's txbxContent was replaced");
+    assert!(
+        part_text(&m, "word/header1.xml").contains("Operadox S.A.S."),
+        "header1.xml's txbxContent was replaced"
+    );
     assert!(!part_text(&m, "word/header1.xml").contains("{{html:membrete}}"));
-    assert_eq!(part_text(&m, "word/document.xml"), document_before, "document.xml is untouched");
+    assert_eq!(
+        part_text(&m, "word/document.xml"),
+        document_before,
+        "document.xml is untouched"
+    );
 
     assert!(m.undo().is_some());
-    assert!(part_text(&m, "word/header1.xml").contains("{{html:membrete}}"), "undo restores the header");
+    assert!(
+        part_text(&m, "word/header1.xml").contains("{{html:membrete}}"),
+        "undo restores the header"
+    );
 }
 
 // ---------- 2b. fill_text_box with a logo image inside a header's text box: the image's
@@ -176,12 +208,18 @@ fn test_fill_text_box_with_an_image_relates_it_to_the_header_part() {
 
     let content = TextBoxContent {
         ooxml: "<w:p>{{img:logo}}</w:p>".into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(80, 40))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(80, 40))),
+        }],
     };
     m.fill_text_box(index, &content).unwrap();
 
     let header_xml = part_text(&m, "word/header1.xml");
-    assert!(header_xml.contains("<a:blip r:embed="), "the picture is referenced from header1.xml");
+    assert!(
+        header_xml.contains("<a:blip r:embed="),
+        "the picture is referenced from header1.xml"
+    );
     let rel_id = header_xml
         .split("r:embed=\"")
         .nth(1)
@@ -191,7 +229,12 @@ fn test_fill_text_box_with_an_image_relates_it_to_the_header_part() {
 
     // The rId must resolve inside header1.xml's OWN relationships, not document.xml's
     let header_rels = part_text(&m, "word/_rels/header1.xml.rels");
-    assert!(header_rels.contains(&format!(r#"Id="{}""#, rel_id)), "rId {} is declared in header1.xml.rels: {}", rel_id, header_rels);
+    assert!(
+        header_rels.contains(&format!(r#"Id="{}""#, rel_id)),
+        "rId {} is declared in header1.xml.rels: {}",
+        rel_id,
+        header_rels
+    );
     let doc_rels = m.get_file_string("word/_rels/document.xml.rels");
     assert!(
         doc_rels.is_err() || !doc_rels.unwrap().contains(&format!(r#"Id="{}""#, rel_id)),
@@ -201,7 +244,10 @@ fn test_fill_text_box_with_an_image_relates_it_to_the_header_part() {
     // The media part exists and the package reopens without error
     let bytes = m.to_bytes().unwrap();
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
-    assert!(zip.by_name("word/media/image1.png").is_ok(), "word/media/image1.png was added");
+    assert!(
+        zip.by_name("word/media/image1.png").is_ok(),
+        "word/media/image1.png was added"
+    );
     let reopened = DocxModifier::from_bytes(&bytes).unwrap();
     assert!(part_text(&reopened, "word/header1.xml").contains("<a:blip r:embed="));
 }
@@ -218,7 +264,10 @@ fn test_fill_text_box_with_an_image_declares_missing_namespaces_on_the_header_ro
         r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape""#
     );
     let header_body = format!(r#"<w:p>{}</w:p>"#, text_box("{{html:logo}}", 1));
-    let header_xml = format!(r#"<?xml version="1.0"?><w:hdr {}>{}</w:hdr>"#, header_root_ns, header_body);
+    let header_xml = format!(
+        r#"<?xml version="1.0"?><w:hdr {}>{}</w:hdr>"#,
+        header_root_ns, header_body
+    );
 
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body><w:p><w:r><w:t>Cuerpo</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr></w:body></w:document>"#,
@@ -245,15 +294,30 @@ fn test_fill_text_box_with_an_image_declares_missing_namespaces_on_the_header_ro
     let index = box_texts(&m, "header")[0].0;
     let content = TextBoxContent {
         ooxml: "<w:p>{{img:logo}}</w:p>".into(),
-        images: vec![TextBoxImage { placeholder: "logo".into(), data: format!("data:image/png;base64,{}", b64(&png(80, 40))) }],
+        images: vec![TextBoxImage {
+            placeholder: "logo".into(),
+            data: format!("data:image/png;base64,{}", b64(&png(80, 40))),
+        }],
     };
     m.fill_text_box(index, &content).unwrap();
 
     let header_after = part_text(&m, "word/header1.xml");
     let hdr_start = header_after.find("<w:hdr").unwrap();
     let root = &header_after[hdr_start..hdr_start + header_after[hdr_start..].find('>').unwrap()];
-    assert!(root.contains(r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#), "xmlns:wp declared on <w:hdr>: {}", root);
-    assert!(root.contains(r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#), "xmlns:r declared on <w:hdr>: {}", root);
+    assert!(
+        root.contains(
+            r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""#
+        ),
+        "xmlns:wp declared on <w:hdr>: {}",
+        root
+    );
+    assert!(
+        root.contains(
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#
+        ),
+        "xmlns:r declared on <w:hdr>: {}",
+        root
+    );
 
     // document.xml did not gain a second declaration of these namespaces (it already has them
     // via `W`, and the fix must not touch document.xml at all for a header's own fill)
@@ -270,7 +334,11 @@ fn test_fill_text_box_with_an_image_declares_missing_namespaces_on_the_header_ro
 
 #[test]
 fn test_two_text_boxes_in_the_same_header_are_numbered_and_filled_separately() {
-    let header = format!(r#"<w:p>{}{}</w:p>"#, text_box("{{logo_izquierdo}}", 1), text_box("{{logo_derecho}}", 2));
+    let header = format!(
+        r#"<w:p>{}{}</w:p>"#,
+        text_box("{{logo_izquierdo}}", 1),
+        text_box("{{logo_derecho}}", 2)
+    );
     let mut m = docx(&[("header1.xml", "rIdH", "default", "header", &header)]);
 
     let texts = box_texts(&m, "header");
@@ -281,12 +349,17 @@ fn test_two_text_boxes_in_the_same_header_are_numbered_and_filled_separately() {
 
     let (left, right) = (texts[0].0, texts[1].0);
     m.checkpoint(None);
-    m.replace_paragraph_range(left, 0, texts[0].1.chars().count(), "Izquierda").unwrap();
-    m.replace_paragraph_range(right, 0, texts[1].1.chars().count(), "Derecha").unwrap();
+    m.replace_paragraph_range(left, 0, texts[0].1.chars().count(), "Izquierda")
+        .unwrap();
+    m.replace_paragraph_range(right, 0, texts[1].1.chars().count(), "Derecha")
+        .unwrap();
 
     let after = box_texts(&m, "header");
     assert_eq!(after[0].1, "Izquierda", "left box only");
-    assert_eq!(after[1].1, "Derecha", "right box only, not mixed with the left one");
+    assert_eq!(
+        after[1].1, "Derecha",
+        "right box only, not mixed with the left one"
+    );
 }
 
 // ---------- 4. Header and footer together: slots resolved correctly ----------
@@ -311,8 +384,10 @@ fn test_header_and_footer_text_boxes_resolve_to_their_own_part() {
     assert_eq!(header_slot, 1);
 
     m.checkpoint(None);
-    m.replace_paragraph_range(header_box.0, 0, header_box.1.chars().count(), "Encabezado").unwrap();
-    m.replace_paragraph_range(footer_box.0, 0, footer_box.1.chars().count(), "Pie").unwrap();
+    m.replace_paragraph_range(header_box.0, 0, header_box.1.chars().count(), "Encabezado")
+        .unwrap();
+    m.replace_paragraph_range(footer_box.0, 0, footer_box.1.chars().count(), "Pie")
+        .unwrap();
 
     assert!(part_text(&m, "word/header1.xml").contains("Encabezado"));
     assert!(!part_text(&m, "word/header1.xml").contains("{{footer_box}}"));
@@ -333,9 +408,20 @@ fn test_header_text_box_cannot_mix_with_the_body_or_a_table() {
     let mut m = docx(&[("header1.xml", "rIdH", "default", "header", &header)]);
     let index = box_texts(&m, "header")[0].0;
 
-    assert!(m.replace_range(0, 0, index, 0, "x").is_err(), "body -> header text box selection refused");
-    let table = rust_web_docx::docx_parser::NewTable { rows: vec![vec!["a".into()]], header: false, widths: None, align: None };
-    assert!(m.insert_table(index, 0, &table).is_err(), "cannot insert a table inside a header's text box");
+    assert!(
+        m.replace_range(0, 0, index, 0, "x").is_err(),
+        "body -> header text box selection refused"
+    );
+    let table = rust_web_docx::docx_parser::NewTable {
+        rows: vec![vec!["a".into()]],
+        header: false,
+        widths: None,
+        align: None,
+    };
+    assert!(
+        m.insert_table(index, 0, &table).is_err(),
+        "cannot insert a table inside a header's text box"
+    );
     assert_eq!(box_texts(&m, "header")[0].1, "{{box}}", "nothing changed");
 }
 
@@ -366,21 +452,27 @@ fn test_anchored_text_box_in_a_header_gets_a_real_index_in_the_layout() {
 
     let elements: Vec<DocumentElement> = m.extract_elements().unwrap();
     let inputs = m.layout_inputs().unwrap();
-    let layout = LayoutEngine::new().with_images(inputs.body_images.clone()).compute_layout(
-        &elements,
-        "FFFFFF",
-        &inputs.page_setup,
-        &inputs.header_footer,
-        None,
-        None,
-        0.0,
-    );
+    let layout = LayoutEngine::new()
+        .with_images(inputs.body_images.clone())
+        .compute_layout(
+            &elements,
+            "FFFFFF",
+            &inputs.page_setup,
+            &inputs.header_footer,
+            None,
+            None,
+            0.0,
+        );
 
     let shapes: Vec<_> = layout.pages[0]
         .items
         .iter()
         .filter_map(|it| match it {
-            RenderCommand::Shape { paragraph_index, image_index, .. } => Some((*paragraph_index, *image_index)),
+            RenderCommand::Shape {
+                paragraph_index,
+                image_index,
+                ..
+            } => Some((*paragraph_index, *image_index)),
             _ => None,
         })
         .collect();
@@ -401,22 +493,44 @@ fn test_update_image_on_a_header_text_box_moves_it_in_the_header_part() {
 
     let (paragraph, image) = header_drawing(&m);
     m.checkpoint(None);
-    let update = ImageUpdate { h_relative: Some("page".into()), h_offset: Some(500.0), ..Default::default() };
+    let update = ImageUpdate {
+        h_relative: Some("page".into()),
+        h_offset: Some(500.0),
+        ..Default::default()
+    };
     let updated = m.update_image(paragraph, image, &update).unwrap();
     assert!(updated.anchored);
-    assert_eq!((updated.h_relative.as_str(), updated.h_offset), ("page", 500.0));
+    assert_eq!(
+        (updated.h_relative.as_str(), updated.h_offset),
+        ("page", 500.0)
+    );
 
     let header_xml = part_text(&m, "word/header1.xml");
-    assert!(header_xml.contains(r#"relativeFrom="page""#), "the new position landed in header1.xml: {}", header_xml);
-    assert!(header_xml.contains("<wp:posOffset>4762500</wp:posOffset>"), "500px in EMU: {}", header_xml);
-    assert_eq!(part_text(&m, "word/document.xml"), document_before, "document.xml must stay untouched");
+    assert!(
+        header_xml.contains(r#"relativeFrom="page""#),
+        "the new position landed in header1.xml: {}",
+        header_xml
+    );
+    assert!(
+        header_xml.contains("<wp:posOffset>4762500</wp:posOffset>"),
+        "500px in EMU: {}",
+        header_xml
+    );
+    assert_eq!(
+        part_text(&m, "word/document.xml"),
+        document_before,
+        "document.xml must stay untouched"
+    );
 
     // The document reopens without error and the new position survives the round trip
     let reopened = DocxModifier::from_bytes(&m.to_bytes().unwrap()).unwrap();
     assert!(part_text(&reopened, "word/header1.xml").contains(r#"relativeFrom="page""#));
 
     assert!(m.undo().is_some(), "the move is one undo step");
-    assert!(!part_text(&m, "word/header1.xml").contains(r#"relativeFrom="page""#), "undo restores the header");
+    assert!(
+        !part_text(&m, "word/header1.xml").contains(r#"relativeFrom="page""#),
+        "undo restores the header"
+    );
 }
 
 // ---------- 7. No regression: moving a BODY picture still writes to document.xml ----------
@@ -425,13 +539,26 @@ fn test_update_image_on_a_header_text_box_moves_it_in_the_header_part() {
 fn test_update_image_on_a_body_picture_still_writes_to_document_xml() {
     let mut m = docx(&[]);
     m.checkpoint(None);
-    let (p, _) = m.insert_image(0, 0, &png(40, 20), &NewImage::default()).unwrap();
+    let (p, _) = m
+        .insert_image(0, 0, &png(40, 20), &NewImage::default())
+        .unwrap();
 
     m.checkpoint(None);
     let updated = m
-        .update_image(p, 0, &ImageUpdate { wrap: Some("square".into()), h_offset: Some(50.0), ..Default::default() })
+        .update_image(
+            p,
+            0,
+            &ImageUpdate {
+                wrap: Some("square".into()),
+                h_offset: Some(50.0),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert!(updated.anchored);
     assert_eq!(updated.h_offset, 50.0);
-    assert!(part_text(&m, "word/document.xml").contains("<wp:posOffset>476250</wp:posOffset>"), "50px in EMU, in document.xml");
+    assert!(
+        part_text(&m, "word/document.xml").contains("<wp:posOffset>476250</wp:posOffset>"),
+        "50px in EMU, in document.xml"
+    );
 }

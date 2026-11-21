@@ -7,28 +7,35 @@ use std::collections::{BTreeMap, HashMap};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use ooxml_core::rels::{parse_relationships, rels_part_for, resolve_target, type_is, with_relationship, without_relationship, Relationship};
-use ooxml_core::xml::{element_ranges, escape_xml, get_attr_value, prefix_of, root_element, set_attr, tag_is};
+use ooxml_core::rels::{
+    parse_relationships, rels_part_for, resolve_target, type_is, with_relationship,
+    without_relationship, Relationship,
+};
+use ooxml_core::xml::{
+    element_ranges, escape_xml, get_attr_value, prefix_of, root_element, set_attr, tag_is,
+};
 use ooxml_core::{content_types, Package, Undone, ZipLimits};
 
 use crate::cell_ref::{CellRange, CellRef};
 use crate::dates::{has_time, iso_to_unix_ms, serial_to_unix_ms, unix_ms_to_serial};
 use crate::formula::{self, ParseError};
 use crate::moves::without_shared_sources;
+use crate::numfmt::Locale;
 use crate::recalc::{self, defined_names, sheet_formulas};
 use crate::shared_strings::{SharedStrings, EMPTY_SST};
 use crate::sheet::{CellNode, SheetXml};
 use crate::styles::{date_style, Styles};
 use crate::text::fill_xml;
-use crate::numfmt::Locale;
 use crate::theme::Theme;
 use crate::view::{self, CellView, SheetLayout, StyleSheetView};
 
 /// Main part of the workbook when the package does not say otherwise
 pub const WORKBOOK_PART: &str = "xl/workbook.xml";
 
-pub(crate) const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-pub(crate) const SHARED_STRINGS_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+pub(crate) const REL_NS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+pub(crate) const SHARED_STRINGS_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 const STYLES_TYPE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 
 /// Most cells one read or write may cover, so a typo like `A1:XFD1048576` fails instead of
@@ -108,14 +115,25 @@ impl Workbook {
         let workbook_part = package
             .get_string("_rels/.rels")
             .ok()
-            .and_then(|xml| parse_relationships(&xml).into_iter().find(|r| type_is(&r.rel_type, "officeDocument") && !r.external))
+            .and_then(|xml| {
+                parse_relationships(&xml)
+                    .into_iter()
+                    .find(|r| type_is(&r.rel_type, "officeDocument") && !r.external)
+            })
             .map(|r| resolve_target("", &r.target))
             .filter(|part| package.contains(part))
             .unwrap_or_else(|| WORKBOOK_PART.to_string());
         if !package.contains(&workbook_part) {
-            return Err(format!("El archivo no es un libro de Excel: falta '{}'.", WORKBOOK_PART));
+            return Err(format!(
+                "El archivo no es un libro de Excel: falta '{}'.",
+                WORKBOOK_PART
+            ));
         }
-        Ok(Workbook { package, workbook_part, recalc_prepared: false })
+        Ok(Workbook {
+            package,
+            workbook_part,
+            recalc_prepared: false,
+        })
     }
 
     pub(crate) fn workbook_xml(&self) -> Result<String, String> {
@@ -141,7 +159,11 @@ impl Workbook {
     /// The sheets in tab order, each with the part its relationship points to
     pub fn sheets(&self) -> Result<Vec<SheetInfo>, String> {
         let xml = self.workbook_xml()?;
-        let rels: HashMap<String, Relationship> = self.workbook_rels().into_iter().map(|r| (r.id.clone(), r)).collect();
+        let rels: HashMap<String, Relationship> = self
+            .workbook_rels()
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
         let mut reader = Reader::from_str(&xml);
         let mut sheets = Vec::new();
         loop {
@@ -162,7 +184,12 @@ impl Workbook {
                         ),
                         None => (String::new(), SheetKind::Other),
                     };
-                    sheets.push(SheetInfo { name, part, kind, state: get_attr_value(&e, "state") });
+                    sheets.push(SheetInfo {
+                        name,
+                        part,
+                        kind,
+                        state: get_attr_value(&e, "state"),
+                    });
                 }
                 Ok(Event::Eof) => break,
                 Err(e) => return Err(format!("'{}' no es XML válido: {}", self.workbook_part, e)),
@@ -183,33 +210,52 @@ impl Workbook {
         sheets
             .iter()
             .position(|s| s.name == name)
-            .or_else(|| sheets.iter().position(|s| s.name.to_lowercase() == name.to_lowercase()))
+            .or_else(|| {
+                sheets
+                    .iter()
+                    .position(|s| s.name.to_lowercase() == name.to_lowercase())
+            })
             .ok_or_else(|| format!("El libro no tiene ninguna hoja llamada '{}'.", name))
     }
 
     /// The worksheet at `index` (its part name), refusing chart sheets and missing parts
     pub(crate) fn worksheet_part(&self, index: usize) -> Result<String, String> {
         let sheets = self.sheets()?;
-        let sheet = sheets
-            .get(index)
-            .ok_or_else(|| format!("El libro tiene {} hoja(s); no existe la hoja {}.", sheets.len(), index))?;
+        let sheet = sheets.get(index).ok_or_else(|| {
+            format!(
+                "El libro tiene {} hoja(s); no existe la hoja {}.",
+                sheets.len(),
+                index
+            )
+        })?;
         if sheet.kind != SheetKind::Worksheet {
-            return Err(format!("La hoja '{}' no tiene celdas (es una hoja de gráfico u otro tipo).", sheet.name));
+            return Err(format!(
+                "La hoja '{}' no tiene celdas (es una hoja de gráfico u otro tipo).",
+                sheet.name
+            ));
         }
         if !self.package.contains(&sheet.part) {
-            return Err(format!("Falta la parte '{}' de la hoja '{}'.", sheet.part, sheet.name));
+            return Err(format!(
+                "Falta la parte '{}' de la hoja '{}'.",
+                sheet.part, sheet.name
+            ));
         }
         Ok(sheet.part.clone())
     }
 
     /// Whether dates count from 1904 (`<workbookPr date1904="1"/>`) instead of 1900
     pub fn date1904(&self) -> bool {
-        let Ok(xml) = self.workbook_xml() else { return false };
+        let Ok(xml) = self.workbook_xml() else {
+            return false;
+        };
         let mut reader = Reader::from_str(&xml);
         loop {
             match reader.read_event() {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) if tag_is(e.name().as_ref(), "workbookPr") => {
-                    return get_attr_value(&e, "date1904").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if tag_is(e.name().as_ref(), "workbookPr") =>
+                {
+                    return get_attr_value(&e, "date1904")
+                        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
                 }
                 Ok(Event::Start(e)) if tag_is(e.name().as_ref(), "sheets") => return false,
                 Ok(Event::Eof) | Err(_) => return false,
@@ -257,18 +303,38 @@ impl Workbook {
     /// them in the language `locale`
     pub fn cell_views(&self, sheet: usize, locale: &Locale) -> Result<Vec<CellView>, String> {
         let xml = self.package.get_string(&self.worksheet_part(sheet)?)?;
-        view::cell_views(&xml, &self.shared_strings()?, &self.style_view()?, locale, self.date1904())
+        view::cell_views(
+            &xml,
+            &self.shared_strings()?,
+            &self.style_view()?,
+            locale,
+            self.date1904(),
+        )
     }
 
     /// Numbers as the cell format `style` shows them in the language `locale`
-    pub fn format_numbers(&self, style: u32, values: &[f64], locale: &Locale) -> Result<Vec<String>, String> {
-        Ok(view::format_numbers(values, style, &self.style_view()?, locale, self.date1904()))
+    pub fn format_numbers(
+        &self,
+        style: u32,
+        values: &[f64],
+        locale: &Locale,
+    ) -> Result<Vec<String>, String> {
+        Ok(view::format_numbers(
+            values,
+            style,
+            &self.style_view()?,
+            locale,
+            self.date1904(),
+        ))
     }
 
     /// The cell at `reference` of the sheet at `sheet`
     pub fn cell(&self, sheet: usize, reference: &str) -> Result<CellData, String> {
         let at = CellRef::parse(reference)?;
-        let range = CellRange { first: at, last: at };
+        let range = CellRange {
+            first: at,
+            last: at,
+        };
         Ok(self.range(sheet, &range.to_string())?.remove(0).remove(0))
     }
 
@@ -276,16 +342,31 @@ impl Workbook {
     pub fn range(&self, sheet: usize, range: &str) -> Result<Vec<Vec<CellData>>, String> {
         let range = CellRange::parse(range)?;
         if range.cell_count() > MAX_CELLS_PER_CALL {
-            return Err(format!("El rango {} tiene demasiadas celdas para leerlo de una vez.", range));
+            return Err(format!(
+                "El rango {} tiene demasiadas celdas para leerlo de una vez.",
+                range
+            ));
         }
         let xml = self.package.get_string(&self.worksheet_part(sheet)?)?;
         let parsed = SheetXml::parse(&xml)?;
-        let reader = CellReader { strings: self.shared_strings()?, styles: self.styles()?, date1904: self.date1904() };
+        let reader = CellReader {
+            strings: self.shared_strings()?,
+            styles: self.styles()?,
+            date1904: self.date1904(),
+        };
         // Cells of a shared formula store only a link to its first cell: show their own formula
         let mut shared: HashMap<CellRef, String> = HashMap::new();
-        let in_range = |at: CellRef| at.row >= range.first.row && at.row <= range.last.row && at.col >= range.first.col && at.col <= range.last.col;
+        let in_range = |at: CellRef| {
+            at.row >= range.first.row
+                && at.row <= range.last.row
+                && at.col >= range.first.col
+                && at.col <= range.last.col
+        };
         let has_shared = parsed.rows.iter().flat_map(|r| &r.cells).any(|c| {
-            in_range(c.at) && c.formula.as_ref().is_some_and(|f| f.kind.as_deref() == Some("shared") && f.text.trim().is_empty())
+            in_range(c.at)
+                && c.formula.as_ref().is_some_and(|f| {
+                    f.kind.as_deref() == Some("shared") && f.text.trim().is_empty()
+                })
         });
         if has_shared {
             for (at, expr) in sheet_formulas(&parsed) {
@@ -295,8 +376,16 @@ impl Workbook {
             }
         }
         let mut nodes: HashMap<CellRef, &CellNode> = HashMap::new();
-        for row in parsed.rows.iter().filter(|r| r.number >= range.first.row && r.number <= range.last.row) {
-            for cell in row.cells.iter().filter(|c| c.at.col >= range.first.col && c.at.col <= range.last.col) {
+        for row in parsed
+            .rows
+            .iter()
+            .filter(|r| r.number >= range.first.row && r.number <= range.last.row)
+        {
+            for cell in row
+                .cells
+                .iter()
+                .filter(|c| c.at.col >= range.first.col && c.at.col <= range.last.col)
+            {
                 nodes.insert(cell.at, cell);
             }
         }
@@ -316,7 +405,11 @@ impl Workbook {
                                 }
                                 data
                             }
-                            None => CellData { at, value: CellValue::Empty, formula: None },
+                            None => CellData {
+                                at,
+                                value: CellValue::Empty,
+                                formula: None,
+                            },
                         }
                     })
                     .collect()
@@ -325,7 +418,12 @@ impl Workbook {
     }
 
     /// Writes one value
-    pub fn set_value(&mut self, sheet: usize, reference: &str, value: CellInput) -> Result<(), String> {
+    pub fn set_value(
+        &mut self,
+        sheet: usize,
+        reference: &str,
+        value: CellInput,
+    ) -> Result<(), String> {
         self.set_values(sheet, reference, vec![vec![Some(value)]])
     }
 
@@ -333,7 +431,12 @@ impl Workbook {
     /// it is. Text goes to the shared strings table (reusing an equal entry), dates get a date
     /// format based on the cell's current one, and a value replaces any formula. Nothing is
     /// written when any value is invalid.
-    pub fn set_values(&mut self, sheet: usize, start: &str, rows: Vec<Vec<Option<CellInput>>>) -> Result<(), String> {
+    pub fn set_values(
+        &mut self,
+        sheet: usize,
+        start: &str,
+        rows: Vec<Vec<Option<CellInput>>>,
+    ) -> Result<(), String> {
         let start = CellRef::parse(start)?;
         let total: u64 = rows.iter().map(|r| r.len() as u64).sum();
         if total > MAX_CELLS_PER_CALL {
@@ -358,7 +461,9 @@ impl Workbook {
         }
 
         let part = self.worksheet_part(sheet)?;
-        let xml = without_shared_sources(self.package.get_string(&part)?, |at| inputs.contains_key(&at))?;
+        let xml = without_shared_sources(self.package.get_string(&part)?, |at| {
+            inputs.contains_key(&at)
+        })?;
         let parsed = SheetXml::parse(&xml)?;
         let prefix = parsed.prefix().to_string();
         let date1904 = self.date1904();
@@ -375,7 +480,10 @@ impl Workbook {
             None => SharedStrings::default(),
         };
         let styles_part = self.related_part("styles");
-        let mut styles_xml = match (&styles_part, inputs.values().any(|v| matches!(v, CellInput::Date(_)))) {
+        let mut styles_xml = match (
+            &styles_part,
+            inputs.values().any(|v| matches!(v, CellInput::Date(_))),
+        ) {
             (Some(part), true) => Some(self.package.get_string(part)?),
             (None, true) => Some(crate::blank::STYLES_XML.to_string()),
             _ => None,
@@ -392,7 +500,8 @@ impl Workbook {
                 CellInput::Number(n) => (None, Some(format_number(*n))),
                 CellInput::Bool(b) => (Some("b"), Some(if *b { "1" } else { "0" }.to_string())),
                 CellInput::Date(ms) => {
-                    let serial = unix_ms_to_serial(*ms, date1904).map_err(|e| format!("{} ({}).", e.trim_end_matches('.'), at))?;
+                    let serial = unix_ms_to_serial(*ms, date1904)
+                        .map_err(|e| format!("{} ({}).", e.trim_end_matches('.'), at))?;
                     let base = existing.map(|c| c.style).unwrap_or(0);
                     let stylesheet = styles_xml.as_mut().expect("loaded for dates");
                     let (index, changed) = date_style(stylesheet, base, has_time(*ms))?;
@@ -412,7 +521,9 @@ impl Workbook {
                         Ok(expr) => expr.to_formula(),
                         // Excel may know it: written as is and calculated when the file opens
                         Err(ParseError::Unsupported(_)) => text.to_string(),
-                        Err(ParseError::Invalid(why)) => return Err(format!("La fórmula de {} no es válida: {}", at, why)),
+                        Err(ParseError::Invalid(why)) => {
+                            return Err(format!("La fórmula de {} no es válida: {}", at, why))
+                        }
                     };
                     formulas.insert(*at, stored);
                     (None, None)
@@ -421,9 +532,22 @@ impl Workbook {
             };
             let phonetic = existing.and_then(|c| c.phonetic.as_deref());
             let element = match (formulas.get(at), &content, &style_attr) {
-                (Some(f), _, _) => Some(formula_element(&prefix, *at, style_attr.as_deref(), phonetic, f)),
+                (Some(f), _, _) => Some(formula_element(
+                    &prefix,
+                    *at,
+                    style_attr.as_deref(),
+                    phonetic,
+                    f,
+                )),
                 (None, None, None) => None,
-                _ => Some(cell_element(&prefix, *at, style_attr.as_deref(), phonetic, kind, content.as_deref())),
+                _ => Some(cell_element(
+                    &prefix,
+                    *at,
+                    style_attr.as_deref(),
+                    phonetic,
+                    kind,
+                    content.as_deref(),
+                )),
             };
             if existing.is_none() && element.is_none() {
                 continue;
@@ -443,7 +567,12 @@ impl Workbook {
             match strings_part {
                 Some(part) => self.package.put(part, written.into_bytes()),
                 None => {
-                    self.add_workbook_part("sharedStrings", "sharedStrings.xml", SHARED_STRINGS_TYPE, written)?;
+                    self.add_workbook_part(
+                        "sharedStrings",
+                        "sharedStrings.xml",
+                        SHARED_STRINGS_TYPE,
+                        written,
+                    )?;
                 }
             }
         }
@@ -471,8 +600,14 @@ impl Workbook {
                 total += count;
             }
         }
-        for sheet in self.sheets()?.into_iter().filter(|s| s.kind == SheetKind::Worksheet && self.package.contains(&s.part)) {
-            if let Some((xml, count)) = fill_xml(&self.package.get_string(&sheet.part)?, "is", values)? {
+        for sheet in self
+            .sheets()?
+            .into_iter()
+            .filter(|s| s.kind == SheetKind::Worksheet && self.package.contains(&s.part))
+        {
+            if let Some((xml, count)) =
+                fill_xml(&self.package.get_string(&sheet.part)?, "is", values)?
+            {
                 changes.push((sheet.part, xml));
                 total += count;
             }
@@ -494,12 +629,18 @@ impl Workbook {
         let sheets = self.sheets()?;
         let mut xmls = Vec::with_capacity(sheets.len());
         for sheet in &sheets {
-            xmls.push(match sheet.kind == SheetKind::Worksheet && self.package.contains(&sheet.part) {
-                true => Some(self.package.get_string(&sheet.part)?),
-                false => None,
-            });
+            xmls.push(
+                match sheet.kind == SheetKind::Worksheet && self.package.contains(&sheet.part) {
+                    true => Some(self.package.get_string(&sheet.part)?),
+                    false => None,
+                },
+            );
         }
-        if !xmls.iter().flatten().any(|xml| xml.contains("<f") || xml.contains(":f")) {
+        if !xmls
+            .iter()
+            .flatten()
+            .any(|xml| xml.contains("<f") || xml.contains(":f"))
+        {
             return Ok(0);
         }
         let names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
@@ -527,7 +668,13 @@ impl Workbook {
 
     /// Adds a part related to the workbook: the part, its relationship and its content type.
     /// Returns the id of the new relationship.
-    pub(crate) fn add_workbook_part(&mut self, rel_name: &str, target: &str, content_type: &str, xml: String) -> Result<String, String> {
+    pub(crate) fn add_workbook_part(
+        &mut self,
+        rel_name: &str,
+        target: &str,
+        content_type: &str,
+        xml: String,
+    ) -> Result<String, String> {
         let part = resolve_target(&self.workbook_part, target);
         let rels_part = rels_part_for(&self.workbook_part);
         let rels = self.package.get_string(&rels_part).unwrap_or_else(|_| {
@@ -542,7 +689,8 @@ impl Workbook {
         self.package.keep_in_order(&part);
         self.package.put(rels_part.clone(), rels.into_bytes());
         self.package.keep_in_order(&rels_part);
-        self.package.put(content_types::PART.to_string(), types.into_bytes());
+        self.package
+            .put(content_types::PART.to_string(), types.into_bytes());
         Ok(id)
     }
 
@@ -554,7 +702,11 @@ impl Workbook {
             return Ok(());
         }
         let rels_part = rels_part_for(&self.workbook_part);
-        let chains: Vec<Relationship> = self.workbook_rels().into_iter().filter(|r| type_is(&r.rel_type, "calcChain")).collect();
+        let chains: Vec<Relationship> = self
+            .workbook_rels()
+            .into_iter()
+            .filter(|r| type_is(&r.rel_type, "calcChain"))
+            .collect();
         if !chains.is_empty() {
             let mut rels = self.package.get_string(&rels_part)?;
             let mut types = self.package.get_string(content_types::PART)?;
@@ -565,13 +717,15 @@ impl Workbook {
                 types = content_types::without_override(&types, &part)?;
             }
             self.package.put(rels_part, rels.into_bytes());
-            self.package.put(content_types::PART.to_string(), types.into_bytes());
+            self.package
+                .put(content_types::PART.to_string(), types.into_bytes());
         }
 
         let xml = self.workbook_xml()?;
         let updated = with_full_calc_on_load(&xml)?;
         if updated != xml {
-            self.package.put(self.workbook_part.clone(), updated.into_bytes());
+            self.package
+                .put(self.workbook_part.clone(), updated.into_bytes());
         }
         self.recalc_prepared = true;
         Ok(())
@@ -648,18 +802,28 @@ impl CellReader {
                 .map(|s| CellValue::Text(s.to_string()))
                 .unwrap_or(CellValue::Empty),
             Some("str") => CellValue::Text(raw.to_string()),
-            Some("inlineStr") => CellValue::Text(node.inline.clone().unwrap_or_else(|| raw.to_string())),
+            Some("inlineStr") => {
+                CellValue::Text(node.inline.clone().unwrap_or_else(|| raw.to_string()))
+            }
             Some("b") => CellValue::Bool(matches!(raw.trim(), "1" | "true")),
             Some("e") => CellValue::Error(raw.to_string()),
-            Some("d") => iso_to_unix_ms(raw).map(CellValue::Date).unwrap_or(CellValue::Text(raw.to_string())),
+            Some("d") => iso_to_unix_ms(raw)
+                .map(CellValue::Date)
+                .unwrap_or(CellValue::Text(raw.to_string())),
             _ if raw.trim().is_empty() => CellValue::Empty,
             _ => match raw.trim().parse::<f64>() {
-                Ok(n) if self.styles.is_date_style(node.style) => CellValue::Date(serial_to_unix_ms(n, self.date1904)),
+                Ok(n) if self.styles.is_date_style(node.style) => {
+                    CellValue::Date(serial_to_unix_ms(n, self.date1904))
+                }
                 Ok(n) => CellValue::Number(n),
                 Err(_) => CellValue::Text(raw.to_string()),
             },
         };
-        CellData { at: node.at, value, formula: node.formula.as_ref().map(|f| f.text.clone()) }
+        CellData {
+            at: node.at,
+            value,
+            formula: node.formula.as_ref().map(|f| f.text.clone()),
+        }
     }
 }
 
@@ -677,14 +841,22 @@ pub(crate) fn format_number(n: f64) -> String {
 /// A formula as people read it: without the `_xlfn.` prefixes Excel stores on newer functions
 fn display_formula(stored: &str) -> String {
     if stored.contains("_xlfn.") || stored.contains("_xlws.") {
-        formula::parse(stored).map(|e| e.to_display()).unwrap_or_else(|_| stored.to_string())
+        formula::parse(stored)
+            .map(|e| e.to_display())
+            .unwrap_or_else(|_| stored.to_string())
     } else {
         stored.to_string()
     }
 }
 
 /// A `<c>` element with a formula and no cached value (the recalculation fills it in)
-pub(crate) fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, formula: &str) -> String {
+pub(crate) fn formula_element(
+    prefix: &str,
+    at: CellRef,
+    style: Option<&str>,
+    phonetic: Option<&str>,
+    formula: &str,
+) -> String {
     let mut out = format!(r#"<{}c r="{}""#, prefix, at);
     if let Some(s) = style {
         out.push_str(&format!(r#" s="{}""#, escape_xml(s)));
@@ -692,13 +864,24 @@ pub(crate) fn formula_element(prefix: &str, at: CellRef, style: Option<&str>, ph
     if let Some(ph) = phonetic {
         out.push_str(&format!(r#" ph="{}""#, escape_xml(ph)));
     }
-    out.push_str(&format!("><{p}f>{}</{p}f></{p}c>", escape_xml(formula), p = prefix));
+    out.push_str(&format!(
+        "><{p}f>{}</{p}f></{p}c>",
+        escape_xml(formula),
+        p = prefix
+    ));
     out
 }
 
 /// A `<c>` element with only the attributes that survive a new value: reference, format and
 /// phonetic flag
-pub(crate) fn cell_element(prefix: &str, at: CellRef, style: Option<&str>, phonetic: Option<&str>, kind: Option<&str>, value: Option<&str>) -> String {
+pub(crate) fn cell_element(
+    prefix: &str,
+    at: CellRef,
+    style: Option<&str>,
+    phonetic: Option<&str>,
+    kind: Option<&str>,
+    value: Option<&str>,
+) -> String {
     let mut out = format!(r#"<{}c r="{}""#, prefix, at);
     if let Some(s) = style {
         out.push_str(&format!(r#" s="{}""#, escape_xml(s)));
@@ -710,7 +893,11 @@ pub(crate) fn cell_element(prefix: &str, at: CellRef, style: Option<&str>, phone
         out.push_str(&format!(r#" t="{}""#, t));
     }
     match value {
-        Some(v) => out.push_str(&format!("><{p}v>{}</{p}v></{p}c>", escape_xml(v), p = prefix)),
+        Some(v) => out.push_str(&format!(
+            "><{p}v>{}</{p}v></{p}c>",
+            escape_xml(v),
+            p = prefix
+        )),
         None => out.push_str("/>"),
     }
     out
@@ -735,8 +922,13 @@ pub(crate) fn first_child_named(xml: &str, names: &[&str]) -> Result<Option<usiz
     let mut depth = 0usize;
     loop {
         let before = reader.buffer_position() as usize;
-        match reader.read_event().map_err(|e| format!("El libro no es XML válido: {}", e))? {
-            Event::Start(e) | Event::Empty(e) if depth == 1 && names.iter().any(|n| tag_is(e.name().as_ref(), n)) => {
+        match reader
+            .read_event()
+            .map_err(|e| format!("El libro no es XML válido: {}", e))?
+        {
+            Event::Start(e) | Event::Empty(e)
+                if depth == 1 && names.iter().any(|n| tag_is(e.name().as_ref(), n)) =>
+            {
                 return Ok(Some(before));
             }
             Event::Start(_) => depth += 1,
@@ -751,16 +943,28 @@ pub(crate) fn first_child_named(xml: &str, names: &[&str]) -> Result<Option<usiz
 fn with_full_calc_on_load(xml: &str) -> Result<String, String> {
     if let Some(range) = element_ranges(xml, "calcPr", |_| true)?.into_iter().next() {
         let updated = set_attr(&xml[range.clone()], "fullCalcOnLoad", "1");
-        return Ok(format!("{}{}{}", &xml[..range.start], updated, &xml[range.end..]));
+        return Ok(format!(
+            "{}{}{}",
+            &xml[..range.start],
+            updated,
+            &xml[range.end..]
+        ));
     }
     let (_, root) = root_element(xml).ok_or("El libro no tiene elemento raíz.")?;
     let prefix = prefix_of(&root);
     let element = format!(r#"<{}calcPr fullCalcOnLoad="1"/>"#, prefix);
     let insert_at = match first_child_named(xml, AFTER_CALC_PR)? {
         Some(at) => at,
-        None => xml.rfind(&format!("</{}>", root)).ok_or("El libro no tiene cierre de <workbook>.")?,
+        None => xml
+            .rfind(&format!("</{}>", root))
+            .ok_or("El libro no tiene cierre de <workbook>.")?,
     };
-    Ok(format!("{}{}{}", &xml[..insert_at], element, &xml[insert_at..]))
+    Ok(format!(
+        "{}{}{}",
+        &xml[..insert_at],
+        element,
+        &xml[insert_at..]
+    ))
 }
 
 #[cfg(test)]
@@ -839,7 +1043,10 @@ mod tests {
     fn finds_sheets_through_their_relationships() {
         let wb = open(&template());
         let sheets = wb.sheets().unwrap();
-        assert_eq!(sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Resumen", "Datos", "Gráfico"]);
+        assert_eq!(
+            sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["Resumen", "Datos", "Gráfico"]
+        );
         assert_eq!(sheets[0].part, "xl/hojas/resumen.xml");
         assert_eq!(sheets[1].part, "xl/hojas/datos.xml");
         assert_eq!(sheets[2].kind, SheetKind::Chartsheet);
@@ -857,17 +1064,29 @@ mod tests {
         assert_eq!(value(&wb, 1, "C1"), CellValue::Text("Nota {{NOTA}}".into()));
         assert_eq!(value(&wb, 1, "A2"), CellValue::Number(1234.5));
         // 43844 in the 1904 system is 2024-01-15
-        assert_eq!(value(&wb, 1, "B2"), CellValue::Date(JAN_15_2024_NOON - 43_200_000.0));
+        assert_eq!(
+            value(&wb, 1, "B2"),
+            CellValue::Date(JAN_15_2024_NOON - 43_200_000.0)
+        );
         assert_eq!(value(&wb, 1, "C2"), CellValue::Bool(true));
         assert_eq!(value(&wb, 1, "D2"), CellValue::Error("#DIV/0!".into()));
         assert_eq!(value(&wb, 1, "D3"), CellValue::Date(JAN_15_2024_NOON));
-        assert_eq!(value(&wb, 0, "A2"), CellValue::Text("Total {{MONEDA}}".into()));
+        assert_eq!(
+            value(&wb, 0, "A2"),
+            CellValue::Text("Total {{MONEDA}}".into())
+        );
         assert_eq!(value(&wb, 1, "Z99"), CellValue::Empty);
 
         let a3 = wb.cell(1, "A3").unwrap();
-        assert_eq!((a3.value, a3.formula.as_deref()), (CellValue::Number(1234.5), Some("SUM(A2:A2)")));
+        assert_eq!(
+            (a3.value, a3.formula.as_deref()),
+            (CellValue::Number(1234.5), Some("SUM(A2:A2)"))
+        );
         let b3 = wb.cell(1, "B3").unwrap();
-        assert_eq!((b3.value, b3.formula.as_deref()), (CellValue::Text("Cliente!".into()), Some("A1&\"!\"")));
+        assert_eq!(
+            (b3.value, b3.formula.as_deref()),
+            (CellValue::Text("Cliente!".into()), Some("A1&\"!\""))
+        );
         assert_eq!(wb.cell(1, "C4").unwrap().formula.as_deref(), Some("A4*2"));
 
         let range = wb.range(1, "A1:B2").unwrap();
@@ -879,12 +1098,22 @@ mod tests {
     #[test]
     fn dates_in_the_1900_system() {
         let mut wb = open(&blank_xlsx().unwrap());
-        wb.set_value(0, "A1", CellInput::Date(JAN_15_2024_NOON)).unwrap();
-        wb.set_value(0, "A2", CellInput::Date(JAN_15_2024_NOON - 43_200_000.0)).unwrap();
+        wb.set_value(0, "A1", CellInput::Date(JAN_15_2024_NOON))
+            .unwrap();
+        wb.set_value(0, "A2", CellInput::Date(JAN_15_2024_NOON - 43_200_000.0))
+            .unwrap();
         assert_eq!(value(&wb, 0, "A1"), CellValue::Date(JAN_15_2024_NOON));
         let sheet = part(&wb, "xl/worksheets/sheet1.xml");
-        assert!(sheet.contains(r#"<c r="A1" s="1"><v>45306.5</v></c>"#), "{}", sheet);
-        assert!(sheet.contains(r#"<c r="A2" s="2"><v>45306</v></c>"#), "{}", sheet);
+        assert!(
+            sheet.contains(r#"<c r="A1" s="1"><v>45306.5</v></c>"#),
+            "{}",
+            sheet
+        );
+        assert!(
+            sheet.contains(r#"<c r="A2" s="2"><v>45306</v></c>"#),
+            "{}",
+            sheet
+        );
         let styles = part(&wb, "xl/styles.xml");
         assert!(styles.contains(r#"<cellXfs count="3">"#), "{}", styles);
         assert!(styles.contains(r#"numFmtId="22""#) && styles.contains(r#"numFmtId="14""#));
@@ -897,7 +1126,12 @@ mod tests {
             1,
             "B2",
             vec![
-                vec![Some(CellInput::Text("Cliente".into())), Some(CellInput::Number(7.0)), None, Some(CellInput::Bool(false))],
+                vec![
+                    Some(CellInput::Text("Cliente".into())),
+                    Some(CellInput::Number(7.0)),
+                    None,
+                    Some(CellInput::Bool(false)),
+                ],
                 vec![Some(CellInput::Number(-0.25)), None, Some(CellInput::Clear)],
                 vec![],
                 vec![None, None, None, Some(CellInput::Text("Nuevo".into()))],
@@ -909,7 +1143,14 @@ mod tests {
         assert_eq!(value(&wb, 1, "C2"), CellValue::Number(7.0));
         assert_eq!(value(&wb, 1, "D2"), CellValue::Error("#DIV/0!".into()));
         assert_eq!(value(&wb, 1, "E2"), CellValue::Bool(false));
-        assert_eq!(wb.cell(1, "B3").unwrap(), CellData { at: CellRef::parse("B3").unwrap(), value: CellValue::Number(-0.25), formula: None });
+        assert_eq!(
+            wb.cell(1, "B3").unwrap(),
+            CellData {
+                at: CellRef::parse("B3").unwrap(),
+                value: CellValue::Number(-0.25),
+                formula: None
+            }
+        );
         assert_eq!(value(&wb, 1, "D3"), CellValue::Empty);
         assert_eq!(value(&wb, 1, "E5"), CellValue::Text("Nuevo".into()));
 
@@ -922,7 +1163,11 @@ mod tests {
 
         // "Cliente" reused, "Nuevo" appended
         let shared = part(&wb, "xl/sharedStrings.xml");
-        assert!(shared.contains(r#"count="6" uniqueCount="5""#), "{}", shared);
+        assert!(
+            shared.contains(r#"count="6" uniqueCount="5""#),
+            "{}",
+            shared
+        );
         assert!(shared.ends_with("<si><t>Nuevo</t></si></sst>"));
     }
 
@@ -930,15 +1175,34 @@ mod tests {
     fn writes_dates_with_a_date_format_based_on_the_cell() {
         let mut wb = open(&template());
         // A2 has a bold number format; B2 already shows dates
-        wb.set_values(1, "A2", vec![vec![Some(CellInput::Date(JAN_15_2024_NOON)), Some(CellInput::Date(JAN_15_2024_NOON - 43_200_000.0))]]).unwrap();
+        wb.set_values(
+            1,
+            "A2",
+            vec![vec![
+                Some(CellInput::Date(JAN_15_2024_NOON)),
+                Some(CellInput::Date(JAN_15_2024_NOON - 43_200_000.0)),
+            ]],
+        )
+        .unwrap();
         assert_eq!(value(&wb, 1, "A2"), CellValue::Date(JAN_15_2024_NOON));
-        assert_eq!(value(&wb, 1, "B2"), CellValue::Date(JAN_15_2024_NOON - 43_200_000.0));
+        assert_eq!(
+            value(&wb, 1, "B2"),
+            CellValue::Date(JAN_15_2024_NOON - 43_200_000.0)
+        );
         let sheet = part(&wb, "xl/hojas/datos.xml");
-        assert!(sheet.contains(r#"<c r="A2" s="3"><v>43844.5</v></c><c r="B2" s="1"><v>43844</v></c>"#), "{}", sheet);
+        assert!(
+            sheet.contains(r#"<c r="A2" s="3"><v>43844.5</v></c><c r="B2" s="1"><v>43844</v></c>"#),
+            "{}",
+            sheet
+        );
         let styles = part(&wb, "xl/styles.xml");
         assert!(styles.contains(r#"<xf numFmtId="22" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyNumberFormat="1"/></cellXfs>"#), "{}", styles);
 
-        assert!(wb.set_value(1, "A9", CellInput::Date(-3_000_000_000_000.0)).is_err(), "before 1904");
+        assert!(
+            wb.set_value(1, "A9", CellInput::Date(-3_000_000_000_000.0))
+                .is_err(),
+            "before 1904"
+        );
     }
 
     #[test]
@@ -964,13 +1228,21 @@ mod tests {
 
         // Another cell of the group leaves the first one shared
         wb.set_value(1, "C4", CellInput::Number(1.0)).unwrap();
-        assert!(part(&wb, "xl/hojas/datos.xml").contains(r#"<f t="shared" ref="C3:C4" si="0">A3*2</f>"#));
+        assert!(part(&wb, "xl/hojas/datos.xml")
+            .contains(r#"<f t="shared" ref="C3:C4" si="0">A3*2</f>"#));
     }
 
     #[test]
     fn an_invalid_value_leaves_the_workbook_unchanged() {
         let mut wb = open(&template());
-        let error = wb.set_values(1, "C3", vec![vec![Some(CellInput::Number(1.0)), Some(CellInput::Formula("SUM(".into()))]]);
+        let error = wb.set_values(
+            1,
+            "C3",
+            vec![vec![
+                Some(CellInput::Number(1.0)),
+                Some(CellInput::Formula("SUM(".into())),
+            ]],
+        );
         assert!(error.is_err());
         assert_eq!(part(&wb, "xl/hojas/datos.xml"), DATOS);
         assert_eq!(part(&wb, "xl/sharedStrings.xml"), SHARED);
@@ -990,13 +1262,28 @@ mod tests {
         let types = part(&out, "[Content_Types].xml");
         assert!(!types.contains("calcChain") && types.contains("/xl/charts/chart1.xml"));
         let workbook = part(&out, "xl/libro.xml");
-        assert_eq!(workbook, WORKBOOK.replace(r#"<calcPr calcId="191029"/>"#, r#"<calcPr calcId="191029" fullCalcOnLoad="1"/>"#));
+        assert_eq!(
+            workbook,
+            WORKBOOK.replace(
+                r#"<calcPr calcId="191029"/>"#,
+                r#"<calcPr calcId="191029" fullCalcOnLoad="1"/>"#
+            )
+        );
 
         // Without <calcPr>, it is added before the elements that follow it, not in nested ones
         let no_calc = WORKBOOK.replace(r#"<calcPr calcId="191029"/>"#, "");
-        assert_eq!(with_full_calc_on_load(&no_calc).unwrap(), WORKBOOK.replace(r#"<calcPr calcId="191029"/>"#, r#"<calcPr fullCalcOnLoad="1"/>"#));
+        assert_eq!(
+            with_full_calc_on_load(&no_calc).unwrap(),
+            WORKBOOK.replace(
+                r#"<calcPr calcId="191029"/>"#,
+                r#"<calcPr fullCalcOnLoad="1"/>"#
+            )
+        );
         let bare = r#"<x:workbook xmlns:x="m"><x:sheets/></x:workbook>"#;
-        assert_eq!(with_full_calc_on_load(bare).unwrap(), r#"<x:workbook xmlns:x="m"><x:sheets/><x:calcPr fullCalcOnLoad="1"/></x:workbook>"#);
+        assert_eq!(
+            with_full_calc_on_load(bare).unwrap(),
+            r#"<x:workbook xmlns:x="m"><x:sheets/><x:calcPr fullCalcOnLoad="1"/></x:workbook>"#
+        );
     }
 
     #[test]
@@ -1005,7 +1292,8 @@ mod tests {
         let mut wb = open(&original);
         assert!(!wb.can_undo());
         wb.checkpoint(Some("A1".into()));
-        wb.set_value(0, "A1", CellInput::Text("Nuevo".into())).unwrap();
+        wb.set_value(0, "A1", CellInput::Text("Nuevo".into()))
+            .unwrap();
         wb.set_selection_after(Some("A2".into()));
         wb.checkpoint(Some("C2".into()));
         wb.set_value(0, "C2", CellInput::Number(7.0)).unwrap();
@@ -1019,7 +1307,12 @@ mod tests {
         assert_eq!(done.selection.as_deref(), Some("A1"));
         assert!(!wb.can_undo() && wb.can_redo());
         // Back to the file as it was read, calc chain included
-        for name in ["xl/hojas/resumen.xml", "xl/libro.xml", "xl/sharedStrings.xml", "[Content_Types].xml"] {
+        for name in [
+            "xl/hojas/resumen.xml",
+            "xl/libro.xml",
+            "xl/sharedStrings.xml",
+            "[Content_Types].xml",
+        ] {
             assert_eq!(part(&wb, name), part(&open(&original), name), "{}", name);
         }
         assert!(wb.package().contains("xl/calcChain.xml"));
@@ -1040,12 +1333,26 @@ mod tests {
     #[test]
     fn writes_formulas_and_recalculates_what_depends_on_an_edit() {
         let mut wb = open(&blank_xlsx().unwrap());
-        wb.set_values(0, "A1", vec![vec![Some(CellInput::Number(2.0)), Some(CellInput::Number(3.0))]]).unwrap();
-        wb.set_value(0, "C1", CellInput::Formula("=SUM(A1:B1)*10%".into())).unwrap();
-        wb.set_value(0, "D1", CellInput::Formula("xlookup(2,A1:B1,A1:B1)".into())).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![
+                Some(CellInput::Number(2.0)),
+                Some(CellInput::Number(3.0)),
+            ]],
+        )
+        .unwrap();
+        wb.set_value(0, "C1", CellInput::Formula("=SUM(A1:B1)*10%".into()))
+            .unwrap();
+        wb.set_value(0, "D1", CellInput::Formula("xlookup(2,A1:B1,A1:B1)".into()))
+            .unwrap();
         assert_eq!(value(&wb, 0, "C1"), CellValue::Number(0.5));
-        assert_eq!(wb.cell(0, "D1").unwrap().formula.as_deref(), Some("XLOOKUP(2,A1:B1,A1:B1)"));
-        assert!(part(&wb, "xl/worksheets/sheet1.xml").contains("<f>_xlfn.XLOOKUP(2,A1:B1,A1:B1)</f><v>2</v>"));
+        assert_eq!(
+            wb.cell(0, "D1").unwrap().formula.as_deref(),
+            Some("XLOOKUP(2,A1:B1,A1:B1)")
+        );
+        assert!(part(&wb, "xl/worksheets/sheet1.xml")
+            .contains("<f>_xlfn.XLOOKUP(2,A1:B1,A1:B1)</f><v>2</v>"));
 
         wb.checkpoint(None);
         wb.set_value(0, "A1", CellInput::Number(7.0)).unwrap();
@@ -1054,9 +1361,19 @@ mod tests {
         assert_eq!(value(&wb, 0, "C1"), CellValue::Number(0.5));
 
         // Unknown to this engine: written, left for Excel to calculate
-        wb.set_value(0, "E1", CellInput::Formula("OFFSET(A1,0,1)".into())).unwrap();
-        assert_eq!(wb.cell(0, "E1").unwrap(), CellData { at: CellRef::parse("E1").unwrap(), value: CellValue::Empty, formula: Some("OFFSET(A1,0,1)".into()) });
-        let err = wb.set_value(0, "F1", CellInput::Formula("SUM(A1".into())).unwrap_err();
+        wb.set_value(0, "E1", CellInput::Formula("OFFSET(A1,0,1)".into()))
+            .unwrap();
+        assert_eq!(
+            wb.cell(0, "E1").unwrap(),
+            CellData {
+                at: CellRef::parse("E1").unwrap(),
+                value: CellValue::Empty,
+                formula: Some("OFFSET(A1,0,1)".into())
+            }
+        );
+        let err = wb
+            .set_value(0, "F1", CellInput::Formula("SUM(A1".into()))
+            .unwrap_err();
         assert!(err.contains("F1"), "{}", err);
     }
 
@@ -1067,70 +1384,149 @@ mod tests {
         let same = open(&original.to_bytes().unwrap());
         assert_eq!(original.package().order(), same.package().order());
         for name in original.package().order() {
-            assert_eq!(original.package().get(name), same.package().get(name), "part {}", name);
+            assert_eq!(
+                original.package().get(name),
+                same.package().get(name),
+                "part {}",
+                name
+            );
         }
 
         let mut wb = open(&template());
         wb.set_value(1, "A2", CellInput::Number(99.0)).unwrap();
         let edited = open(&wb.to_bytes().unwrap());
         // The summary sheet reads the edited cell, so its cached result changes too
-        let touched = ["xl/hojas/datos.xml", "xl/hojas/resumen.xml", "xl/libro.xml", "xl/_rels/libro.xml.rels", "[Content_Types].xml"];
+        let touched = [
+            "xl/hojas/datos.xml",
+            "xl/hojas/resumen.xml",
+            "xl/libro.xml",
+            "xl/_rels/libro.xml.rels",
+            "[Content_Types].xml",
+        ];
         for name in original.package().order() {
             if name == "xl/calcChain.xml" {
                 assert!(!edited.package().contains(name));
             } else if !touched.contains(&name.as_str()) {
-                assert_eq!(original.package().get(name), edited.package().get(name), "part {}", name);
+                assert_eq!(
+                    original.package().get(name),
+                    edited.package().get(name),
+                    "part {}",
+                    name
+                );
             }
         }
         // In the edited sheet only the cell and the cached results of the formulas that read it
         // changed
         let expected = DATOS
-            .replace(r#"<c r="A2" s="2"><v>1234.5</v></c>"#, r#"<c r="A2" s="2"><v>99</v></c>"#)
-            .replace(r#"<f>SUM(A2:A2)</f><v>1234.5</v>"#, r#"<f>SUM(A2:A2)</f><v>99</v>"#)
-            .replace(r#"si="0">A3*2</f><v>2469</v>"#, r#"si="0">A3*2</f><v>198</v>"#);
+            .replace(
+                r#"<c r="A2" s="2"><v>1234.5</v></c>"#,
+                r#"<c r="A2" s="2"><v>99</v></c>"#,
+            )
+            .replace(
+                r#"<f>SUM(A2:A2)</f><v>1234.5</v>"#,
+                r#"<f>SUM(A2:A2)</f><v>99</v>"#,
+            )
+            .replace(
+                r#"si="0">A3*2</f><v>2469</v>"#,
+                r#"si="0">A3*2</f><v>198</v>"#,
+            );
         assert_eq!(part(&edited, "xl/hojas/datos.xml"), expected);
-        assert_eq!(part(&edited, "xl/hojas/resumen.xml"), RESUMEN.replace("<v>1234.5</v>", "<v>99</v>"));
+        assert_eq!(
+            part(&edited, "xl/hojas/resumen.xml"),
+            RESUMEN.replace("<v>1234.5</v>", "<v>99</v>")
+        );
         let names: Vec<_> = edited.package().order().to_vec();
-        assert_eq!(names, original.package().order().iter().filter(|n| *n != "xl/calcChain.xml").cloned().collect::<Vec<_>>());
+        assert_eq!(
+            names,
+            original
+                .package()
+                .order()
+                .iter()
+                .filter(|n| *n != "xl/calcChain.xml")
+                .cloned()
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn fills_placeholders_in_shared_and_inline_strings() {
         let mut wb = open(&template());
-        let values: HashMap<String, String> =
-            [("CLIENTE", "Acme & Cía"), ("MONEDA", "EUR"), ("NOTA", "<b>")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let values: HashMap<String, String> = [
+            ("CLIENTE", "Acme & Cía"),
+            ("MONEDA", "EUR"),
+            ("NOTA", "<b>"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         assert_eq!(wb.fill_template(&values).unwrap(), 3);
-        assert_eq!(value(&wb, 0, "A1"), CellValue::Text("Informe para Acme & Cía".into()));
+        assert_eq!(
+            value(&wb, 0, "A1"),
+            CellValue::Text("Informe para Acme & Cía".into())
+        );
         assert_eq!(value(&wb, 0, "A2"), CellValue::Text("Total EUR".into()));
         assert_eq!(value(&wb, 1, "C1"), CellValue::Text("Nota <b>".into()));
-        assert!(part(&wb, "xl/sharedStrings.xml").contains(r#"<r><t xml:space="preserve"> EUR</t></r>"#));
+        assert!(part(&wb, "xl/sharedStrings.xml")
+            .contains(r#"<r><t xml:space="preserve"> EUR</t></r>"#));
         assert!(!wb.package().contains("xl/calcChain.xml"));
-        assert_eq!(wb.fill_template(&values).unwrap(), 0, "nothing left to fill");
+        assert_eq!(
+            wb.fill_template(&values).unwrap(),
+            0,
+            "nothing left to fill"
+        );
 
         let mut untouched = open(&template());
         let unknown: HashMap<String, String> = [("OTRO".to_string(), "x".to_string())].into();
         assert_eq!(untouched.fill_template(&unknown).unwrap(), 0);
-        assert!(untouched.package().contains("xl/calcChain.xml"), "no change, no recalculation set-up");
+        assert!(
+            untouched.package().contains("xl/calcChain.xml"),
+            "no change, no recalculation set-up"
+        );
     }
 
     #[test]
     fn creates_the_shared_strings_part_when_missing() {
         let mut wb = open(&blank_xlsx().unwrap());
         assert!(!wb.package().contains("xl/sharedStrings.xml"));
-        wb.set_values(0, "A1", vec![vec![Some(CellInput::Text("Hola".into())), Some(CellInput::Text("Hola".into()))]]).unwrap();
+        wb.set_values(
+            0,
+            "A1",
+            vec![vec![
+                Some(CellInput::Text("Hola".into())),
+                Some(CellInput::Text("Hola".into())),
+            ]],
+        )
+        .unwrap();
         let out = open(&wb.to_bytes().unwrap());
         assert_eq!(value(&out, 0, "B1"), CellValue::Text("Hola".into()));
         assert!(part(&out, "xl/_rels/workbook.xml.rels").contains(r#"<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#));
         assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>"#));
-        assert!(part(&out, "xl/sharedStrings.xml").contains(r#"count="2" uniqueCount="1"><si><t>Hola</t></si>"#));
-        assert!(part(&out, "xl/workbook.xml").contains(r#"<calcPr fullCalcOnLoad="1"/></workbook>"#));
+        assert!(part(&out, "xl/sharedStrings.xml")
+            .contains(r#"count="2" uniqueCount="1"><si><t>Hola</t></si>"#));
+        assert!(
+            part(&out, "xl/workbook.xml").contains(r#"<calcPr fullCalcOnLoad="1"/></workbook>"#)
+        );
     }
 
     #[test]
     fn formats_numbers_so_they_read_back_the_same() {
-        for n in [0.0, -0.0, 1.0, 0.1 + 0.2, 1e20, 1.5e-9, -123456.789, f64::MAX] {
+        for n in [
+            0.0,
+            -0.0,
+            1.0,
+            0.1 + 0.2,
+            1e20,
+            1.5e-9,
+            -123456.789,
+            f64::MAX,
+        ] {
             let text = format_number(n);
-            assert_eq!(text.parse::<f64>().unwrap(), if n == 0.0 { 0.0 } else { n }, "{}", text);
+            assert_eq!(
+                text.parse::<f64>().unwrap(),
+                if n == 0.0 { 0.0 } else { n },
+                "{}",
+                text
+            );
         }
         assert_eq!(format_number(42.0), "42");
     }
