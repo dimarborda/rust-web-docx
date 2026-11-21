@@ -138,6 +138,11 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "LET",
     "STDEV.S",
     "STDEV.P",
+    "VAR.S",
+    "VAR.P",
+    "MODE.SNGL",
+    "RANK.EQ",
+    "ISOWEEKNUM",
 ];
 
 const ERRORS: &[&str] = &[
@@ -960,6 +965,12 @@ mod tests {
             "SUM(a1,b2)".replace("a1", "A1").replace("b2", "B2")
         );
         assert_eq!(round_trip("XLOOKUP(1,A:A,B:B)"), "_xlfn.XLOOKUP(1,A:A,B:B)");
+        assert_eq!(
+            round_trip("VAR.S(A:A)+RANK.EQ(1,A:A)+ISOWEEKNUM(1)"),
+            "_xlfn.VAR.S(A:A)+_xlfn.RANK.EQ(1,A:A)+_xlfn.ISOWEEKNUM(1)"
+        );
+        // Functions Excel 2007 already had keep their plain name
+        assert_eq!(round_trip("STDEV(A:A)+LOG10(1)"), "STDEV(A:A)+LOG10(1)");
         assert_eq!(
             parse("_xlfn.CONCAT(A1)").unwrap().to_display(),
             "CONCAT(A1)"

@@ -48,6 +48,13 @@ const NUM: &str = "#NUM!";
 const REF: &str = "#REF!";
 const NAME: &str = "#NAME?";
 
+/// Characters 0x80-0x9F of Windows-1252, the code page CHAR and CODE use (the rest of
+/// 1-255 matches Latin-1); the five codes Windows leaves undefined map to themselves
+const CP1252_HIGH: [char; 32] = [
+    '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8D}', 'Ž', '\u{8F}',
+    '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9D}', 'ž', 'Ÿ',
+];
+
 /// Most cells an array operation may materialize
 const MAX_ARRAY_CELLS: u64 = 1_000_000;
 
@@ -572,6 +579,17 @@ impl<'c> Eval<'c> {
         Ok(civil_from_days(days))
     }
 
+    /// Day of the week of a serial, 0 = Sunday
+    fn weekday(&self, serial: f64) -> R<i64> {
+        let (y, m, d) = self.ymd(serial)?;
+        Ok((days_from_civil(y, m, d) + 4).rem_euclid(7))
+    }
+
+    /// Monday to Friday, the working days of NETWORKDAYS and WORKDAY
+    fn is_weekday(&self, serial: f64) -> R<bool> {
+        Ok(!matches!(self.weekday(serial)?, 0 | 6))
+    }
+
     /// Serial of a date; months and days out of range roll over as in Excel's DATE
     fn serial(&self, y: i64, m: i64, d: i64) -> R<f64> {
         let y = if (0..1900).contains(&y) { y + 1900 } else { y };
@@ -820,6 +838,18 @@ impl<'c> Eval<'c> {
         }
     }
 
+    /// Day serials of an optional holidays argument (a range, an array or one date)
+    fn holidays(&mut self, args: &[Expr], i: usize) -> R<std::collections::HashSet<i64>> {
+        match args.get(i) {
+            None | Some(Expr::Missing) => Ok(Default::default()),
+            Some(_) => Ok(self
+                .numbers(&args[i..=i])?
+                .into_iter()
+                .map(|x| x.floor() as i64)
+                .collect()),
+        }
+    }
+
     fn arg_grid(&mut self, e: &Expr) -> R<Grid<'c>> {
         let res = self.eval(e)?;
         self.grid(res)
@@ -1054,6 +1084,156 @@ impl<'c> Eval<'c> {
                     }
                 }
                 n(total)
+            }
+
+            "LN" | "LOG10" | "EXP" => {
+                Self::arity(name, args, 1, 1)?;
+                let x = self.num(&args[0])?;
+                match name {
+                    "EXP" => n(x.exp()),
+                    _ if x <= 0.0 => fail(NUM),
+                    "LN" => n(x.ln()),
+                    _ => n(x.log10()),
+                }
+            }
+            "LOG" => {
+                Self::arity(name, args, 1, 2)?;
+                let (x, base) = (self.num(&args[0])?, self.opt_num(args, 1, 10.0)?);
+                if x <= 0.0 || base <= 0.0 {
+                    return fail(NUM);
+                }
+                if base == 1.0 {
+                    return fail(DIV0);
+                }
+                n(round_sig(x.ln() / base.ln(), 15))
+            }
+            "EVEN" | "ODD" => {
+                Self::arity(name, args, 1, 1)?;
+                let x = self.num(&args[0])?;
+                let up = round_sig(x.abs(), 15).ceil();
+                let r = match (name, up % 2.0 == 0.0) {
+                    ("EVEN", true) | ("ODD", false) => up,
+                    _ => up + 1.0,
+                };
+                n(if x < 0.0 { -r } else { r })
+            }
+            "MROUND" => {
+                Self::arity(name, args, 2, 2)?;
+                let (x, m) = (self.num(&args[0])?, self.num(&args[1])?);
+                if m == 0.0 || x == 0.0 {
+                    return n(0.0);
+                }
+                if (x > 0.0) != (m > 0.0) {
+                    return fail(NUM);
+                }
+                n(round_sig(round_sig(x / m, 15).round() * m, 15))
+            }
+            "QUOTIENT" => {
+                Self::arity(name, args, 2, 2)?;
+                let (a, b) = (self.num(&args[0])?, self.num(&args[1])?);
+                if b == 0.0 {
+                    return fail(DIV0);
+                }
+                n((a / b).trunc())
+            }
+            "SUMSQ" => n(self.numbers(args)?.iter().map(|x| x * x).sum()),
+            "GCD" | "LCM" => {
+                let mut whole = Vec::new();
+                for x in self.numbers(args)? {
+                    if x < 0.0 || x >= 2f64.powi(53) {
+                        return fail(NUM);
+                    }
+                    whole.push(x.trunc() as u128);
+                }
+                let gcd = |mut a: u128, mut b: u128| {
+                    while b != 0 {
+                        (a, b) = (b, a % b);
+                    }
+                    a
+                };
+                let r = if name == "GCD" {
+                    whole.into_iter().fold(0, gcd)
+                } else {
+                    let mut acc: u128 = 1;
+                    for x in whole {
+                        if x == 0 {
+                            return n(0.0);
+                        }
+                        acc = acc / gcd(acc, x) * x;
+                        if acc >= 1 << 53 {
+                            return fail(NUM);
+                        }
+                    }
+                    acc
+                };
+                n(r as f64)
+            }
+            "ISEVEN" | "ISODD" => {
+                Self::arity(name, args, 1, 1)?;
+                let even = self.num(&args[0])?.trunc() % 2.0 == 0.0;
+                v(Val::Bool(even == (name == "ISEVEN")))
+            }
+
+            // Statistics
+            "LARGE" | "SMALL" => {
+                Self::arity(name, args, 2, 2)?;
+                let mut nums = self.numbers(&args[..1])?;
+                let k = self.num(&args[1])?.ceil();
+                if k < 1.0 || k > nums.len() as f64 {
+                    return fail(NUM);
+                }
+                nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                if name == "LARGE" {
+                    nums.reverse();
+                }
+                n(nums[k as usize - 1])
+            }
+            "RANK" | "RANK.EQ" => {
+                Self::arity(name, args, 2, 3)?;
+                let x = self.num(&args[0])?;
+                let nums = self.numbers(&args[1..2])?;
+                let ascending = self.opt_num(args, 2, 0.0)? != 0.0;
+                if !nums.contains(&x) {
+                    return fail(NA);
+                }
+                let before = nums
+                    .iter()
+                    .filter(|&&y| if ascending { y < x } else { y > x })
+                    .count();
+                n(before as f64 + 1.0)
+            }
+            "STDEV" | "STDEV.S" | "STDEV.P" | "VAR" | "VAR.S" | "VAR.P" => {
+                let nums = self.numbers(args)?;
+                let sample = !name.ends_with(".P");
+                let min = if sample { 2 } else { 1 };
+                if nums.len() < min {
+                    return fail(DIV0);
+                }
+                let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+                let squares: f64 = nums.iter().map(|x| (x - mean).powi(2)).sum();
+                let var = squares / (nums.len() - usize::from(sample)) as f64;
+                n(if name.starts_with("STDEV") {
+                    var.sqrt()
+                } else {
+                    var
+                })
+            }
+            "MODE" | "MODE.SNGL" => {
+                let nums = self.numbers(args)?;
+                // count and first position of each value: ties go to the one seen first
+                let mut seen: std::collections::HashMap<u64, (usize, usize)> =
+                    std::collections::HashMap::new();
+                for (i, x) in nums.iter().enumerate() {
+                    seen.entry(x.to_bits()).or_insert((0, i)).0 += 1;
+                }
+                let best = seen
+                    .into_iter()
+                    .filter(|(_, (count, _))| *count > 1)
+                    .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.1 .1.cmp(&a.1 .1)));
+                match best {
+                    Some((bits, _)) => n(f64::from_bits(bits)),
+                    None => fail(NA),
+                }
             }
 
             // Logic
@@ -1627,6 +1807,39 @@ impl<'c> Eval<'c> {
                     .map(Ok)
                     .unwrap_or_else(|| fail(VALUE))
             }
+            "CHAR" => {
+                Self::arity(name, args, 1, 1)?;
+                let code = self.num(&args[0])?.trunc();
+                if !(1.0..=255.0).contains(&code) {
+                    return fail(VALUE);
+                }
+                let code = code as u8;
+                v(Val::Text(
+                    match code {
+                        0x80..=0x9F => CP1252_HIGH[(code - 0x80) as usize],
+                        _ => char::from(code),
+                    }
+                    .to_string(),
+                ))
+            }
+            "CODE" => {
+                Self::arity(name, args, 1, 1)?;
+                let Some(c) = self.text(&args[0])?.chars().next() else {
+                    return fail(VALUE);
+                };
+                let code = match CP1252_HIGH.iter().position(|&x| x == c) {
+                    Some(i) => 0x80 + i as u32,
+                    None if (c as u32) < 256 => c as u32,
+                    // Windows shows characters outside its code page as "?"
+                    None => 63,
+                };
+                n(code as f64)
+            }
+            "CLEAN" => {
+                Self::arity(name, args, 1, 1)?;
+                let t = self.text(&args[0])?;
+                v(Val::Text(t.chars().filter(|c| *c as u32 >= 32).collect()))
+            }
             "VALUE" => {
                 Self::arity(name, args, 1, 1)?;
                 match self.val(&args[0])? {
@@ -1694,9 +1907,7 @@ impl<'c> Eval<'c> {
             "WEEKDAY" => {
                 Self::arity(name, args, 1, 2)?;
                 let serial = self.num(&args[0])?.floor();
-                let (y, m, d) = self.ymd(serial)?;
-                // 0 = Sunday
-                let dow = (days_from_civil(y, m, d) + 4).rem_euclid(7);
+                let dow = self.weekday(serial)?;
                 let kind = self.opt_num(args, 1, 1.0)?;
                 n(match kind as i64 {
                     1 | 17 => dow + 1,
@@ -1727,6 +1938,192 @@ impl<'c> Eval<'c> {
             "DAYS" => {
                 Self::arity(name, args, 2, 2)?;
                 n(self.num(&args[0])?.floor() - self.num(&args[1])?.floor())
+            }
+
+            "TIME" => {
+                Self::arity(name, args, 3, 3)?;
+                let (h, m, sec) = (
+                    self.num(&args[0])?.trunc(),
+                    self.num(&args[1])?.trunc(),
+                    self.num(&args[2])?.trunc(),
+                );
+                let total = h * 3600.0 + m * 60.0 + sec;
+                if total < 0.0 {
+                    return fail(NUM);
+                }
+                n(total.rem_euclid(86_400.0) / 86_400.0)
+            }
+            "HOUR" | "MINUTE" | "SECOND" => {
+                Self::arity(name, args, 1, 1)?;
+                let x = self.num(&args[0])?;
+                if x < 0.0 {
+                    return fail(NUM);
+                }
+                let secs = (round_sig(x - x.floor(), 15) * 86_400.0).round() as i64 % 86_400;
+                n(match name {
+                    "HOUR" => secs / 3600,
+                    "MINUTE" => secs / 60 % 60,
+                    _ => secs % 60,
+                } as f64)
+            }
+            "DATEDIF" => {
+                Self::arity(name, args, 3, 3)?;
+                let (start, end) = (self.num(&args[0])?.floor(), self.num(&args[1])?.floor());
+                let unit = self.text(&args[2])?.to_uppercase();
+                if start > end {
+                    return fail(NUM);
+                }
+                let ((sy, sm, sd), (ey, em, ed)) = (self.ymd(start)?, self.ymd(end)?);
+                let months = (ey - sy) * 12 + (em - sm) - i64::from(ed < sd);
+                n(match unit.as_str() {
+                    "D" => end - start,
+                    "M" => months as f64,
+                    "Y" => (months / 12) as f64,
+                    "YM" => (months % 12) as f64,
+                    // days since the same day of the month before (Excel's own rule,
+                    // which can go negative after a longer month)
+                    "MD" if ed >= sd => (ed - sd) as f64,
+                    "MD" => end - self.serial(ey, em - 1, sd)?,
+                    "YD" => {
+                        let mut anniversary = self.serial(ey, sm, sd)?;
+                        if anniversary > end {
+                            anniversary = self.serial(ey - 1, sm, sd)?;
+                        }
+                        end - anniversary
+                    }
+                    _ => return fail(NUM),
+                })
+            }
+            "NETWORKDAYS" => {
+                Self::arity(name, args, 2, 3)?;
+                let (a, b) = (self.num(&args[0])?.floor(), self.num(&args[1])?.floor());
+                let holidays = self.holidays(args, 2)?;
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                let total = (hi - lo) as i64 + 1;
+                let full_weeks = total / 7;
+                let mut count = full_weeks * 5;
+                for k in 0..total % 7 {
+                    if self.is_weekday(lo + (full_weeks * 7 + k) as f64)? {
+                        count += 1;
+                    }
+                }
+                for &h in &holidays {
+                    let h = h as f64;
+                    if (lo..=hi).contains(&h) && self.is_weekday(h)? {
+                        count -= 1;
+                    }
+                }
+                n(if a <= b { count } else { -count } as f64)
+            }
+            "WORKDAY" => {
+                Self::arity(name, args, 2, 3)?;
+                let mut day = self.num(&args[0])?.floor();
+                let days = self.num(&args[1])?.trunc();
+                let holidays = self.holidays(args, 2)?;
+                if days.abs() > 1_000_000.0 {
+                    return fail(NUM);
+                }
+                let (step, mut left) = (days.signum(), days.abs() as i64);
+                while left > 0 {
+                    day += step;
+                    if self.is_weekday(day)? && !holidays.contains(&(day as i64)) {
+                        left -= 1;
+                    }
+                }
+                n(day)
+            }
+            "WEEKNUM" | "ISOWEEKNUM" => {
+                Self::arity(name, args, 1, if name == "WEEKNUM" { 2 } else { 1 })?;
+                let day = self.num(&args[0])?.floor();
+                let kind = if name == "WEEKNUM" {
+                    self.opt_num(args, 1, 1.0)? as i64
+                } else {
+                    21
+                };
+                // first day of the week, 0 = Sunday
+                let first = match kind {
+                    1 | 17 => 0,
+                    2 | 11 => 1,
+                    12..=16 => kind - 10,
+                    21 => {
+                        // ISO 8601: the week belongs to the year of its Thursday
+                        let monday_based = (self.weekday(day)? + 6) % 7;
+                        let thursday = day - monday_based as f64 + 3.0;
+                        let (year, _, _) = self.ymd(thursday)?;
+                        let jan1 = self.serial(year, 1, 1)?;
+                        return n(((thursday - jan1) / 7.0).floor() + 1.0);
+                    }
+                    _ => return fail(NUM),
+                };
+                let (year, _, _) = self.ymd(day)?;
+                let jan1 = self.serial(year, 1, 1)?;
+                let offset = (self.weekday(jan1)? - first).rem_euclid(7);
+                n(((day - jan1) as i64 + offset).div_euclid(7) as f64 + 1.0)
+            }
+
+            // Finance: Excel's sign convention, money paid out is negative
+            "PMT" | "PV" | "FV" | "NPER" => {
+                Self::arity(name, args, 3, 5)?;
+                let (rate, a, b) = (
+                    self.num(&args[0])?,
+                    self.num(&args[1])?,
+                    self.num(&args[2])?,
+                );
+                let rest = self.opt_num(args, 3, 0.0)?;
+                let due = if self.opt_num(args, 4, 0.0)? != 0.0 {
+                    1.0
+                } else {
+                    0.0
+                };
+                let growth = |periods: f64| (1.0 + rate).powf(periods);
+                match name {
+                    // PMT(rate, nper, pv, [fv], [type])
+                    "PMT" => {
+                        let (nper, pv, fv) = (a, b, rest);
+                        if nper == 0.0 {
+                            return fail(NUM);
+                        }
+                        if rate == 0.0 {
+                            return n(-(pv + fv) / nper);
+                        }
+                        let g = growth(nper);
+                        n(-(rate * (fv + pv * g)) / ((1.0 + rate * due) * (g - 1.0)))
+                    }
+                    // PV(rate, nper, pmt, [fv], [type])
+                    "PV" => {
+                        let (nper, pmt, fv) = (a, b, rest);
+                        if rate == 0.0 {
+                            return n(-(fv + pmt * nper));
+                        }
+                        let g = growth(nper);
+                        n(-(fv + pmt * (1.0 + rate * due) * (g - 1.0) / rate) / g)
+                    }
+                    // FV(rate, nper, pmt, [pv], [type])
+                    "FV" => {
+                        let (nper, pmt, pv) = (a, b, rest);
+                        if rate == 0.0 {
+                            return n(-(pv + pmt * nper));
+                        }
+                        let g = growth(nper);
+                        n(-(pv * g + pmt * (1.0 + rate * due) * (g - 1.0) / rate))
+                    }
+                    // NPER(rate, pmt, pv, [fv], [type])
+                    _ => {
+                        let (pmt, pv, fv) = (a, b, rest);
+                        if rate == 0.0 {
+                            if pmt == 0.0 {
+                                return fail(NUM);
+                            }
+                            return n(-(pv + fv) / pmt);
+                        }
+                        let k = pmt * (1.0 + rate * due) / rate;
+                        let ratio = (k - fv) / (k + pv);
+                        if ratio <= 0.0 || rate <= -1.0 {
+                            return fail(NUM);
+                        }
+                        n(ratio.ln() / (1.0 + rate).ln())
+                    }
+                }
             }
 
             _ => unsupported(format!("la función {}", name)),
@@ -2060,6 +2457,151 @@ mod tests {
         assert_eq!(num("TODAY()"), 45000.0);
         assert_eq!(num("NOW()"), 45000.75);
         assert_eq!(num("DAYS(DATE(2024,3,1),DATE(2024,2,1))"), 29.0);
+    }
+
+    /// `formula` evaluates to `expected` within `tolerance`
+    fn near(formula: &str, expected: f64, tolerance: f64) {
+        let got = num(formula);
+        assert!(
+            (got - expected).abs() <= tolerance,
+            "{} = {}, expected {}",
+            formula,
+            got,
+            expected
+        );
+    }
+
+    #[test]
+    fn more_math() {
+        near("LN(EXP(1))", 1.0, 1e-12);
+        assert_eq!(num("LOG(8,2)"), 3.0);
+        assert_eq!(num("LOG(100)"), 2.0);
+        assert_eq!(num("LOG10(1000)"), 3.0);
+        assert_eq!(error("LN(0)"), NUM);
+        assert_eq!(error("LOG(10,1)"), DIV0);
+        assert_eq!(num("EVEN(1.5)"), 2.0);
+        assert_eq!(num("EVEN(3)"), 4.0);
+        assert_eq!(num("EVEN(-1)"), -2.0);
+        assert_eq!(num("EVEN(0)"), 0.0);
+        assert_eq!(num("ODD(1.5)"), 3.0);
+        assert_eq!(num("ODD(2)"), 3.0);
+        assert_eq!(num("ODD(-1)"), -1.0);
+        assert_eq!(num("ODD(0)"), 1.0);
+        assert_eq!(num("MROUND(10,3)"), 9.0);
+        assert_eq!(num("MROUND(-10,-3)"), -9.0);
+        assert_eq!(num("MROUND(1.3,0.2)"), 1.4);
+        assert_eq!(error("MROUND(5,-2)"), NUM);
+        assert_eq!(num("QUOTIENT(5,2)"), 2.0);
+        assert_eq!(num("QUOTIENT(-10,3)"), -3.0);
+        assert_eq!(error("QUOTIENT(1,0)"), DIV0);
+        assert_eq!(num("SUMSQ(3,4)"), 25.0);
+        assert_eq!(num("SUMSQ(D1:D3)"), 14.0);
+        assert_eq!(num("GCD(24,36)"), 12.0);
+        assert_eq!(num("GCD(5,2)"), 1.0);
+        assert_eq!(num("LCM(24,36)"), 72.0);
+        assert_eq!(num("LCM(D1:D3)"), 6.0);
+        assert_eq!(num("LCM(0,5)"), 0.0);
+        assert_eq!(error("GCD(-1,2)"), NUM);
+        assert_eq!(calc("ISEVEN(2.5)"), Val::Bool(true));
+        assert_eq!(calc("ISODD(-1)"), Val::Bool(true));
+        assert_eq!(calc("ISODD(D2)"), Val::Bool(false));
+    }
+
+    #[test]
+    fn statistics() {
+        // A1:A5 = 10, 20, "x", 40, TRUE: only the numbers count
+        assert_eq!(num("LARGE(A1:A5,1)"), 40.0);
+        assert_eq!(num("LARGE(A1:A5,3)"), 10.0);
+        assert_eq!(num("SMALL(A1:A5,1)"), 10.0);
+        assert_eq!(num("SMALL({3,1,2},2)"), 2.0);
+        assert_eq!(error("LARGE(A1:A5,4)"), NUM);
+        assert_eq!(error("SMALL(A1:A5,0)"), NUM);
+        assert_eq!(num("RANK(20,A1:A5)"), 2.0);
+        assert_eq!(num("RANK(20,A1:A5,1)"), 2.0);
+        assert_eq!(num("RANK.EQ(40,A1:A5)"), 1.0);
+        assert_eq!(num("RANK(3.5,{7,3.5,3.5,1,2},1)"), 3.0);
+        assert_eq!(error("RANK(99,A1:A5)"), NA);
+        let sample = "{1345,1301,1368,1322,1310,1370,1318,1350,1303,1299}";
+        near(&format!("STDEV.S({})", sample), 27.46392, 1e-5);
+        near(&format!("STDEV({})", sample), 27.46392, 1e-5);
+        near(&format!("STDEV.P({})", sample), 26.05456, 1e-5);
+        near(&format!("VAR.S({})", sample), 754.26667, 1e-5);
+        near(&format!("VAR.P({})", sample), 678.84, 1e-9);
+        assert_eq!(error("STDEV.S(5)"), DIV0);
+        assert_eq!(num("VAR.P(5)"), 0.0);
+        assert_eq!(num("MODE({5.6,4,4,3,2,4})"), 4.0);
+        assert_eq!(num("MODE.SNGL({1,2,2,3,3})"), 2.0);
+        assert_eq!(error("MODE(D1:D3)"), NA);
+    }
+
+    #[test]
+    fn times_and_working_days() {
+        assert_eq!(num("TIME(12,0,0)"), 0.5);
+        near("TIME(16,48,10)", 0.700115741, 1e-9);
+        assert_eq!(num("TIME(24,0,0)"), 0.0);
+        assert_eq!(error("TIME(-1,0,0)"), NUM);
+        assert_eq!(num("HOUR(0.75)"), 18.0);
+        assert_eq!(num("HOUR(45000.75)"), 18.0);
+        assert_eq!(num("MINUTE(TIME(12,45,0))"), 45.0);
+        assert_eq!(num("SECOND(TIME(4,48,18))"), 18.0);
+        assert_eq!(num("DATEDIF(DATE(2001,1,1),DATE(2003,1,1),\"Y\")"), 2.0);
+        assert_eq!(num("DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"D\")"), 440.0);
+        assert_eq!(num("DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"YD\")"), 75.0);
+        assert_eq!(num("DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"md\")"), 14.0);
+        assert_eq!(num("DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"M\")"), 14.0);
+        assert_eq!(num("DATEDIF(DATE(2001,6,1),DATE(2002,8,15),\"YM\")"), 2.0);
+        assert_eq!(num("DATEDIF(DATE(2024,1,31),DATE(2024,2,29),\"M\")"), 0.0);
+        assert_eq!(error("DATEDIF(DATE(2003,1,1),DATE(2001,1,1),\"Y\")"), NUM);
+        assert_eq!(error("DATEDIF(1,2,\"W\")"), NUM);
+        assert_eq!(num("NETWORKDAYS(DATE(2012,10,1),DATE(2013,3,1))"), 110.0);
+        assert_eq!(
+            num("NETWORKDAYS(DATE(2012,10,1),DATE(2013,3,1),DATE(2012,11,22))"),
+            109.0
+        );
+        assert_eq!(num("NETWORKDAYS(DATE(2013,3,1),DATE(2012,10,1))"), -110.0);
+        assert_eq!(num("WORKDAY(DATE(2008,10,1),151)"), num("DATE(2009,4,30)"));
+        assert_eq!(
+            num("WORKDAY(DATE(2008,10,1),151,{39778,39786,39834})"),
+            num("DATE(2009,5,5)")
+        );
+        assert_eq!(num("WORKDAY(DATE(2024,1,8),-1)"), num("DATE(2024,1,5)"));
+        assert_eq!(num("WEEKNUM(DATE(2012,3,9))"), 10.0);
+        assert_eq!(num("WEEKNUM(DATE(2012,3,9),2)"), 11.0);
+        assert_eq!(num("ISOWEEKNUM(DATE(2012,3,9))"), 10.0);
+        assert_eq!(num("WEEKNUM(DATE(2012,3,9),21)"), 10.0);
+        // 1 January 2021 (a Friday) is in ISO week 53 of 2020
+        assert_eq!(num("ISOWEEKNUM(DATE(2021,1,1))"), 53.0);
+        assert_eq!(error("WEEKNUM(45000,4)"), NUM);
+    }
+
+    #[test]
+    fn character_codes() {
+        assert_eq!(text("CHAR(65)"), "A");
+        assert_eq!(text("CHAR(241)"), "ñ");
+        assert_eq!(text("CHAR(128)"), "€");
+        assert_eq!(error("CHAR(0)"), VALUE);
+        assert_eq!(num("CODE(\"A\")"), 65.0);
+        assert_eq!(num("CODE(\"€uro\")"), 128.0);
+        assert_eq!(num("CODE(\"ñ\")"), 241.0);
+        assert_eq!(num("CODE(\"漢\")"), 63.0);
+        assert_eq!(error("CODE(\"\")"), VALUE);
+        assert_eq!(text("CLEAN(CHAR(9)&\"Informe\"&CHAR(10))"), "Informe");
+    }
+
+    #[test]
+    fn finance() {
+        near("PMT(0.08/12,10,10000)", -1037.032089, 1e-6);
+        near("PMT(0.06/12,18*12,0,50000)", -129.0811609, 1e-6);
+        assert_eq!(num("PMT(0,10,1000)"), -100.0);
+        assert_eq!(error("PMT(0.1,0,1000)"), NUM);
+        near("FV(0.06/12,10,-200,-500,1)", 2581.403374, 1e-6);
+        assert_eq!(num("FV(0,10,-100)"), 1000.0);
+        near("PV(0.08/12,12*20,500)", -59777.14585, 1e-5);
+        near("NPER(0.12/12,-100,-1000,10000,1)", 59.67386567, 1e-7);
+        // ln(10000 / 11000) / ln(1.01)
+        near("NPER(0.01,-100,-1000)", -9.578594040, 1e-7);
+        assert_eq!(num("NPER(0,-100,1000)"), 10.0);
+        assert_eq!(error("NPER(0,0,1000)"), NUM);
     }
 
     #[test]
