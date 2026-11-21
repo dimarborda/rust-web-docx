@@ -1,0 +1,7 @@
+# Commits that only reformat code, skipped by `git blame` so each line points to the change
+# that actually wrote it. GitHub's blame view reads this file on its own; for local blame run
+# once: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Add the full hash of any future formatting-only commit (for example after a rustfmt upgrade).
+
+# style: format the Rust workspace with rustfmt
+976ecad16f75551fe24918fd0b1e216e86fd3d16
