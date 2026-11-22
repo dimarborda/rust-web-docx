@@ -405,9 +405,54 @@ pub struct HeaderFooterInfo {
     pub first_header: Option<Vec<DocumentElement>>,
     #[serde(default)]
     pub first_footer: Option<Vec<DocumentElement>>,
+    /// Headers and footers of every section, in document order. `header`, `footer`,
+    /// `first_header` and `first_footer` above repeat the last one; when this is empty
+    /// (a value built by hand), layout uses those for every page.
+    #[serde(default)]
+    pub sections: Vec<SectionHeaderFooter>,
+    /// Even pages have their own header and footer (`w:evenAndOddHeaders` in settings.xml)
+    #[serde(default)]
+    pub even_and_odd: bool,
     /// Pixels of the pictures of headers and footers, by "part#rId" (their `rel_id`)
     #[serde(default, skip_serializing)]
     pub images: HashMap<String, String>,
+}
+
+/// The headers and footers one section shows, after inheriting the ones it does not define
+/// from the section before ("link to previous" in Word)
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SectionHeaderFooter {
+    pub header: Vec<DocumentElement>,
+    pub footer: Vec<DocumentElement>,
+    /// Some when the section has a different first page (`w:titlePg`); an empty list is a
+    /// blank first-page header
+    pub first_header: Option<Vec<DocumentElement>>,
+    pub first_footer: Option<Vec<DocumentElement>>,
+    /// Some when the document has different even pages; an empty list is a blank header
+    pub even_header: Option<Vec<DocumentElement>>,
+    pub even_footer: Option<Vec<DocumentElement>>,
+}
+
+impl HeaderFooterInfo {
+    /// Every header and footer the document shows, each once, whatever page shows it
+    pub fn all_parts(&self) -> Vec<&Vec<DocumentElement>> {
+        let mut out = vec![&self.header, &self.footer];
+        out.extend(self.first_header.iter().chain(self.first_footer.iter()));
+        for s in &self.sections {
+            out.extend([&s.header, &s.footer]);
+            out.extend(
+                [
+                    &s.first_header,
+                    &s.first_footer,
+                    &s.even_header,
+                    &s.even_footer,
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+        out
+    }
 }
 
 /// A picture (`w:drawing`) as written in the document. Lengths in px.
@@ -740,6 +785,89 @@ fn header_footer_part(
 
 fn default_header_footer_part(files: &HashMap<String, Vec<u8>>, kind: &str) -> Option<String> {
     header_footer_part(files, kind, "default")
+}
+
+/// The header and footer references of one `w:sectPr`, by type: 0 default, 1 first, 2 even
+#[derive(Default, Clone, Debug)]
+struct SectionRefs {
+    header: [Option<String>; 3],
+    footer: [Option<String>; 3],
+    title_page: bool,
+}
+
+/// References of every section in document order (paragraph-level `w:sectPr`, then the
+/// body's), as relationship ids
+fn section_refs(doc: &str) -> Vec<SectionRefs> {
+    let mut reader = Reader::from_str(doc);
+    let mut sections: Vec<SectionRefs> = Vec::new();
+    let mut in_sect = false;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if tag_is(e.name().as_ref(), "sectPr") => {
+                in_sect = true;
+                sections.push(SectionRefs::default());
+            }
+            Ok(Event::Empty(ref e)) if tag_is(e.name().as_ref(), "sectPr") => {
+                sections.push(SectionRefs::default());
+            }
+            Ok(Event::End(ref e)) if tag_is(e.name().as_ref(), "sectPr") => in_sect = false,
+            // Tracked section changes hold the old properties
+            Ok(Event::Start(ref e)) if tag_is(e.name().as_ref(), "sectPrChange") => {
+                let end = e.name().as_ref().to_string();
+                let _ = reader.read_to_end_into(quick_xml::name::QName(&end), &mut Vec::new());
+            }
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) if in_sect => {
+                let Some(current) = sections.last_mut() else {
+                    continue;
+                };
+                let name = e.name();
+                let is_header = tag_is(name.as_ref(), "headerReference");
+                if is_header || tag_is(name.as_ref(), "footerReference") {
+                    let slot = match get_attr_value(e, "type").as_deref() {
+                        Some("first") => 1,
+                        Some("even") => 2,
+                        _ => 0,
+                    };
+                    let id = get_attr_value(e, "id");
+                    if is_header {
+                        current.header[slot] = id;
+                    } else {
+                        current.footer[slot] = id;
+                    }
+                } else if tag_is(name.as_ref(), "titlePg") {
+                    current.title_page = !matches!(
+                        get_attr_value(e, "val").as_deref(),
+                        Some("0" | "false" | "off")
+                    );
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    if sections.is_empty() {
+        sections.push(SectionRefs::default());
+    }
+    sections
+}
+
+/// True when settings.xml asks for different headers on even and odd pages
+fn even_and_odd_headers(files: &HashMap<String, Vec<u8>>) -> bool {
+    let Some(xml) = files
+        .get("word/settings.xml")
+        .and_then(|b| std::str::from_utf8(b).ok())
+    else {
+        return false;
+    };
+    let Some(i) = xml.find("<w:evenAndOddHeaders") else {
+        return false;
+    };
+    let tag = &xml[i..i + xml[i..].find('>').unwrap_or(0)];
+    !(tag.contains("w:val=\"0\"")
+        || tag.contains("w:val=\"false\"")
+        || tag.contains("w:val=\"off\""))
 }
 
 /// True when the last section shows a different header and footer on its first page
@@ -2030,8 +2158,72 @@ impl DocxModifier {
             info.first_header = Some(content("header", "first").unwrap_or_default());
             info.first_footer = Some(content("footer", "first").unwrap_or_default());
         }
+        info.even_and_odd = even_and_odd_headers(files);
+        info.sections = self.section_header_footers(info.even_and_odd, &mut images);
         info.images = images;
         info
+    }
+
+    /// The headers and footers of each section. A section that does not reference a type
+    /// keeps the previous section's part of that type, as Word does.
+    fn section_header_footers(
+        &self,
+        even_and_odd: bool,
+        images: &mut HashMap<String, String>,
+    ) -> Vec<SectionHeaderFooter> {
+        let files = self.package.parts();
+        let Some(doc) = files
+            .get("word/document.xml")
+            .and_then(|b| std::str::from_utf8(b).ok())
+        else {
+            return Vec::new();
+        };
+        let rels = files
+            .get("word/_rels/document.xml.rels")
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(parse_relationships_map)
+            .unwrap_or_default();
+        let part_of = |id: &Option<String>| -> Option<String> {
+            let target = rels.get(id.as_ref()?)?;
+            let part = format!(
+                "word/{}",
+                target.trim_start_matches('/').trim_start_matches("word/")
+            );
+            files.contains_key(&part).then_some(part)
+        };
+        // Each part is read once, however many sections show it
+        let mut parsed: HashMap<String, Vec<DocumentElement>> = HashMap::new();
+        let mut elements = |part: &Option<String>| -> Vec<DocumentElement> {
+            let Some(part) = part else {
+                return Vec::new();
+            };
+            parsed
+                .entry(part.clone())
+                .or_insert_with(|| header_footer_elements(files, part, &self.styles, images))
+                .clone()
+        };
+        let mut header: [Option<String>; 3] = Default::default();
+        let mut footer: [Option<String>; 3] = Default::default();
+        let mut out = Vec::new();
+        for refs in section_refs(doc) {
+            for slot in 0..3 {
+                if refs.header[slot].is_some() {
+                    header[slot] = part_of(&refs.header[slot]);
+                }
+                if refs.footer[slot].is_some() {
+                    footer[slot] = part_of(&refs.footer[slot]);
+                }
+            }
+            out.push(SectionHeaderFooter {
+                header: elements(&header[0]),
+                footer: elements(&footer[0]),
+                first_header: refs.title_page.then(|| elements(&header[1])),
+                first_footer: refs.title_page.then(|| elements(&footer[1])),
+                even_header: even_and_odd.then(|| elements(&header[2])),
+                even_footer: even_and_odd.then(|| elements(&footer[2])),
+            });
+        }
+        out
     }
 
     /// Pixels of every picture referenced by document.xml, by relationship id

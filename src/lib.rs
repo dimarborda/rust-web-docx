@@ -347,13 +347,8 @@ impl DocxSession {
         let hf = &inputs.header_footer;
         let mut seen = std::collections::HashSet::new();
         let mut out: Vec<serde_json::Value> = Vec::new();
-        let groups = [
-            Some(&hf.header),
-            Some(&hf.footer),
-            hf.first_header.as_ref(),
-            hf.first_footer.as_ref(),
-        ];
-        for elements in groups.into_iter().flatten() {
+        let groups = hf.all_parts();
+        for elements in groups {
             let mut paragraphs: Vec<&docx_parser::ParagraphInfo> = Vec::new();
             for el in elements.iter() {
                 match el {
@@ -885,14 +880,9 @@ impl DocxSession {
             .layout_inputs()
             .map_err(|e| JsValue::from_str(&e))?;
         let hf = &inputs.header_footer;
-        let groups = [
-            Some(&hf.header),
-            Some(&hf.footer),
-            hf.first_header.as_ref(),
-            hf.first_footer.as_ref(),
-        ];
+        let groups = hf.all_parts();
         let mut seen = std::collections::HashSet::new();
-        for els in groups.into_iter().flatten() {
+        for els in groups {
             for el in els.iter() {
                 match el {
                     docx_parser::DocumentElement::Paragraph(p) => {
